@@ -10,6 +10,12 @@
 import { stripMarkdown } from "../lib.ts";
 import type { AudioProcessor, Player, SynthOptions, Translator, TTSBackend } from "./interfaces.ts";
 
+/** Texts shorter than this after markdown stripping are not worth speaking. */
+const MIN_SPEAKABLE_LENGTH = 3;
+
+/** How many characters to preview in log output. */
+const LOG_PREVIEW_CHARS = 50;
+
 export type Log = (msg: string) => void;
 
 export class SpeakFacade {
@@ -32,10 +38,10 @@ export class SpeakFacade {
     const emit = log ?? ((_m: string) => {});
 
     const clean = stripMarkdown(rawText).trim();
-    if (clean.length < 3) { emit("skipped: text too short after stripping"); return; }
+    if (clean.length < MIN_SPEAKABLE_LENGTH) { emit("skipped: text too short after stripping"); return; }
 
     const text = await this.translator.translate(clean);
-    emit(`backend=${this.backend.name} text="${text.slice(0, 50)}…"`);
+    emit(`backend=${this.backend.name} text="${text.slice(0, LOG_PREVIEW_CHARS)}…"`);
 
     try {
       const audio = await this.backend.synthesize(text, this.opts);

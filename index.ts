@@ -21,7 +21,7 @@ import {
   PipelineTranslator, makeTranslateMiddleware, makeMatMiddleware, makeInterjectMiddleware,
   type TextMiddleware,
 } from "./pipeline/translators.ts";
-import { IdentityProcessor, RVCProcessor } from "./pipeline/processors.ts";
+import { IdentityProcessor, RVCProcessor, SmoothingProcessor } from "./pipeline/processors.ts";
 import { SystemPlayer } from "./pipeline/player.ts";
 import { SileroBackend } from "./backends/silero.ts";
 import { KokoroBackend } from "./backends/kokoro.ts";
@@ -116,7 +116,7 @@ async function buildFacade(): Promise<SpeakFacade | null> {
     : new IdentityTranslator();
 
   const processor = config.rvcEnabled && config.rvcModel
-    ? new RVCProcessor(config.rvcUrl)
+    ? new SmoothingProcessor(new RVCProcessor(config.rvcUrl))
     : new IdentityProcessor();
 
   return new SpeakFacade(translator, backend, processor, player, {

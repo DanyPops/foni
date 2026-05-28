@@ -1,5 +1,35 @@
 import type { Translator } from "./interfaces.ts";
 
+// ─── Translator defaults ────────────────────────────────────────────────────────────────
+
+/** Probability of injecting a mat expression at each natural pause point. */
+export const DEFAULT_MAT_PROBABILITY        = 0.35;
+
+/** Probability that any injected mat word gets expressive vowel lengthening. */
+export const DEFAULT_MAT_STRETCH_PROBABILITY = 0.5;
+
+/** Probability of injecting an interjection at each natural pause point. */
+export const DEFAULT_INTERJECT_PROBABILITY  = 0.25;
+
+/** Minimum and maximum vowel repetitions during expressive lengthening. */
+export const STRETCH_REPEATS_MIN = 2;
+export const STRETCH_REPEATS_MAX = 4;
+
+/** HTTP timeout for translation API calls. */
+export const TRANSLATION_TIMEOUT_MS = 5_000;
+
+// ─── Injection position weights ─────────────────────────────────────────────────────────
+// These multipliers shape WHERE injections land relative to overall probability.
+// prefix/suffix < 1.0 means less frequent than mid-clause (the natural pause).
+
+const INTERJECT_PREFIX_WEIGHT = 0.45; // sentence prefix ("Ого! ...")  
+const INTERJECT_MID_WEIGHT    = 0.50; // between comma clauses
+const INTERJECT_SUFFIX_WEIGHT = 0.35; // sentence suffix (", эх!")
+
+const MAT_PREFIX_WEIGHT = 0.50; // sentence prefix ("Ёбаный в рот, ...")
+const MAT_MID_WEIGHT    = 1.00; // between comma clauses (full probability)
+const MAT_SUFFIX_WEIGHT = 0.40; // sentence suffix (", блядь")
+
 // ─── Russian Interjections (межметия) ────────────────────────────────────────
 // Primary interjections: non-word vocal expressions of emotion.
 // Lighter than mat — surprise, wonder, regret, relief.
@@ -299,7 +329,7 @@ class MyMemoryTranslatorImpl {
   async translate(text: string): Promise<string> {
     try {
       const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${this.from}|${this.to}`;
-      const resp = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+      const resp = await fetch(url, { signal: AbortSignal.timeout(TRANSLATION_TIMEOUT_MS) });
       if (!resp.ok) return text;
       const data = await resp.json() as { responseData: { translatedText: string } };
       return data.responseData.translatedText || text;
@@ -323,7 +353,7 @@ export class MyMemoryTranslator implements Translator {
   async translate(text: string): Promise<string> {
     try {
       const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${this.from}|${this.to}`;
-      const resp = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+      const resp = await fetch(url, { signal: AbortSignal.timeout(TRANSLATION_TIMEOUT_MS) });
       if (!resp.ok) return text;
       const data = await resp.json() as { responseData: { translatedText: string } };
       return data.responseData.translatedText || text;
