@@ -26,7 +26,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export interface FoniPanelState {
   enabled: boolean;
-  lang: "en" | "ru";
+  inputLang:  "en" | "ru";
+  outputLang: "en" | "ru";
   speed: number;
   backendName: string;
   backendPref: string;
@@ -38,7 +39,7 @@ export interface FoniPanelState {
 
 export interface FoniPanelActions {
   toggle(): void;
-  setLang(lang: "en" | "ru"): void;
+  setLang(inputLang: "en" | "ru", outputLang: "en" | "ru"): void;
   setSpeed(speed: number): void;
   setBackendPref(pref: string): void;
   toggleRvc(): void;
@@ -108,7 +109,17 @@ class FoniPanel {
     // Global shortcuts
     if (data === "+") { this.actions.setSpeed(Math.min(3.0, +(this.state.speed + 0.1).toFixed(1))); this.invalidate(); return; }
     if (data === "-") { this.actions.setSpeed(Math.max(0.5, +(this.state.speed - 0.1).toFixed(1))); this.invalidate(); return; }
-    if (data === "l") { this.actions.setLang(this.state.lang === "en" ? "ru" : "en"); this.invalidate(); return; }
+    if (data === "l") {
+      // Cycle: en→en ► ru→ru ► en→ru
+      const { inputLang, outputLang } = this.state;
+      const next: ["en" | "ru", "en" | "ru"] =
+        inputLang === "en" && outputLang === "en" ? ["ru", "ru"] :
+        inputLang === "ru" && outputLang === "ru" ? ["en", "ru"] :
+        ["en", "en"];
+      this.actions.setLang(...next);
+      this.invalidate();
+      return;
+    }
     if (data === "r") { this.actions.toggleRvc(); this.invalidate(); return; }
     if (data === "b") {
       const i = BACKENDS.indexOf(this.state.backendPref as typeof BACKENDS[number]);
@@ -120,7 +131,15 @@ class FoniPanel {
     // Row activation
     if (matchesKey(data, "space") || matchesKey(data, "return") || matchesKey(data, "enter")) {
       if (row === "tts")    { this.actions.toggle(); this.invalidate(); }
-      if (row === "lang")   { this.actions.setLang(this.state.lang === "en" ? "ru" : "en"); this.invalidate(); }
+      if (row === "lang")   {
+        const { inputLang, outputLang } = this.state;
+        const next: ["en" | "ru", "en" | "ru"] =
+          inputLang === "en" && outputLang === "en" ? ["ru", "ru"] :
+          inputLang === "ru" && outputLang === "ru" ? ["en", "ru"] :
+          ["en", "en"];
+        this.actions.setLang(...next);
+        this.invalidate();
+      }
       if (row === "speed")  { /* hint shown */ }
       if (row === "backend"){ const i = BACKENDS.indexOf(this.state.backendPref as typeof BACKENDS[number]); this.actions.setBackendPref(BACKENDS[(i + 1) % BACKENDS.length]); this.invalidate(); }
       if (row === "rvc")    { this.actions.toggleRvc(); this.invalidate(); }
@@ -183,8 +202,11 @@ class FoniPanel {
       badge(s.enabled, s.enabled ? " ON" : "OFF") + " " + (s.enabled ? accent(s.backendName) : dim("-"))));  
 
     // 1: Language
+    const langStr = s.inputLang === s.outputLang
+      ? s.outputLang.toUpperCase()
+      : `${s.inputLang.toUpperCase()}→${s.outputLang.toUpperCase()}`;
     lines.push(makeRow(1, "Language",
-      badge(s.lang === "ru", s.lang === "ru" ? "RU" : "EN"))); // no emoji
+      badge(s.outputLang === "ru", langStr)));
 
     // 2: Speed
     lines.push(makeRow(2, "Speed",

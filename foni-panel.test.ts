@@ -43,7 +43,8 @@ function stripAnsi(s: string): string {
 function makeState(overrides: Partial<FoniPanelState> = {}): FoniPanelState {
   return {
     enabled:     false,
-    lang:        "en",
+    inputLang:   "en",
+    outputLang:  "en",
     speed:       1.0,
     backendName: "silero",
     backendPref: "auto",
@@ -433,7 +434,7 @@ describe("FoniPanel render snapshots", () => {
   });
 
   it("language RU", async () => {
-    const { screen } = await mountPanel(makeState({ lang: "ru" }));
+    const { screen } = await mountPanel(makeState({ inputLang: "ru", outputLang: "ru" }));
     expect(screen()).toMatchSnapshot();
   });
 
@@ -497,15 +498,15 @@ describe("FoniPanel handleInput → actions", () => {
   });
 
   it("l toggles lang en→ru", async () => {
-    const { component, actions } = await mountPanel(makeState({ lang: "en" }));
+    const { component, actions } = await mountPanel(makeState({ inputLang: "en", outputLang: "en" }));
     await component.handleInput("l");
-    expect(actions.setLang).toHaveBeenCalledWith("ru");
+    expect(actions.setLang).toHaveBeenCalledWith("ru", "ru");
   });
 
   it("l toggles lang ru→en", async () => {
-    const { component, actions } = await mountPanel(makeState({ lang: "ru" }));
+    const { component, actions } = await mountPanel(makeState({ inputLang: "ru", outputLang: "ru" }));
     await component.handleInput("l");
-    expect(actions.setLang).toHaveBeenCalledWith("en");
+    expect(actions.setLang).toHaveBeenCalledWith("en", "ru");
   });
 
   it("r calls toggleRvc", async () => {
@@ -527,10 +528,10 @@ describe("FoniPanel handleInput → actions", () => {
   });
 
   it("↓ then space activates the language row", async () => {
-    const { component, actions } = await mountPanel(makeState({ lang: "en" }));
+    const { component, actions } = await mountPanel(makeState({ inputLang: "en", outputLang: "en" }));
     await component.handleInput("\x1b[B"); // down → lang row
     await component.handleInput(" ");      // space → activate
-    expect(actions.setLang).toHaveBeenCalledWith("ru");
+    expect(actions.setLang).toHaveBeenCalledWith("ru", "ru");
   });
 });
 

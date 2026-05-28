@@ -70,7 +70,7 @@ function buildBackends(): TTSBackend[] {
     new SileroBackend(config.sileroUrl),
     new KokoroBackend(config.kokoroUrl),
     new FakeYouBackend(config.fakeyouToken, config.fakeyouApiKey),
-    new EspeakBackend(config.lang === "ru" ? "ru" : "en"),
+    new EspeakBackend(config.outputLang === "ru" ? "ru" : "en"),
   ];
 }
 
@@ -100,16 +100,17 @@ async function detectBackend(): Promise<TTSBackend | null> {
 const player = new SystemPlayer();
 
 function rebuildTranslator() {
-  const t = config.lang === "ru"
-    ? new PipelineTranslator(buildPipeline(), "ru")
-    : new IdentityTranslator();
-  facade?.swapTranslator(t);
+  facade?.swapTranslator(new PipelineTranslator(buildPipeline(), config.outputLang));
 }
 
 function buildPipeline(): TextMiddleware[] {
   const stack: TextMiddleware[] = [];
-  if (config.lang === "ru") {
-    stack.push(makeTranslateMiddleware("en", "ru"));
+  // Translate only when languages differ — same lang = passthrough, no network call
+  if (config.inputLang !== config.outputLang) {
+    stack.push(makeTranslateMiddleware(config.inputLang, config.outputLang));
+  }
+  // Mat and interject operate on the output language
+  if (config.outputLang === "ru") {
     if (config.matEnabled)       stack.push(makeMatMiddleware(config.matProb, config.matStretch));
     if (config.interjectEnabled) stack.push(makeInterjectMiddleware(config.interjectProb));
   }
@@ -120,9 +121,7 @@ async function buildFacade(): Promise<SpeakFacade | null> {
   const backend = await detectBackend();
   if (!backend) return null;
 
-  const translator = config.lang === "ru"
-    ? new PipelineTranslator(buildPipeline(), "ru")
-    : new IdentityTranslator();
+  const translator = new PipelineTranslator(buildPipeline(), config.outputLang);
 
   const processor = config.rvcEnabled && config.rvcModel
     ? new SmoothingProcessor(new RVCProcessor(config.rvcUrl))
@@ -163,7 +162,9 @@ export default async function (pi: ExtensionAPI) {
     }
     const backend = facade?.backendName ?? "...";
     const rvc     = config.rvcEnabled && config.rvcModel ? config.rvcModel : null;
-    const lang    = config.lang === "ru" ? "RU" : "EN";
+    const lang    = config.inputLang === config.outputLang
+      ? config.outputLang.toUpperCase()
+      : `${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`;
     const mat     = config.matEnabled ? "+mat" : "";
     const ij      = config.interjectEnabled ? "+oj" : "";
     ctx.ui.setStatus(
@@ -248,11 +249,11 @@ export default async function (pi: ExtensionAPI) {
         const backend = await detectBackend();
         lines.push(backend ? ok(`backend: ${backend.name}`) : err("no backend -- install espeak-ng or start Silero/Kokoro"));
         lines.push(player.detected() ? ok(`player: ${player.detected()}`) : err("no audio player (mpv / aplay / paplay)"));
-        if (config.lang === "ru") {
-          const t = await new MyMemoryTranslator("en", "ru").translate("Hello stalker");
+        if (config.inputLang !== config.outputLang) {
+          const t = await new MyMemoryTranslator(config.inputLang, config.outputLang).translate("Hello stalker");
           lines.push(t !== "Hello stalker" ? ok(`translation: "${t}"`) : warn("MyMemory unreachable"));
         } else {
-          lines.push(ok("language: en (no translation)"));
+          lines.push(ok(`language: ${config.outputLang.toUpperCase()} (passthrough — no translation)`));
         }
         if (config.rvcEnabled) {
           try {
@@ -286,7 +287,10 @@ export default async function (pi: ExtensionAPI) {
           on("backend",   b),
           on("voice",     config.voice),
           on("speed",     String(config.speed)),
-          on("language",  config.lang === "ru" ? "RU" : "EN"),
+          on("language",  config.inputLang === config.outputLang
+            ? config.outputLang.toUpperCase()
+            : `${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`
+          ),
           on("player",    player.detected() ?? "none"),
           "",
           config.rvcEnabled ? on("rvc", `${config.rvcModel} @ ${config.rvcUrl}`) : off("rvc", "disabled"),
@@ -318,7 +322,8 @@ export default async function (pi: ExtensionAPI) {
       if (sub === "lang") {
         const lang = parts[1] as "en" | "ru" | undefined;
         if (lang !== "en" && lang !== "ru") { ctx.ui.notify("Usage: /tts lang en|ru", "warning"); return; }
-        config.lang = lang;
+        config.inputLang  = a;
+        config.outputLang = valid(b) ? b : a;
         rebuildTranslator();
         ctx.ui.notify(`language -> ${lang === "ru" ? "RU" : "EN"}`, "info");
         updateStatus(ctx);
@@ -327,7 +332,7 @@ export default async function (pi: ExtensionAPI) {
 
       // ── mat ─────────────────────────────────────────────────────────────────
       if (sub === "mat") {
-        if (config.lang !== "ru") { ctx.ui.notify("Mat only works with Russian -- /tts lang ru first", "warning"); return; }
+        if (config.outputLang !== "ru") { ctx.ui.notify("Mat only works with Russian output -- /tts lang ru first", "warning"); return; }
         const matSub = parts[1] ?? "";
         if (matSub === "on" || matSub === "off") {
           config.matEnabled = matSub === "on";
@@ -364,7 +369,7 @@ export default async function (pi: ExtensionAPI) {
 
       // ── interject ────────────────────────────────────────────────────────
       if (sub === "interject") {
-        if (config.lang !== "ru") { ctx.ui.notify("Интеръекции работают только на русском -- /tts lang ru", "warning"); return; }
+        if (config.outputLang !== "ru") { ctx.ui.notify("Интеръекции работают только с русским выводом -- /tts lang ru", "warning"); return; }
         const ijSub = parts[1] ?? "";
         if (ijSub === "on" || ijSub === "off") {
           config.interjectEnabled = ijSub === "on";
@@ -487,7 +492,8 @@ export default async function (pi: ExtensionAPI) {
       if (!facade) facade = await buildFacade();
       const panelState = (): FoniPanelState => ({
         enabled:      config.enabled,
-        lang:         config.lang,
+        inputLang:    config.inputLang,
+        outputLang:   config.outputLang,
         speed:        config.speed,
         backendName:  facade?.backendName ?? "none",
         backendPref:  config.backendPref,
@@ -504,8 +510,9 @@ export default async function (pi: ExtensionAPI) {
           state = freshState();
           updateStatus(ctx);
         },
-        setLang(lang) {
-          config.lang = lang;
+        setLang(inputLang, outputLang) {
+          config.inputLang  = inputLang;
+          config.outputLang = outputLang;
           rebuildTranslator();
           updateStatus(ctx);
         },
