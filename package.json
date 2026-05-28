@@ -6,7 +6,8 @@
   },
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "demo": "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run pipeline.e2e -t 'cheeki breeki'"
   },
   "devDependencies": {
     "vitest": "^2.0.0"
