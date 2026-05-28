@@ -1,0 +1,15 @@
+# Foni RVC voice conversion configuration
+# Restart the container to apply changes: systemctl --user restart foni-rvc
+
+model: bandit
+
+models_dir: /app/rvc_models
+
+params:
+  f0method: rmvpe        # pitch extraction: harvest | crepe | rmvpe (best quality)
+  f0up_key: -2           # semitones: negative = lower/gruffer voice
+  index_rate: 0.77       # 0-1: how much of the character's voice index is applied
+  filter_radius: 5       # pitch smoothing — higher = smoother transitions
+  resample_sr: 0         # output resample rate (0 = keep source rate)
+  rms_mix_rate: 0.45     # volume dynamics mix (higher = more natural variation)
+  protect: 0.33          # consonant protection (lower = more accent bleed-through)

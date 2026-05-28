@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# RVC model weights (large binary files — download via README instructions)
+rvc/models/
+
+# Build / cache
+dist/
+.vite/
+*.tsbuildinfo
+
+# Test output
+coverage/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

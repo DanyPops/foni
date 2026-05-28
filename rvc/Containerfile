@@ -1,0 +1,50 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# System deps for librosa / soundfile / faiss
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 \
+    ffmpeg \
+    build-essential \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# PyTorch CPU first (pins numpy-compatible build)
+RUN pip install --no-cache-dir \
+    torch==2.1.1+cpu \
+    torchaudio==2.1.1+cpu \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# rvc-python deps (pin numpy to what rvc needs)
+RUN pip install --no-cache-dir \
+    "numpy<1.24" \
+    "faiss-cpu==1.7.3" \
+    librosa \
+    soundfile \
+    praat-parselmouth \
+    pyworld \
+    torchcrepe \
+    av \
+    fairseq \
+    ffmpeg-python \
+    loguru \
+    pyyaml \
+    fastapi \
+    uvicorn \
+    python-multipart
+
+# Install rvc-python without pulling conflicting deps
+RUN pip install --no-cache-dir --no-deps rvc-python
+
+RUN mkdir -p /app/rvc_models /config
+
+COPY facade.py /app/facade.py
+
+ENV RVC_MODELS_DIR=/app/rvc_models
+ENV RVC_PORT=5050
+ENV FONI_RVC_CONFIG=/config/foni-rvc.yaml
+
+EXPOSE 5050
+
+CMD ["python", "/app/facade.py"]

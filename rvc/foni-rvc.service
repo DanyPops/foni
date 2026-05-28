@@ -1,0 +1,19 @@
+[Unit]
+Description=Foni RVC voice conversion server
+After=network.target
+
+[Service]
+Restart=on-failure
+RestartSec=5
+ExecStartPre=-/usr/bin/podman rm -f foni-rvc
+ExecStart=/usr/bin/podman run \
+    --name foni-rvc \
+    --rm \
+    -p 127.0.0.1:5050:5050 \
+    -v %h/.config/pi/agent/git/github.com/danypops/foni/rvc/models:/app/rvc_models:Z \
+    -v %h/.config/pi/agent/git/github.com/danypops/foni/rvc/foni-rvc.yaml:/config/foni-rvc.yaml:ro,Z \
+    localhost/foni-rvc
+ExecStop=/usr/bin/podman stop foni-rvc
+
+[Install]
+WantedBy=default.target
