@@ -270,6 +270,7 @@ export class SmoothingProcessor implements AudioProcessor {
 
   private buildPreFilter(): string {
     const { padSecs } = this.opts;
+    if (padSecs <= 0) return "anull";  // identity — no padding
     const ms = Math.round(padSecs * 1000);
     return `adelay=${ms}|${ms},apad=pad_dur=${padSecs}`;
   }
@@ -292,9 +293,11 @@ export class SmoothingProcessor implements AudioProcessor {
 
     const parts: string[] = [];
 
-    // 1. Fade in / out — handle edges before anything else distorts them
-    parts.push(`afade=t=in:d=${fadeSecs}`);
-    parts.push(`areverse,afade=t=in:d=${fadeSecs},areverse`);
+    // 1. Fade in / out — only if non-zero (afade=d:0 silences the signal)
+    if (fadeSecs > 0) {
+      parts.push(`afade=t=in:d=${fadeSecs}`);
+      parts.push(`areverse,afade=t=in:d=${fadeSecs},areverse`);
+    }
 
     // 2. Mud removal — strip sub-bass before any boosting
     if (highpassFreq > 0) {
