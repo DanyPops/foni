@@ -38,6 +38,38 @@ function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+// ─── Expressive lengthening ───────────────────────────────────────────────────
+// Vowels ranked by dramatic resonance: open/round first (А О У),
+// sharp mid (Е Ё И), flat/soft last (Э Ю Я Ы).
+const DRAMATIC_VOWELS = "АаОоУуЕеЁёИиЭэЮюЯяЫы";
+
+/**
+ * Stretch the most dramatically resonant vowel in a mat expression.
+ * "блядь" → "бляааадь", "сука" → "суууука", "пиздец" → "пиздееец"
+ *
+ * Picks from the top half of vowels ranked by dramatic impact,
+ * then repeats it `repeats` times in place.
+ */
+function stretchExpression(expr: string, repeats: number): string {
+  const positions: number[] = [];
+  for (let i = 0; i < expr.length; i++) {
+    if (DRAMATIC_VOWELS.includes(expr[i])) positions.push(i);
+  }
+  if (positions.length === 0) return expr;
+
+  // Sort by dramatic priority — lower index in DRAMATIC_VOWELS = more resonant
+  positions.sort((a, b) =>
+    DRAMATIC_VOWELS.indexOf(expr[a]) - DRAMATIC_VOWELS.indexOf(expr[b])
+  );
+
+  // Pick randomly from the top half (most resonant vowels)
+  const topN = Math.max(1, Math.ceil(positions.length / 2));
+  const pos   = positions[Math.floor(Math.random() * topN)];
+  const vowel = expr[pos];
+
+  return expr.slice(0, pos) + vowel.repeat(repeats) + expr.slice(pos + 1);
+}
+
 /**
  * Inject mat into already-translated Russian text.
  *
@@ -49,34 +81,42 @@ function pick<T>(arr: T[]): T {
  * @param text     Russian text to mutate.
  * @param prob     0–1 probability of injecting at each opportunity.
  */
-function injectMat(text: string, prob: number): string {
+/**
+ * @param prob        0–1 injection probability per opportunity.
+ * @param stretchProb 0–1 probability that an injected expression gets
+ *                    expressive lengthening applied to its key vowel.
+ */
+function injectMat(text: string, prob: number, stretchProb: number): string {
   if (prob <= 0) return text;
 
-  // Split into sentences
+  function pickMat(arr: string[]): string {
+    const expr = pick(arr);
+    if (stretchProb > 0 && Math.random() < stretchProb) {
+      const repeats = 2 + Math.floor(Math.random() * 3); // 2, 3, or 4
+      return stretchExpression(expr, repeats);
+    }
+    return expr;
+  }
+
   const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
 
   return sentences.map(sentence => {
-    // Prefix roll
     if (Math.random() < prob * 0.5) {
-      sentence = pick(MAT.prefix) + " " + sentence;
+      sentence = pickMat(MAT.prefix) + " " + sentence;
     }
 
-    // Inject at commas: split on comma, roll per gap
     const clauses = sentence.split(",");
     const mutated = clauses.map((clause, i) => {
       if (i === 0) return clause;
-      if (Math.random() < prob) {
-        return " " + pick(MAT.interject) + "," + clause;
-      }
+      if (Math.random() < prob) return " " + pickMat(MAT.interject) + "," + clause;
       return clause;
     });
     sentence = mutated.join(",");
 
-    // Suffix roll — only if sentence doesn't already end in punctuation mat
     if (Math.random() < prob * 0.4) {
       const stripped = sentence.replace(/[.!?]+$/, "");
       const punct    = sentence.match(/[.!?]+$/)?.[0] ?? ".";
-      sentence = stripped + pick(MAT.suffix) + punct;
+      sentence = stripped + pickMat(MAT.suffix) + punct;
     }
 
     return sentence;
@@ -114,14 +154,24 @@ export class MyMemoryTranslator implements Translator {
  * @param inner    The real translator to delegate to first.
  * @param prob     0–1 injection probability per opportunity (default 0.35).
  */
+/**
+ * MatTranslator — wraps any Translator and randomly injects Russian mat
+ * at natural pause points after the inner translation completes.
+ *
+ * @param inner            Translator to delegate to first.
+ * @param probability      0–1 injection probability per opportunity (default 0.35).
+ * @param stretchProbability 0–1 chance each injected word gets expressive
+ *                         lengthening on its most resonant vowel (default 0.5).
+ */
 export class MatTranslator implements Translator {
   constructor(
     private readonly inner: Translator,
     public probability: number = 0.35,
+    public stretchProbability: number = 0.5,
   ) {}
 
   async translate(text: string): Promise<string> {
     const result = await this.inner.translate(text);
-    return injectMat(result, this.probability);
+    return injectMat(result, this.probability, this.stretchProbability);
   }
 }

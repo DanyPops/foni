@@ -116,6 +116,30 @@ describe("MatTranslator", () => {
     expect(t.probability).toBe(0.8);
   });
 
+  it("stretchProbability defaults to 0.5", () => {
+    const t = new MatTranslator({ translate: vi.fn() });
+    expect(t.stretchProbability).toBe(0.5);
+  });
+
+  it("stretchProbability=0 never alters injected words (no repeated vowels)", async () => {
+    // With prob=1 mat is always injected; stretchProb=0 means never stretched.
+    // Stretched words contain repeated vowels (e.g. "бляяядь") — none should appear.
+    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три.") };
+    const t = new MatTranslator(inner, 1, 0);
+    const result = await t.translate("x");
+    // No Russian vowel should be repeated 3+ times consecutively
+    expect(result).not.toMatch(/[АаОоУуЕеЁёИиЭэЮюЯяЫы]{3,}/);
+  });
+
+  it("stretchProbability=1 always stretches injected words", async () => {
+    // With prob=1 and stretchProb=1, every injection is stretched.
+    // Stretched text must contain at least one run of 2+ identical Russian vowels.
+    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три.") };
+    const t = new MatTranslator(inner, 1, 1);
+    const result = await t.translate("x");
+    expect(result).toMatch(/[АаОоУуЕеЁёИиЭэЮюЯяЫы]{2,}/);
+  });
+
   it("propagates inner translator errors", async () => {
     const inner = { translate: vi.fn().mockRejectedValue(new Error("timeout")) };
     await expect(new MatTranslator(inner, 0.5).translate("x")).rejects.toThrow("timeout");

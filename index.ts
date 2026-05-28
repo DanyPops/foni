@@ -42,6 +42,7 @@ const config = {
   fakeyouApiKey: "",
   matEnabled: false,
   matProb: 0.35,
+  matStretch: 0.5,
   rvcEnabled: false,
   rvcUrl: "http://localhost:5050",
   rvcModel: "bandit",
@@ -91,7 +92,7 @@ async function buildFacade(): Promise<SpeakFacade | null> {
     ? new MyMemoryTranslator("en", "ru")
     : new IdentityTranslator();
   const translator = config.matEnabled && config.lang === "ru"
-    ? new MatTranslator(baseTranslator, config.matProb)
+    ? new MatTranslator(baseTranslator, config.matProb, config.matStretch)
     : baseTranslator;
 
   const processor = config.rvcEnabled && config.rvcModel
@@ -289,7 +290,7 @@ export default async function (pi: ExtensionAPI) {
         if (lang !== "en" && lang !== "ru") { ctx.ui.notify("Usage: /tts lang en|ru", "warning"); return; }
         config.lang = lang;
         const base = lang === "ru" ? new MyMemoryTranslator("en", "ru") : new IdentityTranslator();
-        facade?.swapTranslator(config.matEnabled && lang === "ru" ? new MatTranslator(base, config.matProb) : base);
+        facade?.swapTranslator(config.matEnabled && lang === "ru" ? new MatTranslator(base, config.matProb, config.matStretch) : base);
         ctx.ui.notify(`language -> ${lang === "ru" ? "RU" : "EN"}`, "info");
         updateStatus(ctx);
         return;
@@ -302,7 +303,7 @@ export default async function (pi: ExtensionAPI) {
         if (matSub === "on" || matSub === "off") {
           config.matEnabled = matSub === "on";
           const base = new MyMemoryTranslator("en", "ru");
-          facade?.swapTranslator(config.matEnabled ? new MatTranslator(base, config.matProb) : base);
+          facade?.swapTranslator(config.matEnabled ? new MatTranslator(base, config.matProb, config.matStretch) : base);
           ctx.ui.notify(`Mat ${config.matEnabled ? `включён (prob=${config.matProb})` : "выключен"}`, "info");
           return;
         }
@@ -311,14 +312,29 @@ export default async function (pi: ExtensionAPI) {
           config.matProb = prob;
           if (facade) {
             const base = new MyMemoryTranslator("en", "ru");
-            facade.swapTranslator(config.matEnabled ? new MatTranslator(base, config.matProb) : base);
+            facade.swapTranslator(config.matEnabled ? new MatTranslator(base, config.matProb, config.matStretch) : base);
           }
           ctx.ui.notify(`Mat probability -> ${prob}`, "info");
           return;
         }
+        const stretchSub = matSub === "stretch" ? (parts[2] ?? "") : "";
+        if (matSub === "stretch") {
+          const sp = parseFloat(stretchSub);
+          if (!isNaN(sp) && sp >= 0 && sp <= 1) {
+            config.matStretch = sp;
+            if (facade) {
+              const base = new MyMemoryTranslator("en", "ru");
+              facade.swapTranslator(config.matEnabled ? new MatTranslator(base, config.matProb, config.matStretch) : base);
+            }
+            ctx.ui.notify(`Mat stretch probability -> ${sp}`, "info");
+          } else {
+            ctx.ui.notify(`Mat stretch: ${config.matStretch}\nUsage: /tts mat stretch 0.0-1.0`, "info");
+          }
+          return;
+        }
         ctx.ui.notify(
-          `Mat: ${config.matEnabled ? "включён" : "выключен"} (prob=${config.matProb})\n` +
-          "Usage: /tts mat on|off | /tts mat 0.0-1.0",
+          `Mat: ${config.matEnabled ? "включён" : "выключен"} (prob=${config.matProb}, stretch=${config.matStretch})\n` +
+          "Usage: /tts mat on|off | /tts mat 0.0-1.0 | /tts mat stretch 0.0-1.0",
           "info",
         );
         return;
@@ -443,7 +459,7 @@ export default async function (pi: ExtensionAPI) {
         setLang(lang) {
           config.lang = lang;
           const base = lang === "ru" ? new MyMemoryTranslator("en", "ru") : new IdentityTranslator();
-          facade?.swapTranslator(config.matEnabled && lang === "ru" ? new MatTranslator(base, config.matProb) : base);
+          facade?.swapTranslator(config.matEnabled && lang === "ru" ? new MatTranslator(base, config.matProb, config.matStretch) : base);
           updateStatus(ctx);
         },
         setSpeed(speed) {
