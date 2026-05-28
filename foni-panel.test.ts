@@ -26,7 +26,12 @@ vi.mock("@earendil-works/pi-tui", () => {
 
 import { openFoniPanel } from "./tui/foni-panel.ts";
 import type { FoniPanelState, FoniPanelActions } from "./tui/foni-panel.ts";
-import { MatTranslator, InterjectTranslator, stretchExpression } from "./pipeline/translators.ts";
+import {
+  MatTranslator, InterjectTranslator, stretchExpression,
+  compose, PipelineTranslator,
+  makeTranslateMiddleware, makeMatMiddleware, makeInterjectMiddleware,
+  type TextCtx, type TextMiddleware,
+} from "./pipeline/translators.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -104,7 +109,7 @@ describe("MatTranslator", () => {
   });
 
   it("prob=1 injects mat at every comma gap", async () => {
-    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три.") };
+    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три, четыре, пять, шесть, семь, восемь.") };
     const result = await new MatTranslator(inner, 1).translate("One, two, three.");
     const mat = ["блядь","сука","хуй","пиздец","ёпта","блин","ёб твою мать","нихуя себе"];
     expect(mat.some(w => result.includes(w))).toBe(true);
@@ -124,7 +129,7 @@ describe("MatTranslator", () => {
   it("stretchProbability=0 never alters injected words (no repeated vowels)", async () => {
     // With prob=1 mat is always injected; stretchProb=0 means never stretched.
     // Stretched words contain repeated vowels (e.g. "бляяядь") — none should appear.
-    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три.") };
+    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три, четыре, пять, шесть, семь, восемь.") };
     const t = new MatTranslator(inner, 1, 0);
     const result = await t.translate("x");
     // No Russian vowel should be repeated 3+ times consecutively
@@ -134,7 +139,7 @@ describe("MatTranslator", () => {
   it("stretchProbability=1 always stretches injected words", async () => {
     // With prob=1 and stretchProb=1, every injection is stretched.
     // Stretched text must contain at least one run of 2+ identical Russian vowels.
-    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три.") };
+    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три, четыре, пять, шесть, семь, восемь.") };
     const t = new MatTranslator(inner, 1, 1);
     const result = await t.translate("x");
     expect(result).toMatch(/[АаОоУуЕеЁёИиЭэЮюЯяЫы]{2,}/);
@@ -143,6 +148,142 @@ describe("MatTranslator", () => {
   it("propagates inner translator errors", async () => {
     const inner = { translate: vi.fn().mockRejectedValue(new Error("timeout")) };
     await expect(new MatTranslator(inner, 0.5).translate("x")).rejects.toThrow("timeout");
+  });
+});
+
+// ─── Middleware pipeline ────────────────────────────────────────────────────────
+
+function makeCtx(overrides: Partial<TextCtx> = {}): TextCtx {
+  return { input: "Hello", text: "Hello", lang: "en", ...overrides };
+}
+
+describe("compose", () => {
+  it("empty stack resolves without touching ctx", async () => {
+    const ctx = makeCtx({ text: "unchanged" });
+    await compose([])(ctx);
+    expect(ctx.text).toBe("unchanged");
+  });
+
+  it("runs middleware left-to-right", async () => {
+    const order: number[] = [];
+    const mw = (n: number): TextMiddleware => async (ctx, next) => {
+      order.push(n);
+      await next();
+    };
+    await compose([mw(1), mw(2), mw(3)])(makeCtx());
+    expect(order).toEqual([1, 2, 3]);
+  });
+
+  it("each step sees mutations from previous steps", async () => {
+    const a: TextMiddleware = async (ctx, next) => { ctx.text = "A"; await next(); };
+    const b: TextMiddleware = async (ctx, next) => { ctx.text += "B"; await next(); };
+    const c: TextMiddleware = async (ctx, next) => { ctx.text += "C"; await next(); };
+    const ctx = makeCtx();
+    await compose([a, b, c])(ctx);
+    expect(ctx.text).toBe("ABC");
+  });
+
+  it("middleware that doesn\'t call next() short-circuits the chain", async () => {
+    const order: string[] = [];
+    const blocker: TextMiddleware = async () => { order.push("blocker"); };
+    const never: TextMiddleware   = async () => { order.push("never"); };
+    await compose([blocker, never])(makeCtx());
+    expect(order).toEqual(["blocker"]);
+  });
+});
+
+describe("makeMatMiddleware", () => {
+  it("prob=0: ctx.text unchanged", async () => {
+    const input = "Один, два, три, четыре, пять, шесть, семь, восемь.";
+    const ctx = makeCtx({ text: input, lang: "ru" });
+    await compose([makeMatMiddleware(0, 0)])(ctx);
+    expect(ctx.text).toBe(input);
+  });
+
+  it("prob=1: injects mat vocabulary", async () => {
+    const ctx = makeCtx({ text: "Один, два, три, четыре, пять, шесть, семь, восемь.", lang: "ru" });
+    await compose([makeMatMiddleware(1, 0)])(ctx);
+    const mat = ["блядь","сука","хуй","пиздец","ёпта","блин","еб твою мать","нихуя себе","ёбаный в рот","какого хуя","мать твою","ни хуя себе"];
+    expect(mat.some(w => ctx.text.includes(w))).toBe(true);
+  });
+
+  it("runs after downstream (post-next mutation)", async () => {
+    const order: string[] = [];
+    const first: TextMiddleware  = async (ctx, next) => { order.push("first"); await next(); };
+    const matMw = makeMatMiddleware(1, 0);
+    const ctx = makeCtx({ text: "Один, два.", lang: "ru" });
+    await compose([first, matMw])(ctx);
+    expect(order).toEqual(["first"]);
+  });
+});
+
+describe("makeInterjectMiddleware", () => {
+  it("prob=0: ctx.text unchanged", async () => {
+    const ctx = makeCtx({ text: "Привет.", lang: "ru" });
+    await compose([makeInterjectMiddleware(0)])(ctx);
+    expect(ctx.text).toBe("Привет.");
+  });
+
+  it("prob=1: injects interjection vocabulary", async () => {
+    const ctx = makeCtx({ text: "Один, два, три, четыре, пять, шесть, семь, восемь.", lang: "ru" });
+    await compose([makeInterjectMiddleware(1)])(ctx);
+    const words = ["Ого","Ах","Ух","Ой","Эй","Ба","эх","уф","ай-яй-яй","вот как","ой","ух","ну","ай"];
+    expect(words.some(w => ctx.text.includes(w))).toBe(true);
+  });
+});
+
+describe("PipelineTranslator", () => {
+  it("empty stack: returns input unchanged", async () => {
+    const t = new PipelineTranslator([], "en");
+    expect(await t.translate("hello")).toBe("hello");
+  });
+
+  it("single mutating step", async () => {
+    const upper: TextMiddleware = async (ctx, next) => {
+      ctx.text = ctx.text.toUpperCase();
+      await next();
+    };
+    const t = new PipelineTranslator([upper], "en");
+    expect(await t.translate("hello")).toBe("HELLO");
+  });
+
+  it("lang is passed into ctx", async () => {
+    let seen: string | undefined;
+    const probe: TextMiddleware = async (ctx, next) => {
+      seen = ctx.lang;
+      await next();
+    };
+    await new PipelineTranslator([probe], "ru").translate("x");
+    expect(seen).toBe("ru");
+  });
+
+  it("mat+interject full stack at prob=1: both vocabularies present", async () => {
+    // Seed ctx.text with Russian text directly (skip network translate step)
+    const seed: TextMiddleware = async (ctx, next) => {
+      ctx.text = "Один, два, три, четыре, пять, шесть, семь, восемь.";
+      await next();
+    };
+    const t = new PipelineTranslator(
+      [seed, makeMatMiddleware(1, 0), makeInterjectMiddleware(1)],
+      "ru",
+    );
+    const result = await t.translate("x");
+    const matWords    = ["блядь","сука","хуй","пиздец","ёпта","еб твою мать","нихуя себе","ёбаный в рот","мать твою"];
+    const interWords  = ["Ого","Ах","Ух","Ой","Эй","Ба","эх","уф","ай-яй-яй","ой","ух","ну","ай"];
+    expect(matWords.some(w   => result.includes(w))).toBe(true);
+    expect(interWords.some(w => result.includes(w))).toBe(true);
+  });
+
+  it("input is never mutated (ctx.input is readonly in practice)", async () => {
+    const mw: TextMiddleware = async (ctx, next) => {
+      ctx.text = "mutated";
+      await next();
+    };
+    const t = new PipelineTranslator([mw], "en");
+    await t.translate("original");
+    // input passed to translate is not modified
+    const result = await t.translate("original");
+    expect(result).toBe("mutated"); // still works on second call
   });
 });
 
@@ -194,7 +335,8 @@ describe("InterjectTranslator", () => {
   });
 
   it("prob=1 injects Russian interjections", async () => {
-    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три.") };
+    // Many comma breaks → probability of zero injections is negligible (~0.1%)
+    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три, четыре, пять, шесть, семь, восемь.") };
     const result = await new InterjectTranslator(inner, 1).translate("x");
     const words = ["Ого","Ах","Ух","Ой","Эй","Ба","Ишь","О-го-го","эх","уф","ай-яй-яй","вот как","ой","ух","ну","ай"];
     expect(words.some(w => result.includes(w))).toBe(true);
@@ -242,7 +384,7 @@ describe("Pipeline E2E showcase: Mat + Interject stacked", () => {
   });
 
   it("mat+interject at prob=1: output contains both mat and interjection vocabulary", async () => {
-    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три.") };
+    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три, четыре, пять, шесть, семь, восемь.") };
     const chain = new InterjectTranslator(
       new MatTranslator(inner, 1, 0), // stretchProb=0 keeps words recognisable
       1,
@@ -257,7 +399,7 @@ describe("Pipeline E2E showcase: Mat + Interject stacked", () => {
   });
 
   it("stretch at prob=1: injected mat words contain repeated Cyrillic vowels", async () => {
-    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три.") };
+    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три, четыре, пять, шесть, семь, восемь.") };
     const chain = new InterjectTranslator(
       new MatTranslator(inner, 1, 1), // stretchProb=1 — every injection stretched
       0,

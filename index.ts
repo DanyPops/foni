@@ -16,7 +16,11 @@ import { platform } from "node:os";
 
 import { freshState, resolveBacktickRun, drainChunks } from "./lib.ts";
 import { SpeakFacade } from "./pipeline/speak-facade.ts";
-import { IdentityTranslator, MyMemoryTranslator, MatTranslator, InterjectTranslator } from "./pipeline/translators.ts";
+import {
+  IdentityTranslator, MyMemoryTranslator, MatTranslator, InterjectTranslator,
+  PipelineTranslator, makeTranslateMiddleware, makeMatMiddleware, makeInterjectMiddleware,
+  type TextMiddleware,
+} from "./pipeline/translators.ts";
 import { IdentityProcessor, RVCProcessor } from "./pipeline/processors.ts";
 import { SystemPlayer } from "./pipeline/player.ts";
 import { SileroBackend } from "./backends/silero.ts";
@@ -86,19 +90,30 @@ async function detectBackend(): Promise<TTSBackend | null> {
 
 const player = new SystemPlayer();
 
+function rebuildTranslator() {
+  const t = config.lang === "ru"
+    ? new PipelineTranslator(buildPipeline(), "ru")
+    : new IdentityTranslator();
+  facade?.swapTranslator(t);
+}
+
+function buildPipeline(): TextMiddleware[] {
+  const stack: TextMiddleware[] = [];
+  if (config.lang === "ru") {
+    stack.push(makeTranslateMiddleware("en", "ru"));
+    if (config.matEnabled)       stack.push(makeMatMiddleware(config.matProb, config.matStretch));
+    if (config.interjectEnabled) stack.push(makeInterjectMiddleware(config.interjectProb));
+  }
+  return stack;
+}
+
 async function buildFacade(): Promise<SpeakFacade | null> {
   const backend = await detectBackend();
   if (!backend) return null;
 
-  const baseTranslator = config.lang === "ru"
-    ? new MyMemoryTranslator("en", "ru")
+  const translator = config.lang === "ru"
+    ? new PipelineTranslator(buildPipeline(), "ru")
     : new IdentityTranslator();
-  let translator = config.matEnabled && config.lang === "ru"
-    ? new MatTranslator(baseTranslator, config.matProb, config.matStretch)
-    : baseTranslator;
-  if (config.interjectEnabled && config.lang === "ru") {
-    translator = new InterjectTranslator(translator, config.interjectProb);
-  }
 
   const processor = config.rvcEnabled && config.rvcModel
     ? new RVCProcessor(config.rvcUrl)
@@ -295,8 +310,7 @@ export default async function (pi: ExtensionAPI) {
         const lang = parts[1] as "en" | "ru" | undefined;
         if (lang !== "en" && lang !== "ru") { ctx.ui.notify("Usage: /tts lang en|ru", "warning"); return; }
         config.lang = lang;
-        const base = lang === "ru" ? new MyMemoryTranslator("en", "ru") : new IdentityTranslator();
-        facade?.swapTranslator(config.matEnabled && lang === "ru" ? new MatTranslator(base, config.matProb, config.matStretch) : base);
+        rebuildTranslator();
         ctx.ui.notify(`language -> ${lang === "ru" ? "RU" : "EN"}`, "info");
         updateStatus(ctx);
         return;
@@ -308,18 +322,14 @@ export default async function (pi: ExtensionAPI) {
         const matSub = parts[1] ?? "";
         if (matSub === "on" || matSub === "off") {
           config.matEnabled = matSub === "on";
-          const base = new MyMemoryTranslator("en", "ru");
-          facade?.swapTranslator(config.matEnabled ? new MatTranslator(base, config.matProb, config.matStretch) : base);
+          rebuildTranslator();
           ctx.ui.notify(`Mat ${config.matEnabled ? `включён (prob=${config.matProb})` : "выключен"}`, "info");
           return;
         }
         const prob = parseFloat(matSub);
         if (!isNaN(prob) && prob >= 0 && prob <= 1) {
           config.matProb = prob;
-          if (facade) {
-            const base = new MyMemoryTranslator("en", "ru");
-            facade.swapTranslator(config.matEnabled ? new MatTranslator(base, config.matProb, config.matStretch) : base);
-          }
+          rebuildTranslator();
           ctx.ui.notify(`Mat probability -> ${prob}`, "info");
           return;
         }
@@ -328,10 +338,7 @@ export default async function (pi: ExtensionAPI) {
           const sp = parseFloat(stretchSub);
           if (!isNaN(sp) && sp >= 0 && sp <= 1) {
             config.matStretch = sp;
-            if (facade) {
-              const base = new MyMemoryTranslator("en", "ru");
-              facade.swapTranslator(config.matEnabled ? new MatTranslator(base, config.matProb, config.matStretch) : base);
-            }
+            rebuildTranslator();
             ctx.ui.notify(`Mat stretch probability -> ${sp}`, "info");
           } else {
             ctx.ui.notify(`Mat stretch: ${config.matStretch}\nUsage: /tts mat stretch 0.0-1.0`, "info");
@@ -352,14 +359,14 @@ export default async function (pi: ExtensionAPI) {
         const ijSub = parts[1] ?? "";
         if (ijSub === "on" || ijSub === "off") {
           config.interjectEnabled = ijSub === "on";
-          facade = null; facade = await buildFacade();
+          rebuildTranslator();
           ctx.ui.notify(`Межметия: ${config.interjectEnabled ? `включены (prob=${config.interjectProb})` : "выключены"}`, "info");
           return;
         }
         const ijProb = parseFloat(ijSub);
         if (!isNaN(ijProb) && ijProb >= 0 && ijProb <= 1) {
           config.interjectProb = ijProb;
-          facade = null; facade = await buildFacade();
+          rebuildTranslator();
           ctx.ui.notify(`Межметия probability -> ${ijProb}`, "info");
           return;
         }
@@ -490,8 +497,7 @@ export default async function (pi: ExtensionAPI) {
         },
         setLang(lang) {
           config.lang = lang;
-          const base = lang === "ru" ? new MyMemoryTranslator("en", "ru") : new IdentityTranslator();
-          facade?.swapTranslator(config.matEnabled && lang === "ru" ? new MatTranslator(base, config.matProb, config.matStretch) : base);
+          rebuildTranslator();
           updateStatus(ctx);
         },
         setSpeed(speed) {

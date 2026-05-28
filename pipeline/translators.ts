@@ -194,6 +194,123 @@ function injectMat(text: string, prob: number, stretchProb: number): string {
   }).join(" ");
 }
 
+// ─── Middleware pipeline ─────────────────────────────────────────────────────
+//
+// Koa-style async middleware for text transformation.
+// Each step is a plain function (ctx, next) that mutates ctx.text.
+// compose() runs the stack in order; each middleware calls next() to
+// pass control to the next step.
+//
+// Usage:
+//   const stack: TextMiddleware[] = [
+//     makeTranslateMiddleware("en", "ru"),
+//     makeMatMiddleware(0.35, 0.5),
+//     makeInterjectMiddleware(0.25),
+//   ];
+//   const translator = new PipelineTranslator(stack, "ru");
+
+export interface TextCtx {
+  /** Original input text (never mutated). */
+  readonly input: string;
+  /** Current text — mutated by each middleware step. */
+  text: string;
+  /** Target language. */
+  lang: "en" | "ru";
+}
+
+export type TextMiddleware = (
+  ctx: TextCtx,
+  next: () => Promise<void>,
+) => Promise<void>;
+
+/**
+ * Compose a stack of TextMiddleware into a single async runner.
+ * Executes left-to-right; each middleware must call next() to continue.
+ */
+export function compose(stack: TextMiddleware[]): (ctx: TextCtx) => Promise<void> {
+  return (ctx) => {
+    const dispatch = (i: number): Promise<void> =>
+      i >= stack.length ? Promise.resolve() : stack[i](ctx, () => dispatch(i + 1));
+    return dispatch(0);
+  };
+}
+
+// ─── Middleware factories ─────────────────────────────────────────────────────
+
+/** Translate ctx.input → ctx.text using MyMemory. */
+export function makeTranslateMiddleware(from: string, to: string): TextMiddleware {
+  const t = from === to ? new IdentityTranslatorImpl() : new MyMemoryTranslatorImpl(from, to);
+  return async (ctx, next) => {
+    ctx.text = await t.translate(ctx.input);
+    await next();
+  };
+}
+
+/** Inject Russian mat into ctx.text after downstream runs. */
+export function makeMatMiddleware(prob: number, stretch: number): TextMiddleware {
+  return async (ctx, next) => {
+    await next();
+    ctx.text = injectMat(ctx.text, prob, stretch);
+  };
+}
+
+/** Inject Russian interjections into ctx.text after downstream runs. */
+export function makeInterjectMiddleware(prob: number): TextMiddleware {
+  return async (ctx, next) => {
+    await next();
+    ctx.text = injectInterject(ctx.text, prob);
+  };
+}
+
+/**
+ * PipelineTranslator — implements Translator via a flat middleware stack.
+ * Drop-in replacement for the nested decorator chain.
+ *
+ * @param stack  Ordered middleware steps.
+ * @param lang   Target language (needed to set ctx.lang).
+ */
+export class PipelineTranslator implements Translator {
+  private readonly run: (ctx: TextCtx) => Promise<void>;
+
+  constructor(
+    private readonly stack: TextMiddleware[],
+    private readonly lang: "en" | "ru" = "en",
+  ) {
+    this.run = compose(stack);
+  }
+
+  async translate(input: string): Promise<string> {
+    const ctx: TextCtx = { input, text: input, lang: this.lang };
+    await this.run(ctx);
+    return ctx.text;
+  }
+}
+
+// ─── Private translator impls (used internally by middleware factories) ───────
+// Named with *Impl suffix so the public export names stay clean.
+
+class IdentityTranslatorImpl {
+  async translate(text: string): Promise<string> { return text; }
+}
+
+class MyMemoryTranslatorImpl {
+  constructor(private readonly from: string, private readonly to: string) {}
+
+  async translate(text: string): Promise<string> {
+    try {
+      const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${this.from}|${this.to}`;
+      const resp = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+      if (!resp.ok) return text;
+      const data = await resp.json() as { responseData: { translatedText: string } };
+      return data.responseData.translatedText || text;
+    } catch {
+      return text;
+    }
+  }
+}
+
+// ─── Legacy decorator classes (kept for backwards compat & existing tests) ────
+
 export class IdentityTranslator implements Translator {
   async translate(text: string): Promise<string> {
     return text;
