@@ -16,7 +16,7 @@ import { platform } from "node:os";
 
 import { freshState, resolveBacktickRun, drainChunks } from "./lib.ts";
 import { SpeakFacade } from "./pipeline/speak-facade.ts";
-import { IdentityTranslator, MyMemoryTranslator } from "./pipeline/translators.ts";
+import { IdentityTranslator, MyMemoryTranslator, MatTranslator } from "./pipeline/translators.ts";
 import { IdentityProcessor, RVCProcessor } from "./pipeline/processors.ts";
 import { SystemPlayer } from "./pipeline/player.ts";
 import { SileroBackend } from "./backends/silero.ts";
@@ -25,6 +25,8 @@ import { EspeakBackend } from "./backends/espeak.ts";
 import { FakeYouBackend } from "./backends/fakeyou.ts";
 import type { TTSBackend } from "./pipeline/interfaces.ts";
 import { pickModel } from "./tui/model-picker.ts";
+import { openFoniPanel } from "./tui/foni-panel.ts";
+import type { FoniPanelState, FoniPanelActions } from "./tui/foni-panel.ts";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -38,9 +40,11 @@ const config = {
   kokoroUrl: "http://localhost:8880",
   fakeyouToken: "",
   fakeyouApiKey: "",
+  matEnabled: false,
+  matProb: 0.35,
   rvcEnabled: false,
   rvcUrl: "http://localhost:5050",
-  rvcModel: "",
+  rvcModel: "bandit",
 };
 
 // ─── Backend registry (Strategy pool) ────────────────────────────────────────
@@ -83,9 +87,12 @@ async function buildFacade(): Promise<SpeakFacade | null> {
   const backend = await detectBackend();
   if (!backend) return null;
 
-  const translator = config.lang === "ru"
+  const baseTranslator = config.lang === "ru"
     ? new MyMemoryTranslator("en", "ru")
     : new IdentityTranslator();
+  const translator = config.matEnabled && config.lang === "ru"
+    ? new MatTranslator(baseTranslator, config.matProb)
+    : baseTranslator;
 
   const processor = config.rvcEnabled && config.rvcModel
     ? new RVCProcessor(config.rvcUrl)
@@ -151,11 +158,21 @@ export default async function (pi: ExtensionAPI) {
     updateStatus(ctx);
     fetch("http://127.0.0.1:5050/models", { signal: AbortSignal.timeout(1500) })
       .then(r => r.ok ? r.json() : null)
-      .then((data: { models: string[] } | null) => {
+      .then(async (data: { models: string[] } | null) => {
         if (!data) return;
         config.rvcUrl = "http://127.0.0.1:5050";
         const models: string[] = data.models ?? [];
         if (models.length > 0 && !config.rvcModel) config.rvcModel = models[0];
+        // Auto-enable RVC and load the default model
+        if (!config.rvcEnabled && config.rvcModel) {
+          try {
+            const r = await fetch(`${config.rvcUrl}/models/${encodeURIComponent(config.rvcModel)}`, { method: "POST", signal: AbortSignal.timeout(5_000) });
+            if (r.ok) {
+              config.rvcEnabled = true;
+              facade?.swapProcessor(new RVCProcessor(config.rvcUrl));
+            }
+          } catch { /* RVC load failed, stay disabled */ }
+        }
         updateStatus(ctx);
       })
       .catch(() => {});
@@ -195,7 +212,7 @@ export default async function (pi: ExtensionAPI) {
   // ─── Commands ──────────────────────────────────────────────────────────────
 
   pi.registerCommand("tts", {
-    description: "Toggle TTS | /tts test | /tts status | /tts voice | /tts speed | /tts lang en|ru | /tts backend | /tts token | /tts rvc on|off|model|url|models | /tts stop",
+    description: "Toggle TTS | /tts test | /tts status | /tts voice | /tts speed | /tts lang en|ru | /tts backend | /tts token | /tts rvc on|off|model|url|models | /tts mat on|off|<prob> | /tts stop",
     handler: async (args, ctx) => {
       const parts = (args ?? "").trim().split(/\s+/).filter(Boolean);
       const sub = parts[0] ?? "";
@@ -283,9 +300,39 @@ export default async function (pi: ExtensionAPI) {
         const lang = parts[1] as "en" | "ru" | undefined;
         if (lang !== "en" && lang !== "ru") { ctx.ui.notify("Usage: /tts lang en|ru", "warning"); return; }
         config.lang = lang;
-        facade?.swapTranslator(lang === "ru" ? new MyMemoryTranslator("en", "ru") : new IdentityTranslator());
+        const base = lang === "ru" ? new MyMemoryTranslator("en", "ru") : new IdentityTranslator();
+        facade?.swapTranslator(config.matEnabled && lang === "ru" ? new MatTranslator(base, config.matProb) : base);
         ctx.ui.notify(`language -> ${lang === "ru" ? "RU" : "EN"}`, "info");
         updateStatus(ctx);
+        return;
+      }
+
+      // ── mat ─────────────────────────────────────────────────────────────────
+      if (sub === "mat") {
+        if (config.lang !== "ru") { ctx.ui.notify("Mat only works with Russian -- /tts lang ru first", "warning"); return; }
+        const matSub = parts[1] ?? "";
+        if (matSub === "on" || matSub === "off") {
+          config.matEnabled = matSub === "on";
+          const base = new MyMemoryTranslator("en", "ru");
+          facade?.swapTranslator(config.matEnabled ? new MatTranslator(base, config.matProb) : base);
+          ctx.ui.notify(`Mat ${config.matEnabled ? `включён (prob=${config.matProb})` : "выключен"}`, "info");
+          return;
+        }
+        const prob = parseFloat(matSub);
+        if (!isNaN(prob) && prob >= 0 && prob <= 1) {
+          config.matProb = prob;
+          if (facade) {
+            const base = new MyMemoryTranslator("en", "ru");
+            facade.swapTranslator(config.matEnabled ? new MatTranslator(base, config.matProb) : base);
+          }
+          ctx.ui.notify(`Mat probability -> ${prob}`, "info");
+          return;
+        }
+        ctx.ui.notify(
+          `Mat: ${config.matEnabled ? "включён" : "выключен"} (prob=${config.matProb})\n` +
+          "Usage: /tts mat on|off | /tts mat 0.0-1.0",
+          "info",
+        );
         return;
       }
 
@@ -384,16 +431,71 @@ export default async function (pi: ExtensionAPI) {
       // ── stop ─────────────────────────────────────────────────────────────
       if (sub === "stop") { stopAudio(); ctx.ui.notify("TTS stopped", "info"); return; }
 
-      // ── toggle ───────────────────────────────────────────────────────────
-      config.enabled = !config.enabled;
-      if (config.enabled && !facade) facade = await buildFacade();
-      stopAudio();
-      state = freshState();
-      const icon = config.enabled ? "[on]" : "[off]";
-      const label = config.enabled
-        ? `TTS ON (${facade?.backendName ?? "no backend -- install espeak-ng"})`
-        : "TTS OFF";
-      ctx.ui.notify(`${icon} ${label}`, "info");
+      // ── panel (no args) ──────────────────────────────────────────────────
+      if (!facade) facade = await buildFacade();
+      const panelState = (): FoniPanelState => ({
+        enabled:      config.enabled,
+        lang:         config.lang,
+        speed:        config.speed,
+        backendName:  facade?.backendName ?? "none",
+        backendPref:  config.backendPref,
+        rvcEnabled:   config.rvcEnabled,
+        rvcModel:     config.rvcModel,
+        rvcUrl:       config.rvcUrl,
+        rvcServerOk:  null,
+      });
+      const panelActions: FoniPanelActions = {
+        toggle() {
+          config.enabled = !config.enabled;
+          if (config.enabled && !facade) buildFacade().then(f => { facade = f; });
+          stopAudio();
+          state = freshState();
+          updateStatus(ctx);
+        },
+        setLang(lang) {
+          config.lang = lang;
+          const base = lang === "ru" ? new MyMemoryTranslator("en", "ru") : new IdentityTranslator();
+          facade?.swapTranslator(config.matEnabled && lang === "ru" ? new MatTranslator(base, config.matProb) : base);
+          updateStatus(ctx);
+        },
+        setSpeed(speed) {
+          config.speed = speed;
+          facade?.setOpts({ speed });
+          updateStatus(ctx);
+        },
+        setBackendPref(pref) {
+          config.backendPref = pref as typeof config.backendPref;
+          facade = null;
+          buildFacade().then(f => { facade = f; updateStatus(ctx); });
+        },
+        toggleRvc() {
+          if (!config.rvcEnabled && !config.rvcModel) return;
+          config.rvcEnabled = !config.rvcEnabled;
+          facade?.swapProcessor(config.rvcEnabled ? new RVCProcessor(config.rvcUrl) : new IdentityProcessor());
+          updateStatus(ctx);
+        },
+        async pickRvcModel() {
+          try {
+            const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(3000) });
+            const data = await r.json() as { models?: string[] };
+            const models = data.models ?? [];
+            if (!models.length) return;
+            const picked = await pickModel(ctx, models, config.rvcModel);
+            if (!picked) return;
+            config.rvcModel = picked;
+            const lr = await fetch(`${config.rvcUrl}/models/${encodeURIComponent(picked)}`, { method: "POST", signal: AbortSignal.timeout(10_000) });
+            if (lr.ok) facade?.swapProcessor(new RVCProcessor(config.rvcUrl));
+            updateStatus(ctx);
+          } catch { /* server unreachable */ }
+        },
+        async checkRvcServer() {
+          try {
+            const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) });
+            return r.ok;
+          } catch { return false; }
+        },
+      };
+      await openFoniPanel(ctx, panelState(), panelActions);
       updateStatus(ctx);
     },
   });
