@@ -44,7 +44,7 @@ class ModelPickerComponent {
   render(width: number): string[] {
     if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
 
-    const title = " 🎙  Select RVC model ";
+    const title = " Select RVC model ";
     const hint = " ↑↓ move · Enter confirm · Esc cancel ";
     const inner = width - 4;
 
@@ -61,8 +61,8 @@ class ModelPickerComponent {
       for (let i = 0; i < this.models.length; i++) {
         const selected = i === this.selected;
         const current  = this.models[i] === this.current;
-        const prefix   = selected ? "  ▶ " : "    ";
-        const suffix   = current ? " ●" : "  ";
+        const prefix   = selected ? "  > " : "    ";
+        const suffix   = current ? " *" : "  ";
         const label    = truncateToWidth(prefix + this.models[i] + suffix, inner);
         const padded   = label.padEnd(inner + (label.length - visibleWidth(label)));
         const row = border("│ ") + (selected ? accent(padded) : padded) + border(" │");

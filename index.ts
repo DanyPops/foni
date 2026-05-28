@@ -1,13 +1,13 @@
 /**
- * Foni — Pi TTS extension.
+ * Foni -- Pi TTS extension.
  *
  * This file is the extension entry point only. All business logic lives in:
- *   pipeline/speak-facade.ts   — Facade
- *   pipeline/interfaces.ts     — Strategy interfaces
- *   pipeline/translators.ts    — Translator strategies
- *   pipeline/processors.ts     — AudioProcessor strategies
- *   pipeline/player.ts         — Player
- *   backends/*.ts              — TTSBackend strategies
+ *   pipeline/speak-facade.ts   -- Facade
+ *   pipeline/interfaces.ts     -- Strategy interfaces
+ *   pipeline/translators.ts    -- Translator strategies
+ *   pipeline/processors.ts     -- AudioProcessor strategies
+ *   pipeline/player.ts         -- Player
+ *   backends/*.ts              -- TTSBackend strategies
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -125,23 +125,24 @@ export default async function (pi: ExtensionAPI) {
       ctx.ui.setWidget("tts", undefined);
       return;
     }
-    const backend = facade?.backendName ?? "…";
+    const backend = facade?.backendName ?? "...";
     const rvc     = config.rvcEnabled && config.rvcModel ? config.rvcModel : null;
-    const lang    = config.lang === "ru" ? "🇷🇺" : "🇬🇧";
+    const lang    = config.lang === "ru" ? "RU" : "EN";
 
     ctx.ui.setStatus(
       "tts",
-      theme.fg("accent", "🔊") + theme.fg("dim", ` ${backend}${rvc ? `+${rvc}` : ""} ${lang}`)
+      theme.fg("accent", "TTS") + theme.fg("dim", ` ${backend}${rvc ? `+${rvc}` : ""} ${lang}`)
     );
 
-    const on  = (s: string) => `  ${theme.fg("accent", "●")} ${s}`;
-    const off = (s: string) => `  ${theme.fg("dim", "○")} ${s}`;
+    const fg = (code: string, t: string) => `\x1b[${code}m${t}\x1b[0m`;
+    const on  = (s: string) => ` ${fg("36", "●")} ${s}`;
+    const off = (s: string) => ` ${fg("2",  "○")} ${s}`;
     ctx.ui.setWidget("tts", [
-      theme.fg("accent", " 🔊 Foni TTS"),
-      on(`backend:  ${theme.fg("accent", backend)}`),
-      rvc ? on(`rvc:      ${theme.fg("accent", rvc)}`) : off(theme.fg("dim", "rvc:      off")),
+      fg("2", " Foni TTS"),
+      on(`backend:  ${fg("36;1", backend)}`),
+      rvc ? on(`rvc:      ${fg("36;1", rvc)}`) : off(fg("2", "rvc:      off")),
       on(`language: ${lang}`),
-      on(`speed:    ${config.speed}×`),
+      on(`speed:    ${config.speed}x`),
     ]);
   }
 
@@ -198,18 +199,18 @@ export default async function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const parts = (args ?? "").trim().split(/\s+/).filter(Boolean);
       const sub = parts[0] ?? "";
-      const ok   = (s: string) => `  ✓ ${s}`;
-      const err  = (s: string) => `  ✗ ${s}`;
-      const warn = (s: string) => `  ⚠ ${s}`;
-      const off  = (k: string, v: string) => `  ○ ${k.padEnd(12)} ${v}`;
-      const on   = (k: string, v: string) => `  ✓ ${k.padEnd(12)} ${v}`;
+      const ok   = (s: string) => `  ok  ${s}`;
+      const err  = (s: string) => `  ERR ${s}`;
+      const warn = (s: string) => `  !   ${s}`;
+      const off  = (k: string, v: string) => `  -   ${k.padEnd(12)} ${v}`;
+      const on   = (k: string, v: string) => `  ok  ${k.padEnd(12)} ${v}`;
 
       // ── test ────────────────────────────────────────────────────────────
       if (sub === "test") {
         const lines: string[] = ["Foni diagnostic:", ""];
-        lines.push(config.enabled ? ok("TTS enabled") : err("TTS disabled — run /tts to toggle on"));
+        lines.push(config.enabled ? ok("TTS enabled") : err("TTS disabled -- run /tts to toggle on"));
         const backend = await detectBackend();
-        lines.push(backend ? ok(`backend: ${backend.name}`) : err("no backend — install espeak-ng or start Silero/Kokoro"));
+        lines.push(backend ? ok(`backend: ${backend.name}`) : err("no backend -- install espeak-ng or start Silero/Kokoro"));
         lines.push(player.detected() ? ok(`player: ${player.detected()}`) : err("no audio player (mpv / aplay / paplay)"));
         if (config.lang === "ru") {
           const t = await new MyMemoryTranslator("en", "ru").translate("Hello stalker");
@@ -221,10 +222,10 @@ export default async function (pi: ExtensionAPI) {
           try {
             const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) });
             const p = await r.json() as { current_model?: string };
-            lines.push(r.ok ? ok(`RVC: ${config.rvcUrl} — model: ${p.current_model ?? "none"}`) : err(`RVC ${r.status}`));
+            lines.push(r.ok ? ok(`RVC: ${config.rvcUrl} -- model: ${p.current_model ?? "none"}`) : err(`RVC ${r.status}`));
           } catch { lines.push(err(`RVC unreachable at ${config.rvcUrl}`)); }
         } else {
-          lines.push(warn("RVC disabled — /tts rvc on to enable bandit voice"));
+          lines.push(warn("RVC disabled -- /tts rvc on to enable bandit voice"));
         }
         ctx.ui.notify(lines.join("\n"), "info");
         if (backend && player.detected()) {
@@ -235,7 +236,7 @@ export default async function (pi: ExtensionAPI) {
             player,
             { voice: config.voice, speed: config.speed },
           );
-          await facade.speak("Test. One two three.", (m) => ctx.ui.notify(`  › ${m}`, "info"));
+          await facade.speak("Test. One two three.", (m) => ctx.ui.notify(`  > ${m}`, "info"));
         }
         return;
       }
@@ -249,7 +250,7 @@ export default async function (pi: ExtensionAPI) {
           on("backend",   b),
           on("voice",     config.voice),
           on("speed",     String(config.speed)),
-          on("language",  config.lang === "ru" ? "🇷🇺 ru" : "🇬🇧 en"),
+          on("language",  config.lang === "ru" ? "RU" : "EN"),
           on("player",    player.detected() ?? "none"),
           "",
           config.rvcEnabled ? on("rvc", `${config.rvcModel} @ ${config.rvcUrl}`) : off("rvc", "disabled"),
@@ -264,7 +265,7 @@ export default async function (pi: ExtensionAPI) {
       if (sub === "voice") {
         config.voice = parts[1] ?? config.voice;
         facade?.setOpts({ voice: config.voice });
-        ctx.ui.notify(`voice → ${config.voice}`, "info");
+        ctx.ui.notify(`voice -> ${config.voice}`, "info");
         return;
       }
       if (sub === "speed") {
@@ -272,9 +273,9 @@ export default async function (pi: ExtensionAPI) {
         if (!isNaN(n) && n > 0) {
           config.speed = Math.max(0.5, Math.min(3.0, n));
           facade?.setOpts({ speed: config.speed });
-          ctx.ui.notify(`speed → ${config.speed}`, "info");
+          ctx.ui.notify(`speed -> ${config.speed}`, "info");
         } else {
-          ctx.ui.notify("Usage: /tts speed <0.5–3.0>", "warning");
+          ctx.ui.notify("Usage: /tts speed <0.5-3.0>", "warning");
         }
         return;
       }
@@ -283,7 +284,7 @@ export default async function (pi: ExtensionAPI) {
         if (lang !== "en" && lang !== "ru") { ctx.ui.notify("Usage: /tts lang en|ru", "warning"); return; }
         config.lang = lang;
         facade?.swapTranslator(lang === "ru" ? new MyMemoryTranslator("en", "ru") : new IdentityTranslator());
-        ctx.ui.notify(`language → ${lang === "ru" ? "🇷🇺 Russian" : "🇬🇧 English"}`, "info");
+        ctx.ui.notify(`language -> ${lang === "ru" ? "RU" : "EN"}`, "info");
         updateStatus(ctx);
         return;
       }
@@ -298,7 +299,7 @@ export default async function (pi: ExtensionAPI) {
         config.backendPref = pref as typeof config.backendPref;
         facade = null;
         const b = await detectBackend();
-        if (b) { facade = await buildFacade(); ctx.ui.notify(`backend → ${b.name}`, "info"); }
+        if (b) { facade = await buildFacade(); ctx.ui.notify(`backend -> ${b.name}`, "info"); }
         else ctx.ui.notify("no backend available for that preference", "warning");
         updateStatus(ctx);
         return;
@@ -349,7 +350,7 @@ export default async function (pi: ExtensionAPI) {
               const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(3000) });
               const data = await r.json() as { models?: string[] };
               const models: string[] = data.models ?? [];
-              if (models.length === 0) { ctx.ui.notify("No models on RVC server — download one first", "warning"); return; }
+              if (models.length === 0) { ctx.ui.notify("No models on RVC server -- download one first", "warning"); return; }
               const picked = await pickModel(ctx, models, config.rvcModel);
               if (!picked) return;
               config.rvcModel = picked;
@@ -366,7 +367,7 @@ export default async function (pi: ExtensionAPI) {
           updateStatus(ctx);
           return;
         }
-        if (rvcSub === "url") { config.rvcUrl = parts[2] ?? config.rvcUrl; ctx.ui.notify(`RVC URL → ${config.rvcUrl}`, "info"); return; }
+        if (rvcSub === "url") { config.rvcUrl = parts[2] ?? config.rvcUrl; ctx.ui.notify(`RVC URL -> ${config.rvcUrl}`, "info"); return; }
         if (rvcSub === "models") {
           try {
             const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(5_000) });
@@ -388,9 +389,9 @@ export default async function (pi: ExtensionAPI) {
       if (config.enabled && !facade) facade = await buildFacade();
       stopAudio();
       state = freshState();
-      const icon = config.enabled ? "🔊" : "🔇";
+      const icon = config.enabled ? "[on]" : "[off]";
       const label = config.enabled
-        ? `TTS ON (${facade?.backendName ?? "no backend — install espeak-ng"})`
+        ? `TTS ON (${facade?.backendName ?? "no backend -- install espeak-ng"})`
         : "TTS OFF";
       ctx.ui.notify(`${icon} ${label}`, "info");
       updateStatus(ctx);

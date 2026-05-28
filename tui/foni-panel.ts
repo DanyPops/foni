@@ -158,10 +158,10 @@ class FoniPanel {
     };
     const empty = () => border("│") + " ".repeat(innerW) + border("│");
     const divider = () => border("├" + "─".repeat(innerW) + "┤");
-    const cursor = (i: number) => this.cursor === i ? sel("▶") : " ";
+    const cursor = (i: number) => this.cursor === i ? sel("▸") : " ";
 
     // ── header ────────────────────────────────────────────────────────────────
-    const title = " 🔊 Foni ";
+    const title = " Foni ";
     const bLen = innerW - visibleWidth(title);
     const lB = Math.floor(bLen / 2);
     const rB = bLen - lB;
@@ -180,15 +180,15 @@ class FoniPanel {
 
     // 0: TTS on/off
     lines.push(makeRow(0, "TTS",
-      badge(s.enabled, s.enabled ? " ON" : "OFF") + " " + (s.enabled ? accent(s.backendName) : dim("—"))));
+      badge(s.enabled, s.enabled ? " ON" : "OFF") + " " + (s.enabled ? accent(s.backendName) : dim("-"))));  
 
     // 1: Language
     lines.push(makeRow(1, "Language",
-      badge(s.lang === "ru", s.lang === "ru" ? "RU 🇷🇺" : "EN 🇬🇧")));
+      badge(s.lang === "ru", s.lang === "ru" ? "RU" : "EN"))); // no emoji
 
     // 2: Speed
     lines.push(makeRow(2, "Speed",
-      accent(`${s.speed.toFixed(1)}×`) + dim("  +/- to adjust")));
+      accent(`${s.speed.toFixed(1)}x`) + dim("  +/- to adjust")));
 
     // 3: Backend
     lines.push(makeRow(3, "Backend",
@@ -204,16 +204,16 @@ class FoniPanel {
 
     // 5: RVC on/off  (index 5 because _divider_ is 4 — but rows[] maps it as index 5)
     lines.push(makeRow(5, "Voice conv",
-      badge(s.rvcEnabled, s.rvcEnabled ? " ON" : "OFF") + " " + (s.rvcEnabled ? accent(s.rvcModel || "—") : dim("—"))));
+      badge(s.rvcEnabled, s.rvcEnabled ? " ON" : "OFF") + " " + (s.rvcEnabled ? accent(s.rvcModel || "-") : dim("-"))));  
 
     // 6: Model
     lines.push(makeRow(6, "Model",
-      s.rvcModel ? accent(s.rvcModel) : warn("none — press m to pick")));
+      s.rvcModel ? accent(s.rvcModel) : warn("none -- press m to pick")));
 
     // 7: Server
     const serverStatus = s.rvcServerOk === null
-      ? dim("unknown — press ⏎ to check")
-      : s.rvcServerOk ? success("● online") : error("✗ unreachable");
+      ? dim("unknown -- press Enter to check")
+      : s.rvcServerOk ? success("● online") : error("○ unreachable");
     lines.push(makeRow(7, "Server",
       dim(s.rvcUrl + "  ") + serverStatus));
 
