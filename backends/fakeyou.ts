@@ -39,7 +39,6 @@ export class FakeYouBackend implements TTSBackend {
       const { state } = await poll.json() as { state: { status: string; maybe_public_bucket_wav_audio_path: string | null } };
       if (state.status === "complete_success" && state.maybe_public_bucket_wav_audio_path) {
         wavPath = state.maybe_public_bucket_wav_audio_path;
-        console.debug(`[foni] FakeYou ready after ${i + 1} poll(s), ${Date.now() - pollStart}ms`);
         break;
       }
       if (state.status === "complete_failure" || state.status === "dead") throw new Error(`FakeYou job failed: ${state.status}`);

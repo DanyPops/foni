@@ -29,7 +29,7 @@ export class SpeakFacade {
   setOpts(opts: Partial<SynthOptions>): void { this.opts = { ...this.opts, ...opts }; }
 
   async speak(rawText: string, log?: Log): Promise<void> {
-    const emit = log ?? ((m: string) => console.debug(`[foni] ${m}`));
+    const emit = log ?? ((_m: string) => {});
 
     const clean = stripMarkdown(rawText).trim();
     if (clean.length < 3) { emit("skipped: text too short after stripping"); return; }
