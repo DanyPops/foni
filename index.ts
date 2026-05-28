@@ -35,23 +35,32 @@ import type { FoniPanelState, FoniPanelActions } from "./tui/foni-panel.ts";
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const config = {
-  enabled: false,
-  backendPref: "auto" as "auto" | "silero" | "kokoro" | "fakeyou" | "espeak" | "say",
-  voice: "en_0",
-  speed: 1.0,
-  lang: "en" as "en" | "ru",
-  sileroUrl: "http://localhost:8001",
-  kokoroUrl: "http://localhost:8880",
+  // ── Core ────────────────────────────────────────────────────────────────
+  enabled:     true,                           // TTS on by default
+  backendPref: "espeak" as "auto" | "silero" | "kokoro" | "fakeyou" | "espeak" | "say",
+  voice:       "en_0",
+  speed:       1.15,                           // slightly faster than flat neutral
+  lang:        "ru" as "en" | "ru",           // Russian
+
+  // ── Backend URLs ────────────────────────────────────────────────────────
+  sileroUrl:    "http://localhost:8001",
+  kokoroUrl:    "http://localhost:8880",
   fakeyouToken: "",
   fakeyouApiKey: "",
-  matEnabled: false,
-  matProb: 0.35,
-  matStretch: 0.5,
-  interjectEnabled: false,
-  interjectProb: 0.25,
-  rvcEnabled: false,
-  rvcUrl: "http://localhost:5050",
-  rvcModel: "bandit",
+
+  // ── Mat — Russian profanity injection ───────────────────────────────────
+  matEnabled: true,
+  matProb:    0.35,                            // 35% chance per natural pause
+  matStretch: 0.5,                             // 50% chance of бляааааадь
+
+  // ── Интеръекции — Russian exclamations ──────────────────────────────────
+  interjectEnabled: true,
+  interjectProb:    0.25,                      // 25% chance per sentence
+
+  // ── RVC — bandit voice ──────────────────────────────────────────────────
+  rvcEnabled: true,
+  rvcUrl:     "http://localhost:5050",
+  rvcModel:   "bandit",
 };
 
 // ─── Backend registry (Strategy pool) ────────────────────────────────────────
