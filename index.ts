@@ -125,32 +125,20 @@ export default async function (pi: ExtensionAPI) {
 
   function stopAudio(): void { audioQueue = Promise.resolve(); }
 
-  function updateStatus(ctx: { ui: { setStatus: Function; setWidget: Function; theme: any } }): void {
+  function updateStatus(ctx: { ui: { setStatus: Function; theme: any } }): void {
     const theme = ctx.ui.theme;
     if (!config.enabled) {
       ctx.ui.setStatus("tts", undefined);
-      ctx.ui.setWidget("tts", undefined);
       return;
     }
     const backend = facade?.backendName ?? "...";
     const rvc     = config.rvcEnabled && config.rvcModel ? config.rvcModel : null;
     const lang    = config.lang === "ru" ? "RU" : "EN";
-
+    const mat     = config.matEnabled ? "+mat" : "";
     ctx.ui.setStatus(
       "tts",
-      theme.fg("accent", "TTS") + theme.fg("dim", ` ${backend}${rvc ? `+${rvc}` : ""} ${lang}`)
+      theme.fg("accent", "TTS") + theme.fg("dim", ` ${backend}${rvc ? `+${rvc}` : ""}${mat} ${lang}`)
     );
-
-    const fg = (code: string, t: string) => `\x1b[${code}m${t}\x1b[0m`;
-    const on  = (s: string) => ` ${fg("36", "●")} ${s}`;
-    const off = (s: string) => ` ${fg("2",  "○")} ${s}`;
-    ctx.ui.setWidget("tts", [
-      fg("2", " Foni TTS"),
-      on(`backend:  ${fg("36;1", backend)}`),
-      rvc ? on(`rvc:      ${fg("36;1", rvc)}`) : off(fg("2", "rvc:      off")),
-      on(`language: ${lang}`),
-      on(`speed:    ${config.speed}x`),
-    ]);
   }
 
   // ── Auto-detect RVC on startup ─────────────────────────────────────────────
