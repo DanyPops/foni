@@ -26,7 +26,7 @@ vi.mock("@earendil-works/pi-tui", () => {
 
 import { openFoniPanel } from "./tui/foni-panel.ts";
 import type { FoniPanelState, FoniPanelActions } from "./tui/foni-panel.ts";
-import { MatTranslator } from "./pipeline/translators.ts";
+import { MatTranslator, InterjectTranslator, stretchExpression } from "./pipeline/translators.ts";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -143,6 +143,127 @@ describe("MatTranslator", () => {
   it("propagates inner translator errors", async () => {
     const inner = { translate: vi.fn().mockRejectedValue(new Error("timeout")) };
     await expect(new MatTranslator(inner, 0.5).translate("x")).rejects.toThrow("timeout");
+  });
+});
+
+// ─── stretchExpression ──────────────────────────────────────────────────────
+
+describe("stretchExpression", () => {
+  it("no Cyrillic vowels → returns expression unchanged", () => {
+    expect(stretchExpression("xyz", 3)).toBe("xyz");
+  });
+
+  it("single-vowel word: vowel is repeated exactly `repeats` times", () => {
+    // "хуй": х(0) у(1) й(2) — only vowel is "у"
+    // result: "х" + "у"×3 + "й"
+    expect(stretchExpression("хуй", 3)).toMatch(/^х[у]{3}й$/u);
+  });
+
+  it("result length grows by (repeats - 1) chars", () => {
+    const input = "блядь"; // one vowel "я"
+    const result = stretchExpression(input, 4);
+    expect(result.length).toBe(input.length + 3); // 4 repeats replaces 1 char with 4
+  });
+
+  it("picks most resonant vowel: А beats И", () => {
+    // "каит": vowels are "а" (DV index 1) and "и" (DV index 11)
+    // topN = ceil(2/2) = 1 → always picks "а" (highest resonance)
+    const result = stretchExpression("каит", 3);
+    expect(result).toMatch(/^к[а]{3}ит$/u);
+  });
+
+  it("output contains a run of 2+ identical Cyrillic vowels", () => {
+    const result = stretchExpression("сука", 2);
+    expect(result).toMatch(/[АаОоУуЕеЁёИиЭэЮюЯяЫы]{2,}/u);
+  });
+});
+
+// ─── InterjectTranslator ─────────────────────────────────────────────────────
+
+describe("InterjectTranslator", () => {
+  it("prob=0 is a pure passthrough", async () => {
+    const inner = { translate: vi.fn().mockResolvedValue("Привет мир.") };
+    const t = new InterjectTranslator(inner, 0);
+    expect(await t.translate("Hello world")).toBe("Привет мир.");
+  });
+
+  it("always delegates to inner first", async () => {
+    const inner = { translate: vi.fn().mockResolvedValue("Привет.") };
+    await new InterjectTranslator(inner, 0).translate("Hello");
+    expect(inner.translate).toHaveBeenCalledWith("Hello");
+  });
+
+  it("prob=1 injects Russian interjections", async () => {
+    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три.") };
+    const result = await new InterjectTranslator(inner, 1).translate("x");
+    const words = ["Ого","Ах","Ух","Ой","Эй","Ба","Ишь","О-го-го","эх","уф","ай-яй-яй","вот как","ой","ух","ну","ай"];
+    expect(words.some(w => result.includes(w))).toBe(true);
+  });
+
+  it("probability defaults to 0.25", () => {
+    const t = new InterjectTranslator({ translate: vi.fn() });
+    expect(t.probability).toBe(0.25);
+  });
+
+  it("probability is public and mutable", () => {
+    const t = new InterjectTranslator({ translate: vi.fn() }, 0.1);
+    t.probability = 0.9;
+    expect(t.probability).toBe(0.9);
+  });
+
+  it("propagates inner translator errors", async () => {
+    const inner = { translate: vi.fn().mockRejectedValue(new Error("network")) };
+    await expect(new InterjectTranslator(inner, 0.5).translate("x")).rejects.toThrow("network");
+  });
+});
+
+// ─── Pipeline E2E showcase ────────────────────────────────────────────────────
+//
+// These tests demonstrate the full translator chain as it runs in production:
+//   inner → MatTranslator → InterjectTranslator
+// They are intentionally prob=1 to make assertions deterministic.
+
+describe("Pipeline E2E showcase: Mat + Interject stacked", () => {
+  it("prob=0 on both layers: inner result passes through untouched", async () => {
+    const inner = { translate: vi.fn().mockResolvedValue("Я люблю этот город.") };
+    const result = await new InterjectTranslator(
+      new MatTranslator(inner, 0, 0),
+      0,
+    ).translate("I love this city.");
+    expect(result).toBe("Я люблю этот город.");
+  });
+
+  it("inner is called exactly once, with the original input text", async () => {
+    const inner = { translate: vi.fn().mockResolvedValue("Один.") };
+    const chain = new InterjectTranslator(new MatTranslator(inner, 0), 0);
+    await chain.translate("One.");
+    expect(inner.translate).toHaveBeenCalledOnce();
+    expect(inner.translate).toHaveBeenCalledWith("One.");
+  });
+
+  it("mat+interject at prob=1: output contains both mat and interjection vocabulary", async () => {
+    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три.") };
+    const chain = new InterjectTranslator(
+      new MatTranslator(inner, 1, 0), // stretchProb=0 keeps words recognisable
+      1,
+    );
+    const result = await chain.translate("x");
+
+    const matWords    = ["блядь","сука","хуй","пиздец","ёпта","блин","ёб твою мать","нихуя себе","ёбаный в рот","какого хуя","мать твою","ни хуя себе"];
+    const interjWords = ["Ого","Ах","Ух","Ой","Эй","Ба","эх","уф","ай-яй-яй","вот как","ой","ух","ну","ай"];
+
+    expect(matWords.some(w    => result.includes(w))).toBe(true);
+    expect(interjWords.some(w => result.includes(w))).toBe(true);
+  });
+
+  it("stretch at prob=1: injected mat words contain repeated Cyrillic vowels", async () => {
+    const inner = { translate: vi.fn().mockResolvedValue("Один, два, три.") };
+    const chain = new InterjectTranslator(
+      new MatTranslator(inner, 1, 1), // stretchProb=1 — every injection stretched
+      0,
+    );
+    const result = await chain.translate("x");
+    expect(result).toMatch(/[АаОоУуЕеЁёИиЭэЮюЯяЫы]{2,}/u);
   });
 });
 

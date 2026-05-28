@@ -121,7 +121,7 @@ const DRAMATIC_VOWELS = "АаОоУуЕеЁёИиЭэЮюЯяЫы";
  * Picks from the top half of vowels ranked by dramatic impact,
  * then repeats it `repeats` times in place.
  */
-function stretchExpression(expr: string, repeats: number): string {
+export function stretchExpression(expr: string, repeats: number): string {
   const positions: number[] = [];
   for (let i = 0; i < expr.length; i++) {
     if (DRAMATIC_VOWELS.includes(expr[i])) positions.push(i);
