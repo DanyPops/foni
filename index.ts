@@ -16,7 +16,7 @@ import { platform } from "node:os";
 
 import { freshState, resolveBacktickRun, drainChunks } from "./lib.ts";
 import { SpeakFacade } from "./pipeline/speak-facade.ts";
-import { IdentityTranslator, MyMemoryTranslator, MatTranslator } from "./pipeline/translators.ts";
+import { IdentityTranslator, MyMemoryTranslator, MatTranslator, InterjectTranslator } from "./pipeline/translators.ts";
 import { IdentityProcessor, RVCProcessor } from "./pipeline/processors.ts";
 import { SystemPlayer } from "./pipeline/player.ts";
 import { SileroBackend } from "./backends/silero.ts";
@@ -43,6 +43,8 @@ const config = {
   matEnabled: false,
   matProb: 0.35,
   matStretch: 0.5,
+  interjectEnabled: false,
+  interjectProb: 0.25,
   rvcEnabled: false,
   rvcUrl: "http://localhost:5050",
   rvcModel: "bandit",
@@ -91,9 +93,12 @@ async function buildFacade(): Promise<SpeakFacade | null> {
   const baseTranslator = config.lang === "ru"
     ? new MyMemoryTranslator("en", "ru")
     : new IdentityTranslator();
-  const translator = config.matEnabled && config.lang === "ru"
+  let translator = config.matEnabled && config.lang === "ru"
     ? new MatTranslator(baseTranslator, config.matProb, config.matStretch)
     : baseTranslator;
+  if (config.interjectEnabled && config.lang === "ru") {
+    translator = new InterjectTranslator(translator, config.interjectProb);
+  }
 
   const processor = config.rvcEnabled && config.rvcModel
     ? new RVCProcessor(config.rvcUrl)
@@ -136,9 +141,10 @@ export default async function (pi: ExtensionAPI) {
     const rvc     = config.rvcEnabled && config.rvcModel ? config.rvcModel : null;
     const lang    = config.lang === "ru" ? "RU" : "EN";
     const mat     = config.matEnabled ? "+mat" : "";
+    const ij      = config.interjectEnabled ? "+oj" : "";
     ctx.ui.setStatus(
       "tts",
-      theme.fg("accent", "TTS") + theme.fg("dim", ` ${backend}${rvc ? `+${rvc}` : ""}${mat} ${lang}`)
+      theme.fg("accent", "TTS") + theme.fg("dim", ` ${backend}${rvc ? `+${rvc}` : ""}${mat}${ij} ${lang}`)
     );
   }
 
@@ -201,7 +207,7 @@ export default async function (pi: ExtensionAPI) {
   // ─── Commands ──────────────────────────────────────────────────────────────
 
   pi.registerCommand("tts", {
-    description: "Toggle TTS | /tts test | /tts status | /tts voice | /tts speed | /tts lang en|ru | /tts backend | /tts token | /tts rvc on|off|model|url|models | /tts mat on|off|<prob> | /tts stop",
+    description: "Toggle TTS | /tts test | /tts status | /tts voice | /tts speed | /tts lang en|ru | /tts backend | /tts token | /tts rvc on|off|model|url|models | /tts mat on|off|<prob> | /tts interject on|off|<prob> | /tts stop",
     handler: async (args, ctx) => {
       const parts = (args ?? "").trim().split(/\s+/).filter(Boolean);
       const sub = parts[0] ?? "";
@@ -335,6 +341,32 @@ export default async function (pi: ExtensionAPI) {
         ctx.ui.notify(
           `Mat: ${config.matEnabled ? "включён" : "выключен"} (prob=${config.matProb}, stretch=${config.matStretch})\n` +
           "Usage: /tts mat on|off | /tts mat 0.0-1.0 | /tts mat stretch 0.0-1.0",
+          "info",
+        );
+        return;
+      }
+
+      // ── interject ────────────────────────────────────────────────────────
+      if (sub === "interject") {
+        if (config.lang !== "ru") { ctx.ui.notify("Интеръекции работают только на русском -- /tts lang ru", "warning"); return; }
+        const ijSub = parts[1] ?? "";
+        if (ijSub === "on" || ijSub === "off") {
+          config.interjectEnabled = ijSub === "on";
+          facade = null; facade = await buildFacade();
+          ctx.ui.notify(`Межметия: ${config.interjectEnabled ? `включены (prob=${config.interjectProb})` : "выключены"}`, "info");
+          return;
+        }
+        const ijProb = parseFloat(ijSub);
+        if (!isNaN(ijProb) && ijProb >= 0 && ijProb <= 1) {
+          config.interjectProb = ijProb;
+          facade = null; facade = await buildFacade();
+          ctx.ui.notify(`Межметия probability -> ${ijProb}`, "info");
+          return;
+        }
+        ctx.ui.notify(
+          `Межметия: ${config.interjectEnabled ? "включены" : "выключены"} (prob=${config.interjectProb})
+` +
+          "Usage: /tts interject on|off | /tts interject 0.0-1.0",
           "info",
         );
         return;

@@ -1,5 +1,76 @@
 import type { Translator } from "./interfaces.ts";
 
+// ─── Russian Interjections (межметия) ────────────────────────────────────────
+// Primary interjections: non-word vocal expressions of emotion.
+// Lighter than mat — surprise, wonder, regret, relief.
+
+const INTERJECT: Record<"prefix" | "suffix" | "mid", string[]> = {
+  prefix: [
+    "Ого!",        // ogo — wow
+    "Ах!",         // akh — delight/surprise
+    "Ух!",         // ukh — impressed
+    "Ой!",         // oy — mild shock
+    "Эй!",         // ey — hey!
+    "Ба!",         // ba — well I never
+    "Ишь ты!",     // ish ty — fancy that
+    "Ну и ну!",    // nu i nu — well well
+    "Вот те на!",  // vot te na — you don't say
+    "О-го-го!",    // o-go-go — admiration/amazement
+  ],
+  suffix: [
+    ", эх!",       // ekh — resignation/regret
+    ", уф!",       // uf — relief/exhaustion
+    ", ого!",      // ogo — impressed afterthought
+    ", ай-яй-яй!", // ay-yay-yay — tsk tsk
+    ", вот как!",  // vot kak — is that so!
+    ", ишь!",      // ish — well I never (trailing)
+  ],
+  mid: [
+    "ой",          // oy — brief flinch
+    "ух",          // ukh — brief impression
+    "эх",          // ekh — sigh
+    "ну",          // nu — well...
+    "ай",          // ay — brief pain
+  ],
+};
+
+/**
+ * Inject Russian interjections into already-translated text.
+ *
+ * @param text     Russian text to mutate.
+ * @param prob     0–1 probability per opportunity.
+ */
+function injectInterject(text: string, prob: number): string {
+  if (prob <= 0) return text;
+
+  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+
+  return sentences.map(sentence => {
+    // Prefix: prepend an exclamation before the sentence
+    if (Math.random() < prob * 0.45) {
+      sentence = pick(INTERJECT.prefix) + " " + sentence;
+    }
+
+    // Mid: drop a soft filler at comma breaks
+    const clauses = sentence.split(",");
+    const mutated = clauses.map((clause, i) => {
+      if (i === 0) return clause;
+      if (Math.random() < prob * 0.5) return " " + pick(INTERJECT.mid) + "," + clause;
+      return clause;
+    });
+    sentence = mutated.join(",");
+
+    // Suffix: trail off with an exclamation
+    if (Math.random() < prob * 0.35) {
+      const stripped = sentence.replace(/[.!?]+$/, "");
+      const punct    = sentence.match(/[.!?]+$/)?.[0] ?? ".";
+      sentence = stripped + pick(INTERJECT.suffix) + punct;
+    }
+
+    return sentence;
+  }).join(" ");
+}
+
 // ─── Russian Mat ─────────────────────────────────────────────────────────────
 // Curated expressions by insertion role.
 // "interject" — standalone pause fillers that drop between phrases.
@@ -173,5 +244,28 @@ export class MatTranslator implements Translator {
   async translate(text: string): Promise<string> {
     const result = await this.inner.translate(text);
     return injectMat(result, this.probability, this.stretchProbability);
+  }
+}
+
+/**
+ * InterjectTranslator — wraps any Translator and randomly injects Russian
+ * primary interjections (межметия) at natural pause points.
+ *
+ * Lighter than mat — surprise, wonder, regret, relief.
+ * Composes naturally on top of MatTranslator:
+ *   MyMemoryTranslator → MatTranslator → InterjectTranslator
+ *
+ * @param inner       Translator to delegate to first.
+ * @param probability 0–1 injection probability per opportunity (default 0.25).
+ */
+export class InterjectTranslator implements Translator {
+  constructor(
+    private readonly inner: Translator,
+    public probability: number = 0.25,
+  ) {}
+
+  async translate(text: string): Promise<string> {
+    const result = await this.inner.translate(text);
+    return injectInterject(result, this.probability);
   }
 }
