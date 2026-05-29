@@ -1,134 +1,88 @@
 /**
- * Tuning iterations — SmoothingOptions A/B comparison.
+ * Tuning iterations — variants on the natural-dry baseline.
  *
- * Each config targets a different audio theory hypothesis.
- * Run with FONI_PLAY=1 and rate each 1-5.
+ * Baseline (DEFAULT_SMOOTHING): pad + fade + highpass(80Hz) + compression(1.5:1) + loudnorm.
+ * Everything else off — RVC carries the voice character.
  *
- *   FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 npx vitest run tuning.e2e -t "1\."
- *   FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 npx vitest run tuning.e2e
+ * Each variant adds exactly ONE thing on top of the baseline.
+ * Goal: find what improves over natural-dry without over-processing.
+ *
+ *   npm run listen:1   # baseline (natural-dry)
+ *   npm run listen:2   # + tiny room reverb
+ *   npm run listen:3   # + air (high shelf 8kHz)
+ *   npm run listen:4   # + presence (2.5kHz boost)
+ *   npm run listen:5   # + de-harsh (3.5kHz cut)
+ *   npm run listen:6   # + punchier compression
+ *   npm run listen:all # all 6 in sequence
  */
 
 import { describe, it, beforeAll } from "vitest";
-import { EspeakBackend }    from "./backends/espeak.ts";
+import { EspeakBackend }      from "./backends/espeak.ts";
 import { RVCProcessor, SmoothingProcessor, DEFAULT_SMOOTHING } from "./pipeline/processors.ts";
-import type { SmoothingOptions }                               from "./pipeline/processors.ts";
-import { SystemPlayer }     from "./pipeline/player.ts";
-import { SpeakFacade }      from "./pipeline/speak-facade.ts";
+import type { SmoothingOptions }    from "./pipeline/processors.ts";
+import { SystemPlayer }       from "./pipeline/player.ts";
+import { SpeakFacade }        from "./pipeline/speak-facade.ts";
 import { IdentityTranslator } from "./pipeline/translators.ts";
 
 const RVC_URL = process.env.RVC_URL ?? "http://127.0.0.1:5050";
 const PLAY    = process.env.FONI_PLAY === "1";
 
-// ─── Test phrase ─────────────────────────────────────────────────────────────
-// Good for hearing: consonants (ч, к, б, т), vowels, phrase rhythm
 const PHRASE = "Ну-ка, чики-брики и в дамке! Понял, брателло?";
 
-// ─── Config presets ───────────────────────────────────────────────────────────
+// ─── Variants ─────────────────────────────────────────────────────────────────
+//
+// DEFAULT_SMOOTHING is the natural-dry baseline.
+// Each variant overrides exactly one group of fields.
 
 const CONFIGS: Array<{ name: string; label: string; opts: Partial<SmoothingOptions> }> = [
   {
     name:  "1. baseline",
-    label: "Current defaults — the starting point",
-    opts:  {},  // DEFAULT_SMOOTHING as-is
+    label: "Natural-dry — pad + fade + highpass + compression 1.5:1 + loudnorm. Everything else off.",
+    opts:  {},
   },
   {
-    name:  "2. de-mud",
-    label: "Cut 300Hz mud (not 900Hz), kill warmth boost, add 2.5kHz presence — fixes 'potato mouth'",
+    name:  "2. +reverb",
+    label: "Baseline + tiny room (8ms / 4% decay) — just enough to feel less 'in a box'",
     opts: {
-      warmthBoostDb:         0,      // OFF — warmth boost was creating mud
-      deBoxFreq:             300,    // real mud frequency (200-500Hz range)
-      deBoxDb:               -4,     // cut harder
-      deBoxBandwidthOctaves: 1.0,    // surgical
-      deHarshFreq:           3500,
-      deHarshDb:             0,      // stop cutting presence — we need it
-      eqFreq:                2500,   // boost consonant clarity instead
-      eqGain:                2,      // +2dB presence boost
-      eqBandwidthOctaves:    2,
-      highpassFreq:          100,    // higher cutoff to clear more mud
+      reverbMs:         8,
+      reverbDecay:      0.04,
+      reverbInputGain:  0.8,
+      reverbOutputGain: 0.88,
     },
   },
   {
-    name:  "3. consonant-forward",
-    label: "No warmth, no deHarsh, strong presence boost, light compression — maximise consonant clarity",
+    name:  "3. +air",
+    label: "Baseline + high shelf +1.5dB at 8kHz — adds sparkle and breath above RVC",
     opts: {
-      warmthBoostDb:         0,      // no mud
-      airBoostDb:            2.0,    // more air/sparkle
-      deBoxFreq:             400,    // cut boxy buildup
-      deBoxDb:               -3,
-      deHarshDb:             0,      // don't cut presence
-      eqFreq:                3000,   // boost intelligibility zone
-      eqGain:                3,      // strong presence boost
-      compressionRatio:      2,      // lighter — let transients through
-      compressionAttackMs:   30,     // slower attack = more consonant punch
-      compressionReleaseMs:  100,    // faster release = snappier
-      highpassFreq:          120,    // clear the mud floor
-      phaserDepth:           0,      // no phaser
-      reverbMs:              8,      // shorter reverb
+      airBoostDb: 1.5,
+      airFreq:    8000,
     },
   },
   {
-    name:  "4. broadcast",
-    label: "Radio announcer EQ — tight low cut, surgical mud cut, strong presence, no exciter",
+    name:  "4. +presence",
+    label: "Baseline + peaking +2dB at 2.5kHz — boosts consonant clarity and intelligibility",
     opts: {
-      highpassFreq:          130,    // broadcast standard low cut
-      deBoxFreq:             350,    // broadcast 'proximity effect' cut
-      deBoxDb:               -3,
-      deBoxBandwidthOctaves: 1.0,
-      warmthBoostDb:         0,      // no warmth
-      eqFreq:                2000,   // broadcast presence zone
-      eqGain:                2.5,
-      deHarshFreq:           5000,   // cut sibilance instead of presence
-      deHarshDb:             -1.5,
-      airBoostDb:            1.5,
-      compressionRatio:      2,      // broadcast 2:1
-      compressionAttackMs:   10,     // fast — tight control
-      compressionReleaseMs:  200,
-      saturationDrive:       1.5,    // lighter exciter
-      phaserDepth:           0,
-      reverbMs:              10,
-      reverbDecay:           0.05,
+      deHarshFreq: 2500,
+      deHarshDb:   2,
+      deHarshBandwidthOctaves: 2,
     },
   },
   {
-    name:  "5. natural-dry",
-    label: "Minimal processing — fade, highpass, light compression, loudnorm. Hear RVC raw.",
+    name:  "5. +de-harsh",
+    label: "Baseline + peaking -2dB at 3.5kHz — cuts any residual espeak metallic edge",
     opts: {
-      highpassFreq:          80,
-      warmthBoostDb:         0,
-      airBoostDb:            0,
-      deBoxDb:               0,
-      deHarshDb:             0,
-      eqGain:                0,
-      compressionRatio:      1.5,    // barely touching dynamics
-      compressionAttackMs:   50,
-      saturationDrive:       0,      // no exciter
-      saturationAmount:      0,
-      phaserDepth:           0,
-      reverbMs:              0,      // completely dry
-      normalize:             true,
+      deHarshFreq: 3500,
+      deHarshDb:   -2,
+      deHarshBandwidthOctaves: 2,
     },
   },
   {
-    name:  "6. air-forward",
-    label: "Light warmth, big air boost, gentle compression, exciter focused on consonant range",
+    name:  "6. +punch",
+    label: "Baseline + faster compression (2:1, 20ms attack) — tighter, punchier dynamics",
     opts: {
-      highpassFreq:          100,
-      deBoxFreq:             300,
-      deBoxDb:               -2,
-      warmthBoostDb:         1.0,    // subtle warmth only
-      warmthFreq:            150,    // deeper, less boxy
-      airBoostDb:            2.5,    // strong air
-      airFreq:               7000,   // above sibilance
-      deHarshDb:             0,
-      eqFreq:                2500,   // presence
-      eqGain:                1.5,
-      compressionRatio:      2,
-      compressionAttackMs:   25,
-      saturationDrive:       2.0,
-      saturationFreq:        4000,   // excite lower — more consonant crunch
-      phaserDepth:           0.15,
-      reverbMs:              12,
-      reverbDecay:           0.06,
+      compressionRatio:    2,
+      compressionAttackMs: 20,
+      compressionMakeupDb: 1,
     },
   },
 ];
@@ -137,7 +91,7 @@ const CONFIGS: Array<{ name: string; label: string; opts: Partial<SmoothingOptio
 
 class NullPlayer {
   detected() { return "null" as const; }
-  async play(_: Buffer) {}
+  async play(_buf: Buffer): Promise<void> {}
 }
 
 async function isRvcReachable(): Promise<boolean> {
@@ -157,7 +111,7 @@ function buildFacade(opts: Partial<SmoothingOptions>): SpeakFacade {
   );
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+// ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("Tuning iterations — rate each 1–5", () => {
   let skip = false;

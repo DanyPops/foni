@@ -201,6 +201,9 @@ export interface SmoothingOptions {
   normalize: boolean;
 }
 
+// Natural-dry: trust RVC to carry the voice character.
+// Minimal processing — pad, fade, highpass, light compression, loudnorm.
+// Everything else off. Chosen as the best-sounding baseline after A/B testing.
 export const DEFAULT_SMOOTHING: SmoothingOptions = {
   // Edge handling
   padSecs:  0.3,
@@ -209,35 +212,35 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   // Mud removal
   highpassFreq: 80,
 
-  // Corrective EQ
+  // Corrective EQ — off (RVC handles character)
   deBoxFreq:             900,
-  deBoxDb:               -2,
+  deBoxDb:               0,
   deBoxBandwidthOctaves: 1.5,
   deHarshFreq:             3500,
-  deHarshDb:               -2,
+  deHarshDb:               0,
   deHarshBandwidthOctaves: 2,
 
-  // Dynamics
-  compressionRatio:       3,
-  compressionAttackMs:    20,
+  // Dynamics — barely touching
+  compressionRatio:       1.5,
+  compressionAttackMs:    50,
   compressionReleaseMs:   150,
   compressionThresholdDb: -18,
-  compressionMakeupDb:    2,
+  compressionMakeupDb:    0,
 
-  // Creative EQ
-  warmthBoostDb: 2.5,
+  // Creative EQ — off
+  warmthBoostDb: 0,
   warmthFreq:    200,
-  airBoostDb:    1.0,
+  airBoostDb:    0,
   airFreq:       8000,
 
-  // Harmonic saturation
-  saturationDrive:  3.0,
-  saturationAmount: 1.0,
+  // Harmonic saturation — off
+  saturationDrive:  0,
+  saturationAmount: 0,
   saturationFreq:   6000,
 
-  // Spatial depth
-  phaserDepth:      0.2,
-  reverbMs:         15,
+  // Spatial depth — off
+  phaserDepth:      0,
+  reverbMs:         0,
   reverbDecay:      0.08,
   reverbInputGain:  0.8,
   reverbOutputGain: 0.88,
