@@ -1,7 +1,7 @@
 import { spawnSync }   from "node:child_process";
 import type { AudioProcessor } from "./interfaces.ts";
 import { getLogger }   from "../core/logger.ts";
-import { rms, parseWav } from "./audio-utils.ts";
+import { rms, peak, parseWav } from "./audio-utils.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -280,12 +280,15 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   deHarshDb:               -2,
   deHarshBandwidthOctaves: 2,
 
-  // Dynamics — punchy
-  compressionRatio:       2,
-  compressionAttackMs:    20,
-  compressionReleaseMs:   150,
-  compressionThresholdDb: -18,
-  compressionMakeupDb:    1,
+  // Dynamics — compress crest factor to ~12 dB before loudnorm (FON-TSK-50)
+  // Pre-analysis: RVC output has ~17 dB crest factor at -21 dBFS RMS.
+  // Loudnorm at -14 LUFS boosts by ~7 dB → peaks hit +3 dBFS → limiter undoes normalisation.
+  // Fix: compress peaks down first so loudnorm can boost cleanly without limiter interference.
+  compressionRatio:       3,
+  compressionAttackMs:    10,
+  compressionReleaseMs:   80,
+  compressionThresholdDb: -12,
+  compressionMakeupDb:    4,
 
   // Creative EQ
   warmthBoostDb: 0,
@@ -293,10 +296,11 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   airBoostDb:    0,
   airFreq:       8000,
 
-  // Harmonic saturation — aexciter valid range: 2000–12000 Hz
-  // 2kHz = lowest valid value; warm character without high harshness
-  saturationDrive:  1.5,
-  saturationAmount: 1.0,
+  // Harmonic saturation — DISABLED: aexciter was silently invalid at 1200 Hz in round 5
+  // (aexciter requires freq 2000–12000 Hz). The round-5 winner ran WITHOUT this filter.
+  // At 2000 Hz it floods the presence band and worsens spectral tilt. Off by default.
+  saturationDrive:  0,
+  saturationAmount: 0,
   saturationFreq:   2000,
 
   // Spatial depth — shorter/subtler than round 3
@@ -307,17 +311,17 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   reverbOutputGain: 0.88,
 
   // De-robotisation — round 5 all-derobot stack baked in
-  // FON-TSK-51: tilt increased toward STALKER baseline (target 40 dB vs our 22–32 dB)
-  // FON-TSK-52: breathiness nudged quieter so silenceTrimDb doesn’t preserve noise
+  // FON-TSK-51: tilt pushed further — target 40 dB, prev tilt 5/-4 gave 25-30 dB
   breathinessDb: -48,
-  tiltLowDb:     5,
-  tiltHighDb:    -4,
+  tiltLowDb:     8,
+  tiltHighDb:    -6,
   presenceDb:    1.5,
   deEssDb:       4,
 
-  // Pitch micro-variation — off by default (round 6)
-  vibratoFreq:  0,
-  vibratoDepth: 0,
+  // Pitch micro-variation — vibrato-subtle from round 6 (6Hz/0.003)
+  // Adds ~30 Hz F0 stdDev variation to close the 22% F0 gap (FON-TSK-53)
+  vibratoFreq:  6,
+  vibratoDepth: 0.003,
 
   // Output normalisation — FON-TSK-48/49/50
   // Target −14 LUFS ≈ −12 to −13 dBFS RMS (matches STALKER baseline −12.6 dBFS)
@@ -602,10 +606,13 @@ export class SmoothingProcessor implements AudioProcessor {
       parts.push(`loudnorm=I=${lufs}:TP=-1:LRA=11:linear=true`);
     }
 
-    // 11. Hard limiter — tames residual peaks after loudnorm (FON-TSK-50)
+    // 11. Hard clip via volume ceiling — alimiter is broken in ffmpeg 7.1.4 (confirmed by tests):
+    //   it behaves as a normalizer not a limiter. Replaced with a simple hard clip.
+    //   loudnorm TP=-1:linear=true already handles most cases; this is belt-and-suspenders.
     if (limiterDb < 0) {
-      const limit = dbToLinear(limiterDb).toFixed(6);
-      parts.push(`alimiter=limit=${limit}:attack=5:release=50:level_in=1:level_out=1`);
+      // volume filter followed by hard clip via aeval
+      const ceiling = dbToLinear(limiterDb);
+      parts.push(`aeval=min(${ceiling.toFixed(6)}\\,max(-${ceiling.toFixed(6)}\\,val(0))):c=same`);
     }
 
     // Guard: ffmpeg rejects an empty -af string. Return identity filter instead.
@@ -615,28 +622,32 @@ export class SmoothingProcessor implements AudioProcessor {
   async process(input: Buffer): Promise<Buffer> {
     const log = getLogger();
 
-    const toDb = (buf: Buffer): string => {
+    const stageInfo = (label: string, buf: Buffer): void => {
       try {
         const { samples } = parseWav(buf);
         const r = rms(samples);
-        return r > 0 ? `${(20 * Math.log10(r)).toFixed(1)} dBFS` : "-∞ dBFS";
-      } catch { return "?? dBFS"; }
+        const p = peak(samples);
+        const rDb = r > 0 ? (20 * Math.log10(r)).toFixed(1) : "-∞";
+        const pDb = p > 0 ? (20 * Math.log10(p)).toFixed(1) : "-∞";
+        const crest = (isFinite(+rDb) && isFinite(+pDb))
+          ? (+pDb - +rDb).toFixed(1) : "?";
+        log.info("SmoothingProcessor", label,
+          { rms: `${rDb} dBFS`, peak: `${pDb} dBFS`, crest: `${crest} dB` });
+      } catch (e) {
+        log.warn("SmoothingProcessor", `${label} parse failed`, { error: String(e) });
+      }
     };
 
-    log.debug("SmoothingProcessor", "process start", { inputRms: toDb(input) });
+    stageInfo("input",    input);
 
-    const preFilter = this.buildPreFilter();
-    const padded    = ffmpegFilter(input, preFilter);
-    log.debug("SmoothingProcessor", "post-pad", { rms: toDb(padded) });
+    const padded = ffmpegFilter(input, this.buildPreFilter());
+    stageInfo("post-pad", padded);
 
     const rvcOut = await this.inner.process(padded);
-    log.info("SmoothingProcessor", "post-RVC",
-      { inputRms: toDb(padded), outputRms: toDb(rvcOut) });
+    stageInfo("post-RVC", rvcOut);
 
-    const postFilter = this.buildPostFilter();
-    const final      = ffmpegFilter(rvcOut, postFilter);
-    log.info("SmoothingProcessor", "post-filter",
-      { rvcRms: toDb(rvcOut), finalRms: toDb(final) });
+    const final = ffmpegFilter(rvcOut, this.buildPostFilter());
+    stageInfo("post-filter", final);
 
     return final;
   }
