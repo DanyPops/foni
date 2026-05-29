@@ -59,7 +59,8 @@ const config = {
   backendPref: "espeak" as "auto" | "silero" | "kokoro" | "fakeyou" | "espeak" | "say",
   voice:       "en_0",
   speed:       1.15,                           // slightly faster than flat neutral
-  lang:        "ru" as "en" | "ru",           // Russian
+  inputLang:   "en" as "en" | "ru",           // what Claude writes — English
+  outputLang:  "ru" as "en" | "ru",           // what espeak speaks — Russian
 
   // ── Backend URLs ────────────────────────────────────────────────────────
   sileroUrl:    "http://localhost:8001",
