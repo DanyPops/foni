@@ -31,6 +31,12 @@ export interface FoniConfig {
   rvcEnabled: boolean;
   rvcUrl:     string;
   rvcModel:   string;
+
+  // Prosody — SSML break/rate/pitch annotation (FON-TSK-58)
+  prosodyEnabled: boolean;
+
+  // Breath injection — splice breath sounds at silence gaps (FON-TSK-59)
+  breathEnabled: boolean;
 }
 
 export const DEFAULT_CONFIG: FoniConfig = {
@@ -56,6 +62,9 @@ export const DEFAULT_CONFIG: FoniConfig = {
   rvcEnabled: true,
   rvcUrl:     "http://localhost:5050",
   rvcModel:   "bandit",
+
+  prosodyEnabled: true,
+  breathEnabled:  true,
 };
 
 // ─── Prewarm phrases ──────────────────────────────────────────────────────────
