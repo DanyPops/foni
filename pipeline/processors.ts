@@ -493,9 +493,11 @@ export class SmoothingProcessor implements AudioProcessor {
     if (silenceTrimDb < 0) {
       const th = dbToLinear(silenceTrimDb).toFixed(6);
       // start_periods=1: only leading edge; stop_periods=-1: trailing edge
+      // stop_periods=1 removes only the TRAILING edge silence.
+      // stop_periods=-1 would strip ALL interior pauses — including SSML breaks.
       parts.push(
         `silenceremove=start_periods=1:start_duration=0.05:start_threshold=${th}` +
-        `:stop_periods=-1:stop_duration=0.1:stop_threshold=${th}:detection=rms`,
+        `:stop_periods=1:stop_duration=0.1:stop_threshold=${th}:detection=rms`,
       );
     }
 

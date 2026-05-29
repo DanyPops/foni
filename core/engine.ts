@@ -27,6 +27,8 @@ import type { EmotionState } from "./emotion.ts";
 import { SpeakFacade }        from "../pipeline/speak-facade.ts";
 import { SystemPlayer }       from "../pipeline/player.ts";
 import { IdentityProcessor, RVCProcessor, SmoothingProcessor } from "../pipeline/processors.ts";
+import { ProsodyBackend } from "../pipeline/prosody.ts";
+import { BreathProcessor } from "../pipeline/breath-injector.ts";
 import {
   PipelineTranslator,
   makeTranslateMiddleware,
@@ -114,12 +116,25 @@ export class FoniEngine {
   }
 
   async buildFacade(): Promise<SpeakFacade | null> {
-    const backend = await this.detectBackend();
+    let backend = await this.detectBackend();
     if (!backend) return null;
+
+    // Prosody annotation — wrap backend with SSML break/rate/pitch (FON-TSK-58)
+    if (this.config.prosodyEnabled && this.config.outputLang === "ru") {
+      backend = new ProsodyBackend(backend);
+    }
+
     const translator = new PipelineTranslator(this.buildPipeline(), this.config.outputLang);
-    const processor  = this.config.rvcEnabled && this.config.rvcModel
-      ? new SmoothingProcessor(new RVCProcessor(this.config.rvcUrl))
-      : new IdentityProcessor();
+
+    // Build processor chain — breath injection wraps the inner chain (FON-TSK-59)
+    let processor: ConstructorParameters<typeof SpeakFacade>[2];
+    if (this.config.rvcEnabled && this.config.rvcModel) {
+      const inner = new SmoothingProcessor(new RVCProcessor(this.config.rvcUrl));
+      processor   = this.config.breathEnabled ? new BreathProcessor(inner) : inner;
+    } else {
+      processor = new IdentityProcessor();
+    }
+
     return new SpeakFacade(translator, backend, processor, this.player, {
       voice: this.config.voice,
       speed: this.config.speed,

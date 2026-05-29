@@ -22,10 +22,16 @@ export class EspeakBackend implements TTSBackend {
   }
 
   async synthesize(text: string, opts: SynthOptions): Promise<Buffer> {
-    const rate = Math.round(ESPEAK_BASE_WPM * opts.speed);
+    const rate    = Math.round(ESPEAK_BASE_WPM * opts.speed);
     const outPath = join(tmpdir(), `foni-espeak-${Date.now()}.wav`);
+    // -m: enable markup (SSML) mode when text contains <speak>
+    const isMarkup = text.trimStart().startsWith("<speak");
+    const args     = ["-s", String(rate), "-v", this.lang];
+    if (isMarkup) args.push("-m");
+    args.push("-w", outPath, text);
+
     await new Promise<void>((resolve, reject) => {
-      const proc = spawn("espeak-ng", ["-s", String(rate), "-v", this.lang, "-w", outPath, text], { stdio: "ignore" });
+      const proc = spawn("espeak-ng", args, { stdio: "ignore" });
       proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`espeak-ng exited ${code}`)));
       proc.on("error", reject);
     });

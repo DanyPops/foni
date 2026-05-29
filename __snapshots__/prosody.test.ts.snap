@@ -1,0 +1,18 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`prosody snapshot — canonical phrases > matches snapshot for 3 BASELINE_PHRASES 1`] = `
+[
+  {
+    "phrase": "Давай, шевелись.",
+    "ssml": "<speak><prosody rate="101%" pitch="46" range="medium">Давай, <break time="150ms"/> <prosody rate="92%">шевелись.</prosody></prosody></speak>",
+  },
+  {
+    "phrase": "Ну что, брат, как дела?",
+    "ssml": "<speak><prosody rate="101%" pitch="55" range="high">Ну что, <break time="150ms"/>брат, <break time="150ms"/> <prosody rate="92%">как дела?</prosody></prosody></speak>",
+  },
+  {
+    "phrase": "Слушай, тут такое дело.",
+    "ssml": "<speak><prosody rate="105%" pitch="45" range="medium">Слушай, <break time="150ms"/> <prosody rate="92%">тут такое дело.</prosody></prosody></speak>",
+  },
+]
+`;
