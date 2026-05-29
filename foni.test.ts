@@ -392,3 +392,98 @@ describe("SpeakFacade audio cache", () => {
     expect(stats).toContain("MB");
   });
 });
+
+// ─── SpeakFacade queue + cancellation ────────────────────────────────────────
+
+describe("SpeakFacade serial play queue", () => {
+  function makeFacade() {
+    const playOrder: string[] = [];
+    const synthOrder: string[] = [];
+
+    const translator = { translate: vi.fn(async (t: string) => t) };
+    const backend = {
+      name: "mock",
+      isAvailable: vi.fn(async () => true),
+      synthesize: vi.fn(async (text: string) => {
+        synthOrder.push(text);
+        return Buffer.from(text);
+      }),
+    };
+    const processor = { process: vi.fn(async (b: Buffer) => b) };
+    const player = {
+      detected: () => "mock" as const,
+      play: vi.fn(async (buf: Buffer) => {
+        playOrder.push(buf.toString());
+      }),
+    };
+    const facade = new SpeakFacade(
+      translator as any, backend as any, processor as any, player as any,
+      { voice: "ru", speed: 1.0 },
+    );
+    return { facade, playOrder, synthOrder, backend, player };
+  }
+
+  it("two concurrent speaks play in call order", async () => {
+    const { facade, playOrder } = makeFacade();
+    // Fire both without awaiting the first
+    const p1 = facade.speak("first");
+    const p2 = facade.speak("second");
+    await Promise.all([p1, p2]);
+    expect(playOrder).toEqual(["first", "second"]);
+  });
+
+  it("three concurrent speaks play in call order", async () => {
+    const { facade, playOrder } = makeFacade();
+    await Promise.all([
+      facade.speak("one"),
+      facade.speak("two"),
+      facade.speak("three"),
+    ]);
+    expect(playOrder).toEqual(["one", "two", "three"]);
+  });
+
+  it("stop() cancels pending speaks — they do not play", async () => {
+    const { facade, player } = makeFacade();
+    // Enqueue three items then stop immediately
+    const p1 = facade.speak("one");
+    const p2 = facade.speak("two");
+    const p3 = facade.speak("three");
+    facade.stop();                        // cancel generation
+    await Promise.all([p1, p2, p3]);
+    // At most the first could have already entered synthesis before stop()
+    expect(player.play).not.toHaveBeenCalledWith(Buffer.from("two"));
+    expect(player.play).not.toHaveBeenCalledWith(Buffer.from("three"));
+  });
+
+  it("speak() after stop() works normally", async () => {
+    const { facade, playOrder } = makeFacade();
+    await facade.speak("before");
+    facade.stop();
+    await facade.speak("after");
+    expect(playOrder).toContain("after");
+  });
+
+  it("play queue recovers after synthesis error", async () => {
+    const { facade, player, backend } = makeFacade();
+    backend.synthesize
+      .mockRejectedValueOnce(new Error("network"))  // first call fails
+      .mockResolvedValue(Buffer.from("ok"));         // subsequent calls work
+    await facade.speak("bad");
+    await facade.speak("good");
+    // First speak errored — not played. Second should still play.
+    expect(player.play).toHaveBeenCalledOnce();
+  });
+
+  it("speak() resolves only after playback completes", async () => {
+    const events: string[] = [];
+    const { facade, player } = makeFacade();
+    player.play.mockImplementation(async (buf: Buffer) => {
+      events.push(`start:${buf.toString()}`);
+      await new Promise(r => setTimeout(r, 10)); // simulate playback time
+      events.push(`end:${buf.toString()}`);
+    });
+    await facade.speak("hello");
+    events.push("resolved");
+    expect(events).toEqual(["start:hello", "end:hello", "resolved"]);
+  });
+});

@@ -3,8 +3,19 @@
  *
  * Composes: Translator → TTSBackend → AudioProcessor → Player
  *
- * Callers interact only with this facade. They never touch individual
- * backends, processors, or the player directly.
+ * Concurrency model — two concerns kept separate:
+ *
+ *   SYNTHESIS  runs in parallel.  Each speak() call kicks off translation +
+ *              synthesis + processing immediately, overlapping with whatever
+ *              is currently playing.  This hides latency: the next phrase is
+ *              ready to play the moment the current one finishes.
+ *
+ *   PLAYBACK   is serialised via a promise chain (playQueue).  Audio chunks
+ *              are played in the order speak() was called, never overlapping.
+ *
+ *   CANCELLATION via generation counter.  stop() increments the counter.
+ *              Any speak() from a previous generation is silently dropped
+ *              from the play queue.
  */
 
 import { createHash } from "node:crypto";
@@ -22,7 +33,7 @@ const AUDIO_CACHE_MAX_BYTES = 64 * 1024 * 1024; // 64 MB
 
 export type Log = (msg: string) => void;
 
-// ─── Audio LRU cache ───────────────────────────────────────────────────────────────
+// ─── Audio LRU cache ──────────────────────────────────────────────────────────
 
 /**
  * In-process LRU cache for synthesised + processed audio buffers.
@@ -32,8 +43,6 @@ export type Log = (msg: string) => void;
  *   • set() evicts from the head (least-recently-used) when over budget
  *
  * Cache key = SHA-1 of (ttsText | backend | voice | speed).
- * Mat/interject mutations are included because they run BEFORE translation
- * output reaches the cache — the cached text is already the mutated form.
  */
 export class AudioLRU {
   private readonly map = new Map<string, Buffer>();
@@ -44,7 +53,6 @@ export class AudioLRU {
   get(key: string): Buffer | undefined {
     const buf = this.map.get(key);
     if (!buf) return undefined;
-    // Promote to tail (most-recently-used)
     this.map.delete(key);
     this.map.set(key, buf);
     return buf;
@@ -57,7 +65,6 @@ export class AudioLRU {
     }
     this.map.set(key, buf);
     this._bytes += buf.length;
-    // Evict from head (least-recently-used) until under limit
     for (const [k, v] of this.map) {
       if (this._bytes <= this.maxBytes) break;
       this.map.delete(k);
@@ -71,28 +78,47 @@ export class AudioLRU {
   get size():  number { return this.map.size; }
 }
 
+// ─── SpeakFacade ──────────────────────────────────────────────────────────────
+
 export class SpeakFacade {
   readonly cache: AudioLRU;
 
+  /**
+   * Serial playback queue.  Each speak() appends to this chain so audio
+   * plays in call order regardless of how many speaks are in-flight.
+   */
+  private playQueue: Promise<void> = Promise.resolve();
+
+  /**
+   * Generation counter for cancellation.
+   * stop() increments it; any speak() carrying an older generation is dropped.
+   */
+  private generation = 0;
+
   constructor(
     private translator: Translator,
-    private backend: TTSBackend,
-    private processor: AudioProcessor,
-    private player: Player,
-    private opts: SynthOptions,
-    cache?: AudioLRU,
+    private backend:    TTSBackend,
+    private processor:  AudioProcessor,
+    private player:     Player,
+    private opts:       SynthOptions,
+    cache?:             AudioLRU,
   ) {
     this.cache = cache ?? new AudioLRU();
   }
 
   get backendName(): string { return this.backend.name; }
 
-  swapTranslator(t: Translator): void { this.translator = t; }
-  swapBackend(b: TTSBackend): void    { this.backend = b; }
-  swapProcessor(p: AudioProcessor): void { this.processor = p; }
+  swapTranslator(t: Translator): void     { this.translator = t; }
+  swapBackend(b: TTSBackend): void        { this.backend    = b; }
+  swapProcessor(p: AudioProcessor): void  { this.processor  = p; }
   setOpts(opts: Partial<SynthOptions>): void { this.opts = { ...this.opts, ...opts }; }
 
-  /** Stats string for status bar / /tts status. */
+  /** Cancel all pending and in-progress speech. */
+  stop(): void {
+    this.generation++;
+  }
+
+  /** Human-readable cache stats for /tts status. */
   cacheStats(): string {
     const mb = (this.cache.bytes / 1024 / 1024).toFixed(1);
     return `${this.cache.size} entries / ${mb}MB`;
@@ -104,42 +130,87 @@ export class SpeakFacade {
       .digest("hex");
   }
 
+  /**
+   * Synthesise and enqueue audio for playback.
+   *
+   * Returns a Promise that resolves when THIS phrase has finished playing
+   * (or been cancelled).  Callers may fire-and-forget or await — the play
+   * queue is correct either way.
+   */
   async speak(rawText: string, log?: Log): Promise<void> {
     const emit = log ?? ((_m: string) => {});
+    const gen  = this.generation;
 
     const clean = stripMarkdown(rawText).trim();
-    if (clean.length < MIN_SPEAKABLE_LENGTH) { emit("skipped: text too short after stripping"); return; }
-
-    const text = await this.translator.translate(clean);
-    const key  = this.buildCacheKey(text);
-
-    // ─ Cache hit: skip synthesis + processing entirely ────────────────────
-    const hit = this.cache.get(key);
-    if (hit) {
-      const mb = (this.cache.bytes / 1024 / 1024).toFixed(1);
-      emit(`cache hit — ${hit.length} bytes (${this.cache.size} entries, ${mb}MB used)`);
-      await this.player.play(hit);
+    if (clean.length < MIN_SPEAKABLE_LENGTH) {
+      emit("skipped: text too short after stripping");
       return;
     }
 
-    // ─ Cache miss: full pipeline ───────────────────────────────────
-    emit(`backend=${this.backend.name} text="${text.slice(0, LOG_PREVIEW_CHARS)}…"`);
+    // ── Synthesis fires immediately (parallel with current playback) ─────────
+    //
+    // While phrase N is playing, phrase N+1 is already being translated,
+    // synthesised, and processed.  By the time the player is free, the
+    // buffer is (usually) ready — zero additional wait.
+    const audioPromise: Promise<Buffer | null> = (async () => {
+      try {
+        const text = await this.translator.translate(clean);
+        if (this.generation !== gen) return null;
 
-    try {
-      const audio = await this.backend.synthesize(text, this.opts);
-      emit(`synthesized ${audio.length} bytes`);
+        emit(`backend=${this.backend.name} text="${text.slice(0, LOG_PREVIEW_CHARS)}…"`);
 
-      const processed = await this.processor.process(audio);
-      if (processed !== audio) emit(`processed via ${this.processor.constructor.name}`);
+        const key = this.buildCacheKey(text);
+        const hit = this.cache.get(key);
+        if (hit) {
+          const mb = (this.cache.bytes / 1024 / 1024).toFixed(1);
+          emit(`cache hit — ${hit.length} bytes (${this.cache.size} entries, ${mb}MB)`);
+          return hit;
+        }
 
-      this.cache.set(key, processed);
-      const mb = (this.cache.bytes / 1024 / 1024).toFixed(1);
-      emit(`cached — ${this.cache.size} entries, ${mb}MB`);
+        const audio = await this.backend.synthesize(text, this.opts);
+        if (this.generation !== gen) return null;
+        emit(`synthesized ${audio.length} bytes`);
 
-      await this.player.play(processed);
-      emit(`played ${processed.length} bytes`);
-    } catch (e: any) {
-      emit(`ERROR: ${e?.message}`);
-    }
+        const processed = await this.processor.process(audio);
+        if (this.generation !== gen) return null;
+        if (processed !== audio) emit(`processed via ${this.processor.constructor.name}`);
+
+        this.cache.set(key, processed);
+        const mb = (this.cache.bytes / 1024 / 1024).toFixed(1);
+        emit(`cached — ${this.cache.size} entries, ${mb}MB`);
+
+        return processed;
+      } catch (e: any) {
+        emit(`ERROR (synthesis): ${e?.message}`);
+        return null;
+      }
+    })();
+
+    // ── Playback is serialised ────────────────────────────────────────────────
+    //
+    // We append to the play queue so this phrase plays only after the
+    // previous one finishes, regardless of when synthesis completes.
+    let resolve!: () => void;
+    const played = new Promise<void>(r => { resolve = r; });
+
+    this.playQueue = this.playQueue
+      .then(async () => {
+        if (this.generation !== gen) { resolve(); return; }
+
+        const audio = await audioPromise;
+        if (!audio || this.generation !== gen) { resolve(); return; }
+
+        try {
+          await this.player.play(audio);
+          emit(`played ${audio.length} bytes`);
+        } catch (e: any) {
+          emit(`ERROR (playback): ${e?.message}`);
+        } finally {
+          resolve();
+        }
+      })
+      .catch(() => { resolve(); }); // never break the chain
+
+    return played;
   }
 }
