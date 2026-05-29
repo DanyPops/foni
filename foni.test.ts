@@ -1,5 +1,6 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { AudioLRU, SpeakFacade } from "./pipeline/speak-facade.ts";
 import {
   stripMarkdown,
   drainChunks,
@@ -252,5 +253,142 @@ describe("convertWithRVC via fetch mock", () => {
     const input = Buffer.from("test");
     const result = await proc.process(input);
     expect(result.equals(input)).toBe(true);
+  });
+});
+
+
+// ─── AudioLRU ─────────────────────────────────────────────────────────────────
+
+describe("AudioLRU", () => {
+  it("returns undefined on miss", () => {
+    const lru = new AudioLRU(1024);
+    expect(lru.get("nope")).toBeUndefined();
+  });
+
+  it("returns stored buffer on hit", () => {
+    const lru = new AudioLRU(1024);
+    const buf = Buffer.from("audio");
+    lru.set("k", buf);
+    expect(lru.get("k")).toBe(buf);
+  });
+
+  it("tracks byte size correctly", () => {
+    const lru = new AudioLRU(1024);
+    lru.set("a", Buffer.alloc(100));
+    lru.set("b", Buffer.alloc(200));
+    expect(lru.bytes).toBe(300);
+    expect(lru.size).toBe(2);
+  });
+
+  it("evicts LRU entry when over budget", () => {
+    const lru = new AudioLRU(300);
+    lru.set("a", Buffer.alloc(100));
+    lru.set("b", Buffer.alloc(100));
+    lru.set("c", Buffer.alloc(100));
+    expect(lru.size).toBe(3);
+    lru.set("d", Buffer.alloc(100));      // evicts "a" (LRU)
+    expect(lru.get("a")).toBeUndefined();
+    expect(lru.get("b")).toBeDefined();
+    expect(lru.size).toBe(3);
+    expect(lru.bytes).toBeLessThanOrEqual(300);
+  });
+
+  it("get() promotes entry — protected from next eviction", () => {
+    const lru = new AudioLRU(200);
+    lru.set("a", Buffer.alloc(100));
+    lru.set("b", Buffer.alloc(100));
+    lru.get("a");                         // promote "a" to MRU
+    lru.set("c", Buffer.alloc(100));      // evicts LRU — now "b"
+    expect(lru.get("a")).toBeDefined();
+    expect(lru.get("b")).toBeUndefined();
+  });
+
+  it("overwriting a key updates size correctly", () => {
+    const lru = new AudioLRU(1024);
+    lru.set("k", Buffer.alloc(100));
+    lru.set("k", Buffer.alloc(50));
+    expect(lru.bytes).toBe(50);
+    expect(lru.size).toBe(1);
+  });
+
+  it("clear() resets everything", () => {
+    const lru = new AudioLRU(1024);
+    lru.set("a", Buffer.alloc(100));
+    lru.clear();
+    expect(lru.size).toBe(0);
+    expect(lru.bytes).toBe(0);
+    expect(lru.get("a")).toBeUndefined();
+  });
+});
+
+// ─── SpeakFacade audio cache ──────────────────────────────────────────────────
+
+describe("SpeakFacade audio cache", () => {
+  function makeFacade(cache?: AudioLRU) {
+    const translator = { translate: vi.fn(async (t: string) => t) };
+    const backend    = {
+      name:        "mock",
+      synthesize:  vi.fn(async () => Buffer.from("audio-bytes")),
+      isAvailable: vi.fn(async () => true),
+    };
+    const processor  = { process: vi.fn(async (b: Buffer) => b) };
+    const playerPlays: Buffer[] = [];
+    const player     = {
+      detected: () => "mock" as const,
+      play:     vi.fn(async (b: Buffer) => { playerPlays.push(b); }),
+    };
+    const facade = new SpeakFacade(
+      translator as any, backend as any, processor as any, player as any,
+      { voice: "ru", speed: 1.0 },
+      cache,
+    );
+    return { facade, translator, backend, processor, player, playerPlays };
+  }
+
+  it("first call synthesises and stores in cache", async () => {
+    const { facade, backend } = makeFacade();
+    await facade.speak("Привет");
+    expect(backend.synthesize).toHaveBeenCalledOnce();
+    expect(facade.cache.size).toBe(1);
+  });
+
+  it("second identical call is a cache hit — backend not called again", async () => {
+    const { facade, backend, playerPlays } = makeFacade();
+    await facade.speak("Привет");
+    await facade.speak("Привет");
+    expect(backend.synthesize).toHaveBeenCalledOnce();
+    expect(playerPlays).toHaveLength(2);
+  });
+
+  it("different text produces a cache miss", async () => {
+    const { facade, backend } = makeFacade();
+    await facade.speak("Привет");
+    await facade.speak("Пока");
+    expect(backend.synthesize).toHaveBeenCalledTimes(2);
+  });
+
+  it("cache clear causes re-synthesis on next call", async () => {
+    const { facade, backend } = makeFacade();
+    await facade.speak("Привет");
+    facade.cache.clear();
+    await facade.speak("Привет");
+    expect(backend.synthesize).toHaveBeenCalledTimes(2);
+  });
+
+  it("shared cache across two facades avoids double synthesis", async () => {
+    const shared = new AudioLRU();
+    const { facade: f1 } = makeFacade(shared);
+    const { facade: f2, backend: b2 } = makeFacade(shared);
+    await f1.speak("Привет");
+    await f2.speak("Привет");
+    expect(b2.synthesize).not.toHaveBeenCalled();
+  });
+
+  it("cacheStats() reflects current state", async () => {
+    const { facade } = makeFacade();
+    await facade.speak("Привет");
+    const stats = facade.cacheStats();
+    expect(stats).toContain("1 entries");
+    expect(stats).toContain("MB");
   });
 });

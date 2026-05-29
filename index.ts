@@ -297,7 +297,25 @@ export default async function (pi: ExtensionAPI) {
           off("silero",   config.sileroUrl),
           off("kokoro",   config.kokoroUrl),
           config.fakeyouToken ? on("fakeyou", config.fakeyouToken) : off("fakeyou", "no token"),
+          "",
+          on("audio cache", facade ? facade.cacheStats() : "not built"),
         ].join("\n"), "info");
+        return;
+      }
+
+      // ── cache ──────────────────────────────────────────────────────────────────
+      if (sub === "cache") {
+        if (parts[1] === "clear") {
+          facade?.cache.clear();
+          ctx.ui.notify("Аудио кэш очищен", "info");
+        } else {
+          ctx.ui.notify(
+            facade
+              ? `Audio cache: ${facade.cacheStats()}\nUsage: /tts cache clear`
+              : "Cache: facade not built",
+            "info",
+          );
+        }
         return;
       }
 
