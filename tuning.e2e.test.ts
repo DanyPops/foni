@@ -1,23 +1,21 @@
 /**
- * Tuning round 5 — de-robotisation.
+ * Tuning round 6 — pitch naturalness & body.
  *
- * Research finding: RVC espeak output sounds robotic because:
- *   1. Missing jitter/shimmer (too perfect) → breathiness noise injection
- *   2. Wrong spectral tilt (too flat, too bright) → tilt EQ
- *   3. Metallic sibilant artifacts (S/SH) → de-esser at 7kHz
- *   4. Missing presence (2.5kHz) → presence EQ
- *   5. Exciter at 5kHz adds harshness → move to 1.2kHz for warmth
+ * Baseline: round 5 winner (all-derobot) baked into DEFAULT_SMOOTHING.
+ * Remaining roboticness sources:
+ *   1. Mechanical pitch — espeak F0 is stepped/discrete → vibrato micro-variation
+ *   2. Missing body/chest resonance — warmth EQ at 180Hz
+ *   3. Missing air — high shelf at 10kHz
+ *   4. Dynamics too flat — reduce compression 2:1 → 1.5:1
+ *   5. Stack all together
  *
- * Baseline: round 3 winner (v3 defaults) unchanged.
- * Each variant isolates ONE de-robotisation lever, then all-derobot stacks them.
- *
- *   npm run listen 1   # baseline (round 3 winner — v3 defaults)
- *   npm run listen 2   # breathiness: −45dB noise floor
- *   npm run listen 3   # tilt: +2dB@100Hz / −2dB@8kHz
- *   npm run listen 4   # de-ess: −4dB@7kHz sibilant cut
- *   npm run listen 5   # presence: +1.5dB@2.5kHz
- *   npm run listen 6   # exciter-warm: move 5kHz→1.2kHz
- *   npm run listen 7   # all-derobot: full stack + shorter reverb/phaser
+ *   npm run listen 1   # baseline-r5 (DEFAULT_SMOOTHING — all-derobot)
+ *   npm run listen 2   # vibrato-subtle: 6Hz / depth=0.003
+ *   npm run listen 3   # vibrato-medium: 5Hz / depth=0.006
+ *   npm run listen 4   # warmth: +2.5dB@180Hz low shelf
+ *   npm run listen 5   # air: +1.5dB@10kHz high shelf
+ *   npm run listen 6   # compress-light: ratio 2→1.5
+ *   npm run listen 7   # all-r6: vibrato + warmth + air + lighter compression
  */
 
 import { describe, it, beforeAll } from "vitest";
@@ -37,20 +35,17 @@ const PHRASE = "Ну-ка, чики-брики и в дамке! Понял, б�
 // name  = “${index+1}. ${slug}”
 // label = describeSmoothingDiff(opts)
 const SLUGS: Array<{ slug: string; opts: Partial<SmoothingOptions> }> = [
-  { slug: "baseline-r3",  opts: {} },
-  { slug: "breathiness",  opts: { breathinessDb: -45 } },
-  { slug: "tilt",         opts: { tiltLowDb: 2, tiltHighDb: -2 } },
-  { slug: "deess",        opts: { deEssDb: 4 } },
-  { slug: "presence",     opts: { presenceDb: 1.5 } },
-  { slug: "exciter-warm", opts: { saturationFreq: 1200 } },
-  { slug: "all-derobot",  opts: {
-    breathinessDb: -45,
-    tiltLowDb: 2, tiltHighDb: -2,
-    deEssDb: 4,
-    presenceDb: 1.5,
-    saturationFreq: 1200,
-    reverbMs: 8, reverbDecay: 0.04,
-    phaserDepth: 0.08,
+  { slug: "baseline-r5",     opts: {} },
+  { slug: "vibrato-subtle",  opts: { vibratoFreq: 6, vibratoDepth: 0.003 } },
+  { slug: "vibrato-medium",  opts: { vibratoFreq: 5, vibratoDepth: 0.006 } },
+  { slug: "warmth",          opts: { warmthBoostDb: 2.5, warmthFreq: 180 } },
+  { slug: "air",             opts: { airBoostDb: 1.5, airFreq: 10000 } },
+  { slug: "compress-light",  opts: { compressionRatio: 1.5 } },
+  { slug: "all-r6",          opts: {
+    vibratoFreq: 6, vibratoDepth: 0.003,
+    warmthBoostDb: 2, warmthFreq: 180,
+    airBoostDb: 1, airFreq: 10000,
+    compressionRatio: 1.5,
   }},
 ];
 

@@ -53,25 +53,26 @@ function bar(score: number, width = 12): string {
 }
 
 function printTable(ranked: Array<{ name: string; label: string; result: ValidationResult }>) {
-  console.log("\n╔══ Tuning Validator — Round 5 ══════════════════════════════════════════╗");
-  console.log("║  #  Name               Score        tilt   crest  pres   hfR   rms   ║");
-  console.log("╠════════════════════════════════════════════════════════════════════════╣");
+  console.log("\n╔══ Tuning Validator — Round 5 ═══════════════════════════════════════════════╗");
+  console.log("║  #  Name               Score        tilt   crest  pres   hfR  noise   rms  ║");
+  console.log("╠══════════════════════════════════════════════════════════════════════════════╣");
   for (const [i, { name, result: r }] of ranked.entries()) {
     const a = r.analysis;
     console.log(
       `║  ${String(i + 1).padStart(1)}  ` +
       `${name.padEnd(18).slice(0, 18)}  ` +
       `${bar(r.score)}  ` +
-      `${fmt(a.spectralTilt).padStart(5)}  ` +
+      `${fmt(a.spectralSlope, 1).padStart(5)}  ` +
       `${fmt(a.crestFactor).padStart(5)}  ` +
       `${fmt(a.presenceRatio, 3).padStart(5)}  ` +
       `${fmt(a.hfRatio, 3).padStart(5)}  ` +
+      `${fmt(a.noiseFloorRatio, 3).padStart(5)}  ` +
       `${fmt(a.rmsDb, 1).padStart(5)}  ║`,
     );
   }
-  console.log("╠════════════════════════════════════════════════════════════════════════╣");
-  console.log("║  Ideal:  tilt 20–30  crest 15–20  pres 0.20–0.40  hfR <0.20         ║");
-  console.log("╚════════════════════════════════════════════════════════════════════════╝\n");
+  console.log("╠══════════════════════════════════════════════════════════════════════════════╣");
+  console.log("║  Ideal:  tilt 20–30  crest 15–20  pres 0.20–0.40  hfR <0.20  noise <0.04   ║");
+  console.log("╚══════════════════════════════════════════════════════════════════════════════╝\n");
 }
 
 function printDropped(dropped: Array<{ name: string; reasons: string[] }>) {

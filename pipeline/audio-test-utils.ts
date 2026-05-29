@@ -276,13 +276,17 @@ export function assertBoost(
 //   HF ratio      : 4–8kHz should not exceed 20% of total energy
 
 export interface AudioAnalysis {
-  rmsDb:         number;   // overall level
-  peakDb:        number;   // peak level (clip check)
-  crestFactor:   number;   // peakDb − rmsDb (dynamics)
-  spectralTilt:  number;   // 20*log10(p@200Hz / p@8kHz) — LF advantage dB
-  presenceRatio: number;   // power@2kHz / totalBandPower
-  hfRatio:       number;   // (power@4kHz + power@8kHz) / totalBandPower
-  lfRatio:       number;   // (power@200Hz + power@500Hz) / totalBandPower
+  rmsDb:          number;   // overall level
+  peakDb:         number;   // peak level (clip check)
+  crestFactor:    number;   // peakDb − rmsDb (dynamics)
+  spectralTilt:   number;   // 20*log10(p@200Hz / p@8kHz) — LF advantage dB
+  presenceRatio:  number;   // power@2kHz / totalBandPower
+  hfRatio:        number;   // (power@4kHz + power@8kHz) / totalBandPower
+  lfRatio:        number;   // (power@200Hz + power@500Hz) / totalBandPower
+  noiseFloorRatio: number;  // rms(quietest 10% frames) / rms(loudest 90% frames)
+                            // 0 = perfect silence between words, 1 = pure static
+  spectralSlope:   number;  // linear regression slope (dB/octave) across 6 bands
+                            // natural voice ≈ −6dB/oct; flat/robotic ≈ 0
 }
 
 export interface CriterionResult {
@@ -300,6 +304,26 @@ export interface ValidationResult {
   analysis:    AudioAnalysis;
   criteria:    CriterionResult[];
   redFailures: string[];
+}
+
+/**
+ * Frame-based noise floor ratio.
+ * Splits audio into ~10ms frames, measures per-frame RMS, computes
+ * ratio of the 10th-percentile (quietest) to 90th-percentile (loudest) frame.
+ * Constant background static keeps quiet frames elevated → high ratio.
+ * Clean voice with silence between words → ratio near 0.
+ */
+export function frameNoiseRatio(samples: Float32Array, sampleRate: number, frameMs = 10): number {
+  const frameSize = Math.floor(sampleRate * frameMs / 1000);
+  const frameRms: number[] = [];
+  for (let i = 0; i + frameSize <= samples.length; i += frameSize) {
+    frameRms.push(rms(samples.subarray(i, i + frameSize)));
+  }
+  if (frameRms.length < 10) return 0;
+  frameRms.sort((a, b) => a - b);
+  const floor  = frameRms[Math.floor(frameRms.length * 0.10)];
+  const signal = frameRms[Math.floor(frameRms.length * 0.90)];
+  return signal > 0 ? floor / signal : 0;
 }
 
 /** Analyse a synthesised voice WAV buffer. */
@@ -320,18 +344,35 @@ export function analyseVoiceBuffer(wav: Buffer, sampleRate: number): AudioAnalys
   const p8k  = goertzel(samples, 8000, sampleRate);
   const total = p200 + p500 + p1k + p2k + p4k + p8k;
 
-  const tilt = p8k > 0
-    ? 20 * Math.log10(p200 / p8k)
-    : 60; // silence at 8kHz → treat as very tilted (good)
+  // spectralTilt: LF vs mid comparison (espeak bandlimited; 8kHz unreliable)
+  const p3k  = goertzel(samples, 3000, sampleRate);
+  const tilt = p3k > 0
+    ? 20 * Math.log10(p200 / p3k)
+    : 20; // silence at 3kHz → treat as moderate tilt
 
+  // spectralSlope: linear regression of dB levels across 6 frequency bands
+  // tells us how fast energy drops per octave (natural voice = −6dB/oct)
+  const bandPowers = [p200, p500, p1k, p2k, p4k, p8k];
+  const bandFreqs  = [200, 500, 1000, 2000, 4000, 8000];
+  const logFreqs   = bandFreqs.map(f => Math.log2(f / 200)); // octaves from 200Hz
+  const dbs        = bandPowers.map(p => p > 0 ? 20 * Math.log10(p) : -80);
+  const n = logFreqs.length;
+  const meanX = logFreqs.reduce((a, b) => a + b, 0) / n;
+  const meanY = dbs.reduce((a, b) => a + b, 0) / n;
+  const slope = logFreqs.reduce((num, x, i) => num + (x - meanX) * (dbs[i] - meanY), 0) /
+                logFreqs.reduce((den, x) => den + (x - meanX) ** 2, 0);
+
+  const totalWithP3k = p200 + p500 + p1k + p2k + p3k + p4k + p8k;
   return {
-    rmsDb:         rmsDb_,
-    peakDb:        peakDb_,
-    crestFactor:   crest,
-    spectralTilt:  tilt,
-    presenceRatio: total > 0 ? p2k  / total : 0,
-    hfRatio:       total > 0 ? (p4k + p8k) / total : 0,
-    lfRatio:       total > 0 ? (p200 + p500) / total : 0,
+    rmsDb:           rmsDb_,
+    peakDb:          peakDb_,
+    crestFactor:     crest,
+    spectralTilt:    tilt,
+    spectralSlope:   slope,
+    presenceRatio:   totalWithP3k > 0 ? p2k  / totalWithP3k : 0,
+    hfRatio:         totalWithP3k > 0 ? (p4k + p8k) / totalWithP3k : 0,
+    lfRatio:         totalWithP3k > 0 ? (p200 + p500) / totalWithP3k : 0,
+    noiseFloorRatio: frameNoiseRatio(samples, sampleRate),
   };
 }
 
@@ -348,10 +389,11 @@ export function validateVoiceBuffer(wav: Buffer, sampleRate: number): Validation
 
   // ── RED — drop if any fail ────────────────────────────────────────────────
   const reds: Array<{ name: string; pass: boolean; value: number; ideal: string }> = [
-    { name: "no-clip",      pass: a.peakDb      < -0.5, value: a.peakDb,      ideal: "< −0.5 dBFS" },
-    { name: "not-silent",   pass: a.rmsDb       > -40,  value: a.rmsDb,       ideal: "> −40 dBFS"  },
-    { name: "tilt-sane",    pass: a.spectralTilt > -20,  value: a.spectralTilt, ideal: "> −20 dB"   },
-    { name: "has-dynamics", pass: a.crestFactor  > 3,   value: a.crestFactor, ideal: "> 3 dB"      },
+    { name: "no-clip",        pass: a.peakDb         < -0.5, value: a.peakDb,         ideal: "< −0.5 dBFS" },
+    { name: "not-silent",     pass: a.rmsDb          > -40,  value: a.rmsDb,          ideal: "> −40 dBFS"  },
+    { name: "tilt-sane",      pass: a.spectralTilt   > -20,  value: a.spectralTilt,   ideal: "> −20 dB"   },
+    { name: "has-dynamics",   pass: a.crestFactor    > 3,    value: a.crestFactor,    ideal: "> 3 dB"     },
+    { name: "no-static-noise",pass: a.noiseFloorRatio < 0.02, value: a.noiseFloorRatio, ideal: "< 0.02"   },
   ];
   for (const r of reds) {
     criteria.push({ ...r });
@@ -363,7 +405,8 @@ export function validateVoiceBuffer(wav: Buffer, sampleRate: number): Validation
 
   // ── GREEN — scored 0–1, weighted ─────────────────────────────────────────────
   const greens: Array<{ name: string; value: number; ideal: string; score: number; weight: number }> = [
-    { name: "spectral-tilt",  value: a.spectralTilt,  ideal: "20–30 dB",      score: gaussScore(a.spectralTilt,  25,   7),    weight: 0.35 },
+    { name: "spectral-slope", value: a.spectralSlope, ideal: "−6 dB/oct",   score: gaussScore(a.spectralSlope, -6,   3),    weight: 0.25 },
+    { name: "spectral-tilt",  value: a.spectralTilt,  ideal: "8–18 dB",      score: gaussScore(a.spectralTilt,  13,   5),    weight: 0.10 },
     { name: "crest-factor",   value: a.crestFactor,   ideal: "15–20 dB",      score: gaussScore(a.crestFactor,   17,   4),    weight: 0.25 },
     { name: "presence-ratio", value: a.presenceRatio, ideal: "0.20–0.40",    score: gaussScore(a.presenceRatio, 0.30, 0.08), weight: 0.20 },
     { name: "rms-level",      value: a.rmsDb,         ideal: "−17 to −13 dBFS", score: gaussScore(a.rmsDb,        -15,  3),    weight: 0.10 },

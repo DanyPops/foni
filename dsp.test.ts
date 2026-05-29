@@ -38,12 +38,19 @@ const ISO: Partial<SmoothingOptions> = {
   deHarshDb:        0,
   warmthBoostDb:    0,
   airBoostDb:       0,
-  eqGain:           0,
   saturationDrive:  0,
   saturationAmount: 0,
   phaserDepth:      0,
   reverbMs:         0,
   compressionRatio: 1,
+  // de-robotisation — disable so DEFAULT_SMOOTHING values don’t bleed into measurements
+  breathinessDb:    0,
+  tiltLowDb:        0,
+  tiltHighDb:       0,
+  presenceDb:       0,
+  deEssDb:          0,
+  vibratoFreq:      0,
+  vibratoDepth:     0,
   normalize:        false,
 };
 

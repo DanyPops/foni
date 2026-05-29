@@ -198,14 +198,31 @@ export interface SmoothingOptions {
    * Apply EBU R128 loudnorm as the final stage for consistent volume.
    * Default: true
    */
+  // ── De-robotisation ─────────────────────────────────────────────────────────
+
+  /** Breathiness: pink noise floor in dB (negative). 0 = off. Typical: −50 to −35. */
+  breathinessDb: number;
+  /** Spectral tilt low-shelf: +dB at 100Hz to restore chest resonance. 0 = off. */
+  tiltLowDb: number;
+  /** Spectral tilt high-shelf: dB at 8kHz (negative = cut). 0 = off. */
+  tiltHighDb: number;
+  /** Presence boost: +dB at 2.5kHz voice clarity band. 0 = off. */
+  presenceDb: number;
+  /** De-esser: reduction in dB at 7kHz (positive = cut). 0 = off. */
+  deEssDb: number;
+  /** Vibrato modulation frequency in Hz. Breaks mechanical espeak pitch. 0 = off. */
+  vibratoFreq: number;
+  /** Vibrato modulation depth 0–1. 0.003 = ±0.3% pitch variation. 0 = off. */
+  vibratoDepth: number;
+
   normalize: boolean;
 }
 
-// Baseline v3: natural-dry + de-harsh + punch + exciter + phaser + reverb.
+// Baseline v5: round 5 winner — all-derobot stack.
 // Round 1: natural-dry (trust RVC) won.
 // Round 2: de-harsh + punch added.
-// Round 3: all-three anti-robotic stack won —
-//          exciter (drive=1.5 @ 5kHz) + phaser (0.15) + reverb (12ms/6%).
+// Round 3: all-three anti-robotic stack won — exciter(1.5@5kHz) + phaser(0.15) + reverb(12ms/6%).
+// Round 5: de-robotisation stack won — breathiness + tilt + de-ess + presence + exciter→1.2kHz.
 export const DEFAULT_SMOOTHING: SmoothingOptions = {
   // Edge handling
   padSecs:  0.3,
@@ -214,7 +231,7 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   // Mud removal
   highpassFreq: 80,
 
-  // Corrective EQ — de-harsh only
+  // Corrective EQ
   deBoxFreq:             900,
   deBoxDb:               0,
   deBoxBandwidthOctaves: 1.5,
@@ -229,30 +246,34 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   compressionThresholdDb: -18,
   compressionMakeupDb:    1,
 
-  // Creative EQ — off
+  // Creative EQ
   warmthBoostDb: 0,
   warmthFreq:    200,
   airBoostDb:    0,
   airFreq:       8000,
 
-  // Harmonic saturation — light exciter above 5kHz
+  // Harmonic saturation — exciter moved to 1.2kHz (warmth, not harshness)
   saturationDrive:  1.5,
   saturationAmount: 1.0,
-  saturationFreq:   5000,
+  saturationFreq:   1200,
 
-  // Spatial depth — subtle phaser + small room reverb
-  phaserDepth:      0.15,
-  reverbMs:         12,
-  reverbDecay:      0.06,
+  // Spatial depth — shorter/subtler than round 3
+  phaserDepth:      0.08,
+  reverbMs:         8,
+  reverbDecay:      0.04,
   reverbInputGain:  0.8,
   reverbOutputGain: 0.88,
 
-  // De-robotisation — all off in baseline (round 3 winner unchanged)
-  breathinessDb: 0,
-  tiltLowDb:     0,
-  tiltHighDb:    0,
-  presenceDb:    0,
-  deEssDb:       0,
+  // De-robotisation — round 5 all-derobot stack baked in
+  breathinessDb: -45,
+  tiltLowDb:     2,
+  tiltHighDb:    -2,
+  presenceDb:    1.5,
+  deEssDb:       4,
+
+  // Pitch micro-variation — off by default (round 6)
+  vibratoFreq:  0,
+  vibratoDepth: 0,
 
   // Final
   normalize: true,
@@ -287,6 +308,7 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
 const ABSORBED_FIELDS = new Set<keyof SmoothingOptions>([
   "saturationAmount", "saturationFreq",       // → saturationDrive
   "reverbDecay", "reverbInputGain", "reverbOutputGain", // → reverbMs
+  "vibratoDepth",                                        // → vibratoFreq
   "deHarshFreq", "deHarshBandwidthOctaves",   // → deHarshDb
   "deBoxFreq", "deBoxBandwidthOctaves",        // → deBoxDb
   "warmthFreq",                                // → warmthBoostDb
@@ -401,6 +423,7 @@ export class SmoothingProcessor implements AudioProcessor {
       phaserDepth,
       reverbMs, reverbDecay, reverbInputGain, reverbOutputGain,
       breathinessDb, tiltLowDb, tiltHighDb, presenceDb, deEssDb,
+      vibratoFreq, vibratoDepth,
       normalize,
     } = this.opts;
 
@@ -428,6 +451,11 @@ export class SmoothingProcessor implements AudioProcessor {
     // 2c. De-esser — suppress metallic sibilant artifacts at 7kHz
     if (deEssDb > 0) {
       parts.push(`equalizer=f=7000:width_type=o:width=1.0:g=${-deEssDb}`);
+    }
+
+    // 2e. Vibrato — pitch micro-variation to break mechanical espeak pitch steps
+    if (vibratoFreq > 0 && vibratoDepth > 0) {
+      parts.push(`vibrato=f=${vibratoFreq}:d=${vibratoDepth}`);
     }
 
     // 2d. Breathiness — add noise floor to simulate human airflow
