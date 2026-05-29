@@ -1,18 +1,18 @@
 {
-  "timestamp": "2026-05-29T20:25:42.435Z",
-  "meanGapPct": 34.9,
+  "timestamp": "2026-05-29T20:36:23.831Z",
+  "meanGapPct": 26.4,
   "phraseGaps": [
     {
       "phrase": "Давай, шевелись.",
-      "gapPct": 31.8
+      "gapPct": 25.1
     },
     {
       "phrase": "Ну что, брат, как дела?",
-      "gapPct": 35.1
+      "gapPct": 24.7
     },
     {
       "phrase": "Слушай, тут такое дело.",
-      "gapPct": 37.7
+      "gapPct": 29.3
     }
   ]
 }
