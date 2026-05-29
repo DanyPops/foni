@@ -41,7 +41,7 @@ const CONFIGS: Array<{ name: string; label: string; opts: Partial<SmoothingOptio
     opts:  {},
   },
   {
-    name:  "2. +reverb",
+    name:  "2. reverb",
     label: "Baseline + tiny room (8ms / 4% decay) — just enough to feel less 'in a box'",
     opts: {
       reverbMs:         8,
@@ -51,7 +51,7 @@ const CONFIGS: Array<{ name: string; label: string; opts: Partial<SmoothingOptio
     },
   },
   {
-    name:  "3. +air",
+    name:  "3. air",
     label: "Baseline + high shelf +1.5dB at 8kHz — adds sparkle and breath above RVC",
     opts: {
       airBoostDb: 1.5,
@@ -59,7 +59,7 @@ const CONFIGS: Array<{ name: string; label: string; opts: Partial<SmoothingOptio
     },
   },
   {
-    name:  "4. +presence",
+    name:  "4. presence",
     label: "Baseline + peaking +2dB at 2.5kHz — boosts consonant clarity and intelligibility",
     opts: {
       deHarshFreq: 2500,
@@ -68,7 +68,7 @@ const CONFIGS: Array<{ name: string; label: string; opts: Partial<SmoothingOptio
     },
   },
   {
-    name:  "5. +de-harsh",
+    name:  "5. de-harsh",
     label: "Baseline + peaking -2dB at 3.5kHz — cuts any residual espeak metallic edge",
     opts: {
       deHarshFreq: 3500,
@@ -77,7 +77,7 @@ const CONFIGS: Array<{ name: string; label: string; opts: Partial<SmoothingOptio
     },
   },
   {
-    name:  "6. +punch",
+    name:  "6. punch",
     label: "Baseline + faster compression (2:1, 20ms attack) — tighter, punchier dynamics",
     opts: {
       compressionRatio:    2,

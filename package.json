@@ -9,11 +9,11 @@
     "test:watch": "vitest",
     "demo":      "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run pipeline.e2e -t 'cheeki breeki'",
     "listen:1":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '1. baseline'",
-    "listen:2":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '2. de-mud'",
-    "listen:3":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '3. consonant-forward'",
-    "listen:4":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '4. broadcast'",
-    "listen:5":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '5. natural-dry'",
-    "listen:6":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '6. air-forward'",
+    "listen:2":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '2. reverb'",
+    "listen:3":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '3. air'",
+    "listen:4":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '4. presence'",
+    "listen:5":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '5. de-harsh'",
+    "listen:6":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '6. punch'",
     "listen:all": "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e"
   },
   "devDependencies": {
