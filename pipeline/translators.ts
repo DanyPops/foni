@@ -18,17 +18,96 @@ export const STRETCH_REPEATS_MAX = 4;
 /** HTTP timeout for translation API calls. */
 export const TRANSLATION_TIMEOUT_MS = 5_000;
 
-// ─── Injection position weights ─────────────────────────────────────────────────────────
-// These multipliers shape WHERE injections land relative to overall probability.
-// prefix/suffix < 1.0 means less frequent than mid-clause (the natural pause).
+// ─── Placement scoring ─────────────────────────────────────────────────────────────────
+//
+// Research: Russian mat fillers (блядь, сука) are most commonly placed at
+// sentence end as general emphasizers. Mid-clause suits longer multi-clause
+// sentences. Prefix fronting is for strong emphasis and is rarer.
+// Source: Reddit/linguistic observation — "сука блять is most commonly placed
+// at the end of a sentence as a general emphasizer."
 
-const INTERJECT_PREFIX_WEIGHT = 0.45; // sentence prefix ("Ого! ...")  
-const INTERJECT_MID_WEIGHT    = 0.50; // between comma clauses
-const INTERJECT_SUFFIX_WEIGHT = 0.35; // sentence suffix (", эх!")
+export interface PlacementScores {
+  /** 0–1 score for sentence-prefix injection. */
+  prefix: number;
+  /** 0–1 score for mid-clause injection (between comma breaks). */
+  mid: number;
+  /** 0–1 score for sentence-suffix injection. */
+  suffix: number;
+}
 
-const MAT_PREFIX_WEIGHT = 0.50; // sentence prefix ("Ёбаный в рот, ...")
-const MAT_MID_WEIGHT    = 1.00; // between comma clauses (full probability)
-const MAT_SUFFIX_WEIGHT = 0.40; // sentence suffix (", блядь")
+/**
+ * Score a sentence for natural mat/interject injection placement.
+ *
+ * Factors:
+ *  - Clause count (commas+1) → scales mid score
+ *  - Word count             → longer sentence boosts suffix
+ *  - IT/technical content   → boosts prefix (frustration emphasis)
+ *  - Question mark          → suppresses suffix entirely
+ */
+export function scorePlacement(sentence: string): PlacementScores {
+  const clauseCount = (sentence.match(/,/g) ?? []).length + 1;
+  const wordCount   = sentence.trim().split(/\s+/).length;
+  const isQuestion  = /\?$/.test(sentence.trim());
+  const hasTech     = /(?<![а-яёА-ЯЁa-z0-9_])(баг|деплой|пайплайн|коммит|API|HTTP|сервер|лог|тест|билд|фича|фикс|кэш|бэкенд|фронтенд)(?![а-яёА-ЯЁa-z0-9_])/i.test(sentence);
+
+  // Suffix: natural home for fillers; suppress on questions; long sentences boost it
+  const suffix = isQuestion ? 0 : Math.min(1, 0.55 + (wordCount > 8 ? 0.2 : 0));
+
+  // Mid: needs clause breaks to sound natural; scales with clause count
+  const mid = Math.min(1, (clauseCount - 1) * 0.4);
+
+  // Prefix: rarer; technical frustration and long sentences push it up
+  const prefix = Math.min(1, 0.25 + (hasTech ? 0.2 : 0) + (wordCount > 12 ? 0.1 : 0));
+
+  return { prefix, mid, suffix };
+}
+
+// ─── Word Diversifier ──────────────────────────────────────────────────────────────────
+//
+// Prevents repetition: if "блядь" was just injected, the next pick favours
+// other words. Weight = 1 / (1 + usageCount) — halves probability each use.
+// One instance per middleware closure, persists across TTS calls in a session.
+
+/**
+ * Inverse-frequency weighted word picker.
+ * Tracks per-word usage counts and down-weights recently used words so output
+ * has variety instead of repeating «блядь» on every sentence.
+ *
+ * Lifecycle: one instance per middleware closure; call reset() on session end.
+ */
+export class WordDiversifier {
+  private readonly counts = new Map<string, number>();
+
+  pick(arr: readonly string[]): string {
+    if (arr.length === 0) throw new Error("WordDiversifier.pick: empty array");
+    if (arr.length === 1) { this.increment(arr[0]); return arr[0]; }
+
+    // Weight = 1 / (1 + count) — halves each time the word is used
+    const weights = arr.map(w => 1 / (1 + (this.counts.get(w) ?? 0)));
+    const total   = weights.reduce((a, b) => a + b, 0);
+
+    let r = Math.random() * total;
+    for (let i = 0; i < arr.length; i++) {
+      r -= weights[i];
+      if (r <= 0) { this.increment(arr[i]); return arr[i]; }
+    }
+    // Floating-point safety — return last element
+    const last = arr[arr.length - 1];
+    this.increment(last);
+    return last;
+  }
+
+  /** Reset usage counts (call at session start/end). */
+  reset(): void { this.counts.clear(); }
+
+  /** Exposed for testing — get usage count for a word. */
+  getCount(word: string): number { return this.counts.get(word) ?? 0; }
+
+  private increment(word: string): void {
+    this.counts.set(word, (this.counts.get(word) ?? 0) + 1);
+  }
+}
+
 
 // ─── Russian Interjections (межметия) ────────────────────────────────────────
 // Primary interjections: non-word vocal expressions of emotion.
@@ -67,34 +146,34 @@ const INTERJECT: Record<"prefix" | "suffix" | "mid", string[]> = {
 /**
  * Inject Russian interjections into already-translated text.
  *
- * @param text     Russian text to mutate.
- * @param prob     0–1 probability per opportunity.
+ * @param text        Russian text to mutate.
+ * @param prob        0–1 probability per opportunity.
+ * @param diversifier WordDiversifier instance for this session.
  */
-function injectInterject(text: string, prob: number): string {
+function injectInterject(text: string, prob: number, diversifier: WordDiversifier): string {
   if (prob <= 0) return text;
 
   const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
 
   return sentences.map(sentence => {
-    // Prefix: prepend an exclamation before the sentence
-    if (Math.random() < prob * 0.45) {
-      sentence = pick(INTERJECT.prefix) + " " + sentence;
+    const scores = scorePlacement(sentence);
+
+    if (Math.random() < prob * scores.prefix) {
+      sentence = diversifier.pick(INTERJECT.prefix) + " " + sentence;
     }
 
-    // Mid: drop a soft filler at comma breaks
     const clauses = sentence.split(",");
     const mutated = clauses.map((clause, i) => {
       if (i === 0) return clause;
-      if (Math.random() < prob * 0.5) return " " + pick(INTERJECT.mid) + "," + clause;
+      if (Math.random() < prob * scores.mid) return " " + diversifier.pick(INTERJECT.mid) + "," + clause;
       return clause;
     });
     sentence = mutated.join(",");
 
-    // Suffix: trail off with an exclamation
-    if (Math.random() < prob * 0.35) {
+    if (Math.random() < prob * scores.suffix) {
       const stripped = sentence.replace(/[.!?]+$/, "");
       const punct    = sentence.match(/[.!?]+$/)?.[0] ?? ".";
-      sentence = stripped + pick(INTERJECT.suffix) + punct;
+      sentence = stripped + diversifier.pick(INTERJECT.suffix) + punct;
     }
 
     return sentence;
@@ -134,10 +213,6 @@ const MAT: Record<"interject" | "prefix" | "suffix", string[]> = {
     ", мать его",         // mat' ego — motherfucking (thing)
   ],
 };
-
-function pick<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
 
 // ─── Expressive lengthening ───────────────────────────────────────────────────
 // Vowels ranked by dramatic resonance: open/round first (А О У),
@@ -186,14 +261,15 @@ export function stretchExpression(expr: string, repeats: number): string {
  * @param prob        0–1 injection probability per opportunity.
  * @param stretchProb 0–1 probability that an injected expression gets
  *                    expressive lengthening applied to its key vowel.
+ * @param diversifier WordDiversifier instance for this session.
  */
-function injectMat(text: string, prob: number, stretchProb: number): string {
+function injectMat(text: string, prob: number, stretchProb: number, diversifier: WordDiversifier): string {
   if (prob <= 0) return text;
 
-  function pickMat(arr: string[]): string {
-    const expr = pick(arr);
+  function pickMat(arr: readonly string[]): string {
+    const expr = diversifier.pick(arr);
     if (stretchProb > 0 && Math.random() < stretchProb) {
-      const repeats = 2 + Math.floor(Math.random() * 3); // 2, 3, or 4
+      const repeats = STRETCH_REPEATS_MIN + Math.floor(Math.random() * (STRETCH_REPEATS_MAX - STRETCH_REPEATS_MIN + 1));
       return stretchExpression(expr, repeats);
     }
     return expr;
@@ -202,19 +278,21 @@ function injectMat(text: string, prob: number, stretchProb: number): string {
   const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
 
   return sentences.map(sentence => {
-    if (Math.random() < prob * 0.5) {
+    const scores = scorePlacement(sentence);
+
+    if (Math.random() < prob * scores.prefix) {
       sentence = pickMat(MAT.prefix) + " " + sentence;
     }
 
     const clauses = sentence.split(",");
     const mutated = clauses.map((clause, i) => {
       if (i === 0) return clause;
-      if (Math.random() < prob) return " " + pickMat(MAT.interject) + "," + clause;
+      if (Math.random() < prob * scores.mid) return " " + pickMat(MAT.interject) + "," + clause;
       return clause;
     });
     sentence = mutated.join(",");
 
-    if (Math.random() < prob * 0.4) {
+    if (Math.random() < prob * scores.suffix) {
       const stripped = sentence.replace(/[.!?]+$/, "");
       const punct    = sentence.match(/[.!?]+$/)?.[0] ?? ".";
       sentence = stripped + pickMat(MAT.suffix) + punct;
@@ -372,17 +450,19 @@ export function makeITGlossaryMiddleware(): TextMiddleware {
 
 /** Inject Russian mat into ctx.text after downstream runs. */
 export function makeMatMiddleware(prob: number, stretch: number): TextMiddleware {
+  const diversifier = new WordDiversifier();
   return async (ctx, next) => {
     await next();
-    ctx.text = injectMat(ctx.text, prob, stretch);
+    ctx.text = injectMat(ctx.text, prob, stretch, diversifier);
   };
 }
 
 /** Inject Russian interjections into ctx.text after downstream runs. */
 export function makeInterjectMiddleware(prob: number): TextMiddleware {
+  const diversifier = new WordDiversifier();
   return async (ctx, next) => {
     await next();
-    ctx.text = injectInterject(ctx.text, prob);
+    ctx.text = injectInterject(ctx.text, prob, diversifier);
   };
 }
 
@@ -505,6 +585,7 @@ export class LibreTranslateTranslator implements Translator {
  *                         lengthening on its most resonant vowel (default 0.5).
  */
 export class MatTranslator implements Translator {
+  private readonly diversifier = new WordDiversifier();
   constructor(
     private readonly inner: Translator,
     public probability: number = 0.35,
@@ -513,7 +594,7 @@ export class MatTranslator implements Translator {
 
   async translate(text: string): Promise<string> {
     const result = await this.inner.translate(text);
-    return injectMat(result, this.probability, this.stretchProbability);
+    return injectMat(result, this.probability, this.stretchProbability, this.diversifier);
   }
 }
 
@@ -529,6 +610,7 @@ export class MatTranslator implements Translator {
  * @param probability 0–1 injection probability per opportunity (default 0.25).
  */
 export class InterjectTranslator implements Translator {
+  private readonly diversifier = new WordDiversifier();
   constructor(
     private readonly inner: Translator,
     public probability: number = 0.25,
@@ -536,6 +618,6 @@ export class InterjectTranslator implements Translator {
 
   async translate(text: string): Promise<string> {
     const result = await this.inner.translate(text);
-    return injectInterject(result, this.probability);
+    return injectInterject(result, this.probability, this.diversifier);
   }
 }
