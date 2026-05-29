@@ -18,6 +18,11 @@ import type { FoniConfig }    from "./config.ts";
 import { PREWARM_RU }         from "./config.ts";
 import { freshState, resolveBacktickRun, drainChunks } from "./stream.ts";
 import type { StreamState }   from "./stream.ts";
+import {
+  detectEmotion, updateEmotionState, effectiveWeights, neutralState, currentIntensity,
+  EMOTION_EMOJI,
+} from "./emotion.ts";
+import type { EmotionState } from "./emotion.ts";
 
 import { SpeakFacade }        from "../pipeline/speak-facade.ts";
 import { SystemPlayer }       from "../pipeline/player.ts";
@@ -40,13 +45,15 @@ import type { TTSBackend } from "../pipeline/interfaces.ts";
 // ─── Status snapshot (read by extension for status bar) ──────────────────────
 
 export interface EngineStatus {
-  enabled:     boolean;
-  backendName: string;
-  rvcModel:    string | null;
-  inputLang:   "en" | "ru";
-  outputLang:  "en" | "ru";
-  matEnabled:  boolean;
+  enabled:          boolean;
+  backendName:      string;
+  rvcModel:         string | null;
+  inputLang:        "en" | "ru";
+  outputLang:       "en" | "ru";
+  matEnabled:       boolean;
   interjectEnabled: boolean;
+  emotionEmoji:     string;   // "" when neutral or intensity < 0.3
+  emotionSignals:   string[]; // triggered heuristics for debug
 }
 
 // ─── Engine ───────────────────────────────────────────────────────────────────
@@ -55,6 +62,7 @@ export class FoniEngine {
   private facade: SpeakFacade | null = null;
   private audioQueue: Promise<void>  = Promise.resolve();
   private streamState: StreamState   = freshState();
+  private emotionState: EmotionState = neutralState();
   private readonly player            = new SystemPlayer();
 
   constructor(public readonly config: FoniConfig) {}
@@ -68,8 +76,12 @@ export class FoniEngine {
       stack.push(makeTranslateMiddleware(this.config.inputLang, this.config.outputLang));
     }
     if (this.config.outputLang === "ru") {
-      if (this.config.matEnabled)       stack.push(makeMatMiddleware(this.config.matProb, this.config.matStretch));
-      if (this.config.interjectEnabled) stack.push(makeInterjectMiddleware(this.config.interjectProb));
+      // Apply emotion multipliers — decayed lazily at build time
+      const ew = effectiveWeights(this.emotionState);
+      const matProb       = Math.min(1, this.config.matProb       * ew.matMultiplier);
+      const interjectProb = Math.min(1, this.config.interjectProb * ew.interjectMultiplier);
+      if (this.config.matEnabled)       stack.push(makeMatMiddleware(matProb, this.config.matStretch));
+      if (this.config.interjectEnabled) stack.push(makeInterjectMiddleware(interjectProb));
     }
     return stack;
   }
@@ -171,9 +183,21 @@ export class FoniEngine {
     if (leftover.length > 2) this.enqueue(leftover);
   }
 
+  /**
+   * Process a user message — detect emotion, update decay state, rebuild translator.
+   * Call from the pi adapter on message_end with role==='user'.
+   */
+  onUserMessage(text: string): void {
+    const reading = detectEmotion(text);
+    this.emotionState = updateEmotionState(this.emotionState, reading);
+    // Rebuild translator so next audio chunk uses updated effective weights
+    this.rebuildTranslator();
+  }
+
   /** Reset stream state and stop audio (call on agent_start). */
   reset(): void {
-    this.streamState = freshState();
+    this.streamState  = freshState();
+    this.emotionState = neutralState();
     this.stop();
   }
 
@@ -198,6 +222,7 @@ export class FoniEngine {
   }
 
   status(): EngineStatus {
+    const intensity = currentIntensity(this.emotionState);
     return {
       enabled:          this.config.enabled,
       backendName:      this.facade?.backendName ?? "...",
@@ -206,6 +231,8 @@ export class FoniEngine {
       outputLang:       this.config.outputLang,
       matEnabled:       this.config.matEnabled,
       interjectEnabled: this.config.interjectEnabled,
+      emotionEmoji:     intensity >= 0.3 ? EMOTION_EMOJI[this.emotionState.emotion] : "",
+      emotionSignals:   [], // populated by onUserMessage, stored separately if needed
     };
   }
 }

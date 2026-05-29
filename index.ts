@@ -38,9 +38,10 @@ export default async function (pi: ExtensionAPI) {
       : `${s.inputLang.toUpperCase()}→${s.outputLang.toUpperCase()}`;
     const mat = s.matEnabled ? "+mat" : "";
     const ij  = s.interjectEnabled ? "+oj" : "";
+    const emotion = s.emotionEmoji ? ` ${s.emotionEmoji}` : "";
     ctx.ui.setStatus(
       "tts",
-      theme.fg("accent", "TTS") + theme.fg("dim", ` ${s.backendName}${s.rvcModel ? `+${s.rvcModel}` : ""}${mat}${ij} ${lang}`),
+      theme.fg("accent", "TTS") + theme.fg("dim", ` ${s.backendName}${s.rvcModel ? `+${s.rvcModel}` : ""}${mat}${ij} ${lang}${emotion}`),
     );
   }
 
@@ -81,7 +82,16 @@ export default async function (pi: ExtensionAPI) {
     engine.onDelta((ev as any).delta ?? "");
   });
 
-  pi.on("message_end", (_event, _ctx) => {
+  pi.on("message_end", (_event, ctx) => {
+    if (_event.message.role === "user") {
+      // Detect emotion from user input, update decay state, rebuild translator
+      const text = (_event.message.content ?? "") as string;
+      if (text) {
+        engine.onUserMessage(text);
+        updateStatus(ctx);
+      }
+      return;
+    }
     if (_event.message.role !== "assistant") return;
     engine.onMessageEnd();
   });
