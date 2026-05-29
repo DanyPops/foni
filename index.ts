@@ -1,293 +1,194 @@
 /**
- * Foni -- Pi TTS extension.
+ * Foni — pi TTS extension entry point.
  *
- * This file is the extension entry point only. All business logic lives in:
- *   pipeline/speak-facade.ts   -- Facade
- *   pipeline/interfaces.ts     -- Strategy interfaces
- *   pipeline/translators.ts    -- Translator strategies
- *   pipeline/processors.ts     -- AudioProcessor strategies
- *   pipeline/player.ts         -- Player
- *   backends/*.ts              -- TTSBackend strategies
+ * This file is a thin adapter: it wires pi lifecycle events and commands
+ * to FoniEngine. No domain logic lives here.
+ *
+ * Domain:  core/engine.ts  (FoniEngine)
+ * Config:  core/config.ts  (FoniConfig, DEFAULT_CONFIG)
+ * Stream:  core/stream.ts  (drainChunks, StreamState)
+ * TUI:     tui/foni-panel.ts, tui/model-picker.ts
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { execFileSync } from "node:child_process";
-import { platform } from "node:os";
 
-import { freshState, resolveBacktickRun, drainChunks } from "./lib.ts";
-import { SpeakFacade } from "./pipeline/speak-facade.ts";
-import {
-  IdentityTranslator, MyMemoryTranslator, MatTranslator, InterjectTranslator,
-  PipelineTranslator, makeTranslateMiddleware, makeMatMiddleware, makeInterjectMiddleware,
-  makeITGlossaryMiddleware,
-  type TextMiddleware,
-} from "./pipeline/translators.ts";
+import { FoniEngine }        from "./core/engine.ts";
+import { DEFAULT_CONFIG }    from "./core/config.ts";
+import { IdentityTranslator, MyMemoryTranslator } from "./pipeline/translators.ts";
 import { IdentityProcessor, RVCProcessor, SmoothingProcessor } from "./pipeline/processors.ts";
-import { SystemPlayer } from "./pipeline/player.ts";
-import { SileroBackend } from "./backends/silero.ts";
-import { KokoroBackend } from "./backends/kokoro.ts";
-import { EspeakBackend } from "./backends/espeak.ts";
-import { FakeYouBackend } from "./backends/fakeyou.ts";
-import type { TTSBackend } from "./pipeline/interfaces.ts";
-import { pickModel } from "./tui/model-picker.ts";
-import { openFoniPanel } from "./tui/foni-panel.ts";
+import { SpeakFacade }       from "./pipeline/speak-facade.ts";
+import { pickModel }         from "./tui/model-picker.ts";
+import { openFoniPanel }     from "./tui/foni-panel.ts";
 import type { FoniPanelState, FoniPanelActions } from "./tui/foni-panel.ts";
 
-// ─── Prewarm phrases ─────────────────────────────────────────────────────────
-//
-// Synthesised in parallel on session_start so the AudioLRU is warm
-// before Claude speaks. Short phrases = fast synthesis (~3s each);
-// all run concurrently so total prewarm time ≈ time of longest phrase.
-// Only activated when outputLang === 'ru' and rvcEnabled.
-
-const PREWARM_RU: string[] = [
-  // Acknowledgements
-  "Да.", "Нет.", "Хорошо.", "Понял.", "Окей.", "Готово.",
-  // Common short responses
-  "Сейчас.", "Подожди.", "Конечно.",
-  // Mat vocabulary (standalone high-frequency)
-  "Блядь.", "Пиздец.", "Ёпта.", "Сука.",
-  // Interjections
-  "Ого!", "Ах!", "Ух!", "Эх.",
-];
-
-// ─── Config ───────────────────────────────────────────────────────────────────
-
-const config = {
-  // ── Core ────────────────────────────────────────────────────────────────
-  enabled:     true,                           // TTS on by default
-  backendPref: "espeak" as "auto" | "silero" | "kokoro" | "fakeyou" | "espeak" | "say",
-  voice:       "en_0",
-  speed:       1.15,                           // slightly faster than flat neutral
-  inputLang:   "en" as "en" | "ru",           // what Claude writes — English
-  outputLang:  "ru" as "en" | "ru",           // what espeak speaks — Russian
-
-  // ── Backend URLs ────────────────────────────────────────────────────────
-  sileroUrl:    "http://localhost:8001",
-  kokoroUrl:    "http://localhost:8880",
-  fakeyouToken: "",
-  fakeyouApiKey: "",
-
-  // ── Mat — Russian profanity injection ───────────────────────────────────
-  matEnabled: true,
-  matProb:    0.35,                            // 35% chance per natural pause
-  matStretch: 0.5,                             // 50% chance of бляааааадь
-
-  // ── Интеръекции — Russian exclamations ──────────────────────────────────
-  interjectEnabled: true,
-  interjectProb:    0.25,                      // 25% chance per sentence
-
-  // ── RVC — bandit voice ──────────────────────────────────────────────────
-  rvcEnabled: true,
-  rvcUrl:     "http://localhost:5050",
-  rvcModel:   "bandit",
-};
-
-// ─── Backend registry (Strategy pool) ────────────────────────────────────────
-
-function buildBackends(): TTSBackend[] {
-  return [
-    new SileroBackend(config.sileroUrl),
-    new KokoroBackend(config.kokoroUrl),
-    new FakeYouBackend(config.fakeyouToken, config.fakeyouApiKey),
-    new EspeakBackend(config.outputLang === "ru" ? "ru" : "en"),
-  ];
-}
-
-async function detectBackend(): Promise<TTSBackend | null> {
-  const backends = buildBackends();
-
-  if (config.backendPref !== "auto") {
-    const preferred = backends.find(b => b.name === config.backendPref);
-    if (preferred && await preferred.isAvailable()) return preferred;
-    return null;
-  }
-
-  for (const b of backends) {
-    if (await b.isAvailable()) return b;
-  }
-
-  if (platform() === "darwin") {
-    try { execFileSync("which", ["say"], { stdio: "ignore" }); return new EspeakBackend("en"); }
-    catch { /* no say */ }
-  }
-
-  return null;
-}
-
-// ─── Facade assembly ──────────────────────────────────────────────────────────
-
-const player = new SystemPlayer();
-
-function rebuildTranslator() {
-  facade?.swapTranslator(new PipelineTranslator(buildPipeline(), config.outputLang));
-}
-
-function buildPipeline(): TextMiddleware[] {
-  const stack: TextMiddleware[] = [];
-
-  // IT glossary always runs first — <1ms, no network, works with any translator
-  // Replaces English IT terms with Russian developer loanwords before translation
-  stack.push(makeITGlossaryMiddleware());
-
-  // Translate only when languages differ — same lang = passthrough, no network call
-  if (config.inputLang !== config.outputLang) {
-    stack.push(makeTranslateMiddleware(config.inputLang, config.outputLang));
-  }
-
-  // Mat and interject operate on the output language
-  if (config.outputLang === "ru") {
-    if (config.matEnabled)       stack.push(makeMatMiddleware(config.matProb, config.matStretch));
-    if (config.interjectEnabled) stack.push(makeInterjectMiddleware(config.interjectProb));
-  }
-  return stack;
-}
-
-async function buildFacade(): Promise<SpeakFacade | null> {
-  const backend = await detectBackend();
-  if (!backend) return null;
-
-  const translator = new PipelineTranslator(buildPipeline(), config.outputLang);
-
-  const processor = config.rvcEnabled && config.rvcModel
-    ? new SmoothingProcessor(new RVCProcessor(config.rvcUrl))
-    : new IdentityProcessor();
-
-  return new SpeakFacade(translator, backend, processor, player, {
-    voice: config.voice,
-    speed: config.speed,
-  });
-}
-
-// ─── Extension ────────────────────────────────────────────────────────────────
+// ─── Extension entry point ────────────────────────────────────────────────────
 
 export default async function (pi: ExtensionAPI) {
-  let facade: SpeakFacade | null = null;
-  let state = freshState();
-  let audioQueue: Promise<void> = Promise.resolve();
+  const engine = new FoniEngine({ ...DEFAULT_CONFIG });
+  const config = engine.config;
 
-  async function ensureFacade(): Promise<SpeakFacade | null> {
-    if (!facade) facade = await buildFacade();
-    return facade;
-  }
-
-  function enqueue(text: string): void {
-    audioQueue = audioQueue.then(async () => {
-      const f = await ensureFacade();
-      if (f) await f.speak(text);
-    });
-  }
-
-  function stopAudio(): void { audioQueue = Promise.resolve(); }
+  // ── Status bar ─────────────────────────────────────────────────────────────
 
   function updateStatus(ctx: { ui: { setStatus: Function; theme: any } }): void {
-    const theme = ctx.ui.theme;
-    if (!config.enabled) {
-      ctx.ui.setStatus("tts", undefined);
-      return;
-    }
-    const backend = facade?.backendName ?? "...";
-    const rvc     = config.rvcEnabled && config.rvcModel ? config.rvcModel : null;
-    const lang    = config.inputLang === config.outputLang
-      ? config.outputLang.toUpperCase()
-      : `${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`;
-    const mat     = config.matEnabled ? "+mat" : "";
-    const ij      = config.interjectEnabled ? "+oj" : "";
+    const { theme } = ctx.ui;
+    if (!config.enabled) { ctx.ui.setStatus("tts", undefined); return; }
+    const s = engine.status();
+    const lang = s.inputLang === s.outputLang
+      ? s.outputLang.toUpperCase()
+      : `${s.inputLang.toUpperCase()}→${s.outputLang.toUpperCase()}`;
+    const mat = s.matEnabled ? "+mat" : "";
+    const ij  = s.interjectEnabled ? "+oj" : "";
     ctx.ui.setStatus(
       "tts",
-      theme.fg("accent", "TTS") + theme.fg("dim", ` ${backend}${rvc ? `+${rvc}` : ""}${mat}${ij} ${lang}`)
+      theme.fg("accent", "TTS") + theme.fg("dim", ` ${s.backendName}${s.rvcModel ? `+${s.rvcModel}` : ""}${mat}${ij} ${lang}`),
     );
   }
 
-  // ── Auto-detect RVC on startup ─────────────────────────────────────────────
+  // ── Lifecycle events ───────────────────────────────────────────────────────
+
   pi.on("session_start", (_event, ctx) => {
     updateStatus(ctx);
-    fetch("http://127.0.0.1:5050/models", { signal: AbortSignal.timeout(1500) })
+    // Auto-detect RVC server
+    fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(1500) })
       .then(r => r.ok ? r.json() : null)
       .then(async (data: { models: string[] } | null) => {
         if (!data) return;
-        config.rvcUrl = "http://127.0.0.1:5050";
         const models: string[] = data.models ?? [];
         if (models.length > 0 && !config.rvcModel) config.rvcModel = models[0];
-        // Auto-enable RVC and load the default model
         if (!config.rvcEnabled && config.rvcModel) {
           try {
-            const r = await fetch(`${config.rvcUrl}/models/${encodeURIComponent(config.rvcModel)}`, { method: "POST", signal: AbortSignal.timeout(5_000) });
+            const r = await fetch(`${config.rvcUrl}/models/${encodeURIComponent(config.rvcModel)}`, {
+              method: "POST", signal: AbortSignal.timeout(5_000),
+            });
             if (r.ok) {
               config.rvcEnabled = true;
-              facade?.swapProcessor(new RVCProcessor(config.rvcUrl));
+              engine.invalidateFacade();
             }
-          } catch { /* RVC load failed, stay disabled */ }
+          } catch { /* RVC load failed */ }
         }
         updateStatus(ctx);
-
-        // Prewarm AudioLRU in parallel — synthesis concurrent, playback serial via queue
-        if (facade && config.outputLang === "ru" && config.rvcEnabled) {
-          Promise.all(PREWARM_RU.map(p => facade!.speak(p).catch(() => {})))
-            .then(() => ctx.ui.notify(
-              `Аудио кэш прогрет (${PREWARM_RU.length} фраз)`, "info",
-            ));
-        }
+        engine.prewarm().then(() =>
+          ctx.ui.notify(`Аудио кэш прогрет (${(await import("./core/config.ts")).PREWARM_RU.length} фраз)`, "info"),
+        );
       })
       .catch(() => {});
   });
 
-  // ── Stream buffering ───────────────────────────────────────────────────────
   pi.on("message_update", (_event, _ctx) => {
-    if (!config.enabled) return;
     if (_event.message.role !== "assistant") return;
     const ev = _event.assistantMessageEvent;
     if (!ev || (ev as any).type !== "text_delta") return;
-    const delta: string = (ev as any).delta ?? "";
-    if (!delta) return;
-
-    for (const ch of delta) {
-      if (ch === "`") { state.backtickRun++; }
-      else {
-        if (state.backtickRun > 0) resolveBacktickRun(state);
-        if (state.codeDepth === 0 && !state.inInlineCode) state.buffer += ch;
-      }
-    }
-    const { chunks, remainder } = drainChunks(state.buffer);
-    state.buffer = remainder;
-    for (const chunk of chunks) enqueue(chunk);
+    engine.onDelta((ev as any).delta ?? "");
   });
 
   pi.on("message_end", (_event, _ctx) => {
-    if (!config.enabled) return;
     if (_event.message.role !== "assistant") return;
-    const leftover = state.buffer.trim();
-    state = freshState();
-    if (leftover.length > 2) enqueue(leftover);
+    engine.onMessageEnd();
   });
 
-  pi.on("agent_start", () => { state = freshState(); stopAudio(); });
+  pi.on("agent_start", () => engine.reset());
 
-  // ─── Commands ──────────────────────────────────────────────────────────────
+  // ── TUI panel helpers ──────────────────────────────────────────────────────
+
+  function panelState(): FoniPanelState {
+    return {
+      enabled:     config.enabled,
+      inputLang:   config.inputLang,
+      outputLang:  config.outputLang,
+      speed:       config.speed,
+      backendName: engine.status().backendName,
+      backendPref: config.backendPref,
+      rvcEnabled:  config.rvcEnabled,
+      rvcModel:    config.rvcModel,
+      rvcUrl:      config.rvcUrl,
+      rvcServerOk: null,
+    };
+  }
+
+  function panelActions(ctx: any): FoniPanelActions {
+    return {
+      toggle() {
+        config.enabled = !config.enabled;
+        if (config.enabled) engine.ensureFacade();
+        engine.reset();
+        updateStatus(ctx);
+      },
+      setLang(inputLang, outputLang) {
+        config.inputLang  = inputLang;
+        config.outputLang = outputLang;
+        engine.rebuildTranslator();
+        updateStatus(ctx);
+      },
+      setSpeed(speed) {
+        config.speed = speed;
+        engine.ensureFacade().then(f => f?.setOpts({ speed }));
+        updateStatus(ctx);
+      },
+      setBackendPref(pref) {
+        config.backendPref = pref as typeof config.backendPref;
+        engine.invalidateFacade();
+        engine.ensureFacade().then(() => updateStatus(ctx));
+      },
+      toggleRvc() {
+        if (!config.rvcEnabled && !config.rvcModel) return;
+        config.rvcEnabled = !config.rvcEnabled;
+        engine.ensureFacade().then(f =>
+          f?.swapProcessor(config.rvcEnabled ? new SmoothingProcessor(new RVCProcessor(config.rvcUrl)) : new IdentityProcessor()),
+        );
+        updateStatus(ctx);
+      },
+      async pickRvcModel() {
+        try {
+          const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(3000) });
+          const models = ((await r.json()) as { models?: string[] }).models ?? [];
+          if (!models.length) return;
+          const picked = await pickModel(ctx, models, config.rvcModel);
+          if (!picked) return;
+          config.rvcModel = picked;
+          const lr = await fetch(`${config.rvcUrl}/models/${encodeURIComponent(picked)}`, {
+            method: "POST", signal: AbortSignal.timeout(10_000),
+          });
+          if (lr.ok) {
+            const f = await engine.ensureFacade();
+            f?.swapProcessor(new SmoothingProcessor(new RVCProcessor(config.rvcUrl)));
+          }
+          updateStatus(ctx);
+        } catch { /* server unreachable */ }
+      },
+      async checkRvcServer() {
+        try {
+          const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) });
+          return r.ok;
+        } catch { return false; }
+      },
+    };
+  }
+
+  // ── Commands ───────────────────────────────────────────────────────────────
 
   pi.registerCommand("tts", {
     description: "Toggle TTS | /tts test | /tts status | /tts voice | /tts speed | /tts lang en|ru | /tts backend | /tts token | /tts rvc on|off|model|url|models | /tts mat on|off|<prob> | /tts interject on|off|<prob> | /tts stop",
     handler: async (args, ctx) => {
       const parts = (args ?? "").trim().split(/\s+/).filter(Boolean);
-      const sub = parts[0] ?? "";
-      const ok   = (s: string) => `  ok  ${s}`;
-      const err  = (s: string) => `  ERR ${s}`;
-      const warn = (s: string) => `  !   ${s}`;
-      const off  = (k: string, v: string) => `  -   ${k.padEnd(12)} ${v}`;
-      const on   = (k: string, v: string) => `  ok  ${k.padEnd(12)} ${v}`;
+      const sub   = parts[0] ?? "";
+      const ok    = (s: string) => `  ok  ${s}`;
+      const err   = (s: string) => `  ERR ${s}`;
+      const warn  = (s: string) => `  !   ${s}`;
+      const on    = (k: string, v: string) => `  ok  ${k.padEnd(12)} ${v}`;
+      const off   = (k: string, v: string) => `  -   ${k.padEnd(12)} ${v}`;
 
-      // ── test ────────────────────────────────────────────────────────────
+      // ── test ──────────────────────────────────────────────────────────────
       if (sub === "test") {
-        const lines: string[] = ["Foni diagnostic:", ""];
+        const lines = ["Foni diagnostic:", ""];
         lines.push(config.enabled ? ok("TTS enabled") : err("TTS disabled -- run /tts to toggle on"));
-        const backend = await detectBackend();
+        const backend = await engine.detectBackend();
+        const player  = (await engine.ensureFacade())?.backendName;
         lines.push(backend ? ok(`backend: ${backend.name}`) : err("no backend -- install espeak-ng or start Silero/Kokoro"));
-        lines.push(player.detected() ? ok(`player: ${player.detected()}`) : err("no audio player (mpv / aplay / paplay)"));
         if (config.inputLang !== config.outputLang) {
           const t = await new MyMemoryTranslator(config.inputLang, config.outputLang).translate("Hello stalker");
-          lines.push(t !== "Hello stalker" ? ok(`translation: "${t}"`) : warn("MyMemory unreachable"));
+          lines.push(t !== "Hello stalker" ? ok(`translation: "${t}"`) : warn("translation unreachable"));
         } else {
-          lines.push(ok(`language: ${config.outputLang.toUpperCase()} (passthrough — no translation)`));
+          lines.push(ok(`language: ${config.outputLang.toUpperCase()} (passthrough)`));
         }
         if (config.rvcEnabled) {
           try {
@@ -299,64 +200,52 @@ export default async function (pi: ExtensionAPI) {
           lines.push(warn("RVC disabled -- /tts rvc on to enable bandit voice"));
         }
         ctx.ui.notify(lines.join("\n"), "info");
-        if (backend && player.detected()) {
-          facade = new SpeakFacade(
-            new IdentityTranslator(),
-            backend,
-            new IdentityProcessor(),
-            player,
-            { voice: config.voice, speed: config.speed },
-          );
-          await facade.speak("Test. One two three.", (m) => ctx.ui.notify(`  > ${m}`, "info"));
+        if (backend) {
+          const testFacade = new SpeakFacade(new IdentityTranslator(), backend, new IdentityProcessor(),
+            (await engine.ensureFacade() as any)?.player ?? { play: async () => {}, detected: () => "none" },
+            { voice: config.voice, speed: config.speed });
+          await testFacade.speak("Test. One two three.", (m) => ctx.ui.notify(`  > ${m}`, "info"));
         }
         return;
       }
 
-      // ── status ──────────────────────────────────────────────────────────
+      // ── status ─────────────────────────────────────────────────────────────
       if (sub === "status") {
-        const b = facade?.backendName ?? "not detected";
         ctx.ui.notify([
           "Foni status:", "",
-          (config.enabled ? on : off)("enabled",  String(config.enabled)),
-          on("backend",   b),
-          on("voice",     config.voice),
-          on("speed",     String(config.speed)),
-          on("language",  config.inputLang === config.outputLang
+          (config.enabled ? on : off)("enabled", String(config.enabled)),
+          on("backend",  engine.status().backendName),
+          on("voice",    config.voice),
+          on("speed",    String(config.speed)),
+          on("language", config.inputLang === config.outputLang
             ? config.outputLang.toUpperCase()
-            : `${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`
-          ),
-          on("player",    player.detected() ?? "none"),
+            : `${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`),
           "",
           config.rvcEnabled ? on("rvc", `${config.rvcModel} @ ${config.rvcUrl}`) : off("rvc", "disabled"),
-          off("silero",   config.sileroUrl),
-          off("kokoro",   config.kokoroUrl),
+          off("silero", config.sileroUrl),
+          off("kokoro", config.kokoroUrl),
           config.fakeyouToken ? on("fakeyou", config.fakeyouToken) : off("fakeyou", "no token"),
           "",
-          on("audio cache", facade ? facade.cacheStats() : "not built"),
+          on("audio cache", engine.cacheStats()),
         ].join("\n"), "info");
         return;
       }
 
-      // ── cache ──────────────────────────────────────────────────────────────────
+      // ── cache ──────────────────────────────────────────────────────────────
       if (sub === "cache") {
         if (parts[1] === "clear") {
-          facade?.cache.clear();
+          engine.clearCache();
           ctx.ui.notify("Аудио кэш очищен", "info");
         } else {
-          ctx.ui.notify(
-            facade
-              ? `Audio cache: ${facade.cacheStats()}\nUsage: /tts cache clear`
-              : "Cache: facade not built",
-            "info",
-          );
+          ctx.ui.notify(`Audio cache: ${engine.cacheStats()}\nUsage: /tts cache clear`, "info");
         }
         return;
       }
 
-      // ── voice / speed / lang ─────────────────────────────────────────────
+      // ── voice / speed / lang ───────────────────────────────────────────────
       if (sub === "voice") {
         config.voice = parts[1] ?? config.voice;
-        facade?.setOpts({ voice: config.voice });
+        engine.ensureFacade().then(f => f?.setOpts({ voice: config.voice }));
         ctx.ui.notify(`voice -> ${config.voice}`, "info");
         return;
       }
@@ -364,7 +253,7 @@ export default async function (pi: ExtensionAPI) {
         const n = parseFloat(parts[1] ?? "");
         if (!isNaN(n) && n > 0) {
           config.speed = Math.max(0.5, Math.min(3.0, n));
-          facade?.setOpts({ speed: config.speed });
+          engine.ensureFacade().then(f => f?.setOpts({ speed: config.speed }));
           ctx.ui.notify(`speed -> ${config.speed}`, "info");
         } else {
           ctx.ui.notify("Usage: /tts speed <0.5-3.0>", "warning");
@@ -372,43 +261,44 @@ export default async function (pi: ExtensionAPI) {
         return;
       }
       if (sub === "lang") {
-        const lang = parts[1] as "en" | "ru" | undefined;
-        if (lang !== "en" && lang !== "ru") { ctx.ui.notify("Usage: /tts lang en|ru", "warning"); return; }
+        const a = parts[1] as "en" | "ru" | undefined;
+        const b = parts[2] as "en" | "ru" | undefined;
+        const valid = (x?: string): x is "en" | "ru" => x === "en" || x === "ru";
+        if (!valid(a)) { ctx.ui.notify("Usage: /tts lang en|ru [en|ru]", "warning"); return; }
         config.inputLang  = a;
         config.outputLang = valid(b) ? b : a;
-        rebuildTranslator();
-        ctx.ui.notify(`language -> ${lang === "ru" ? "RU" : "EN"}`, "info");
+        engine.rebuildTranslator();
+        ctx.ui.notify(`language -> ${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`, "info");
         updateStatus(ctx);
         return;
       }
 
-      // ── mat ─────────────────────────────────────────────────────────────────
+      // ── mat ────────────────────────────────────────────────────────────────
       if (sub === "mat") {
         if (config.outputLang !== "ru") { ctx.ui.notify("Mat only works with Russian output -- /tts lang ru first", "warning"); return; }
         const matSub = parts[1] ?? "";
         if (matSub === "on" || matSub === "off") {
           config.matEnabled = matSub === "on";
-          rebuildTranslator();
+          engine.rebuildTranslator();
           ctx.ui.notify(`Mat ${config.matEnabled ? `включён (prob=${config.matProb})` : "выключен"}`, "info");
+          return;
+        }
+        if (matSub === "stretch") {
+          const sp = parseFloat(parts[2] ?? "");
+          if (!isNaN(sp) && sp >= 0 && sp <= 1) {
+            config.matStretch = sp;
+            engine.rebuildTranslator();
+            ctx.ui.notify(`Mat stretch probability -> ${sp}`, "info");
+          } else {
+            ctx.ui.notify(`Mat stretch: ${config.matStretch}\nUsage: /tts mat stretch 0.0-1.0`, "info");
+          }
           return;
         }
         const prob = parseFloat(matSub);
         if (!isNaN(prob) && prob >= 0 && prob <= 1) {
           config.matProb = prob;
-          rebuildTranslator();
+          engine.rebuildTranslator();
           ctx.ui.notify(`Mat probability -> ${prob}`, "info");
-          return;
-        }
-        const stretchSub = matSub === "stretch" ? (parts[2] ?? "") : "";
-        if (matSub === "stretch") {
-          const sp = parseFloat(stretchSub);
-          if (!isNaN(sp) && sp >= 0 && sp <= 1) {
-            config.matStretch = sp;
-            rebuildTranslator();
-            ctx.ui.notify(`Mat stretch probability -> ${sp}`, "info");
-          } else {
-            ctx.ui.notify(`Mat stretch: ${config.matStretch}\nUsage: /tts mat stretch 0.0-1.0`, "info");
-          }
           return;
         }
         ctx.ui.notify(
@@ -419,33 +309,32 @@ export default async function (pi: ExtensionAPI) {
         return;
       }
 
-      // ── interject ────────────────────────────────────────────────────────
+      // ── interject ──────────────────────────────────────────────────────────
       if (sub === "interject") {
         if (config.outputLang !== "ru") { ctx.ui.notify("Интеръекции работают только с русским выводом -- /tts lang ru", "warning"); return; }
         const ijSub = parts[1] ?? "";
         if (ijSub === "on" || ijSub === "off") {
           config.interjectEnabled = ijSub === "on";
-          rebuildTranslator();
+          engine.rebuildTranslator();
           ctx.ui.notify(`Межметия: ${config.interjectEnabled ? `включены (prob=${config.interjectProb})` : "выключены"}`, "info");
           return;
         }
         const ijProb = parseFloat(ijSub);
         if (!isNaN(ijProb) && ijProb >= 0 && ijProb <= 1) {
           config.interjectProb = ijProb;
-          rebuildTranslator();
+          engine.rebuildTranslator();
           ctx.ui.notify(`Межметия probability -> ${ijProb}`, "info");
           return;
         }
         ctx.ui.notify(
-          `Межметия: ${config.interjectEnabled ? "включены" : "выключены"} (prob=${config.interjectProb})
-` +
+          `Межметия: ${config.interjectEnabled ? "включены" : "выключены"} (prob=${config.interjectProb})\n` +
           "Usage: /tts interject on|off | /tts interject 0.0-1.0",
           "info",
         );
         return;
       }
 
-      // ── backend ──────────────────────────────────────────────────────────
+      // ── backend ────────────────────────────────────────────────────────────
       if (sub === "backend") {
         const pref = parts[1];
         if (!["silero","kokoro","fakeyou","espeak","say","auto"].includes(pref ?? "")) {
@@ -453,60 +342,61 @@ export default async function (pi: ExtensionAPI) {
           return;
         }
         config.backendPref = pref as typeof config.backendPref;
-        facade = null;
-        const b = await detectBackend();
-        if (b) { facade = await buildFacade(); ctx.ui.notify(`backend -> ${b.name}`, "info"); }
-        else ctx.ui.notify("no backend available for that preference", "warning");
+        engine.invalidateFacade();
+        const f = await engine.ensureFacade();
+        ctx.ui.notify(f ? `backend -> ${f.backendName}` : "no backend available for that preference", f ? "info" : "warning");
         updateStatus(ctx);
         return;
       }
 
-      // ── token (FakeYou) ──────────────────────────────────────────────────
+      // ── token (FakeYou) ────────────────────────────────────────────────────
       if (sub === "token") {
         const token = parts[1] ?? "";
         if (!token) { ctx.ui.notify("Usage: /tts token weight_xxxx", "warning"); return; }
         config.fakeyouToken = token;
-        facade = null;
-        ctx.ui.notify(`FakeYou token set. Run /tts backend fakeyou to activate.`, "info");
+        engine.invalidateFacade();
+        ctx.ui.notify("FakeYou token set. Run /tts backend fakeyou to activate.", "info");
         return;
       }
 
-      // ── search (FakeYou) ─────────────────────────────────────────────────
+      // ── search (FakeYou) ───────────────────────────────────────────────────
       if (sub === "search") {
         const query = parts.slice(1).join(" ").toLowerCase();
         if (!query) { ctx.ui.notify("Usage: /tts search <query>", "warning"); return; }
         try {
           const r = await fetch("https://api.fakeyou.com/tts/list", { signal: AbortSignal.timeout(10_000) });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          const { models } = await r.json() as { models: Array<{ model_token: string; title: string; ietf_language_tag: string }> };
+          const { models } = await r.json() as { models: Array<{ model_token: string; title: string }> };
           const hits = models.filter(m => m.title.toLowerCase().includes(query)).slice(0, 10);
-          ctx.ui.notify(hits.length
-            ? `FakeYou "${query}":\n${hits.map(m => `${m.model_token}  ${m.title}`).join("\n")}`
-            : `No TTS voices found for "${query}"`,
-            hits.length ? "info" : "warning");
+          ctx.ui.notify(
+            hits.length
+              ? `FakeYou "${query}":\n${hits.map(m => `${m.model_token}  ${m.title}`).join("\n")}`
+              : `No TTS voices found for "${query}"`,
+            hits.length ? "info" : "warning",
+          );
         } catch (e: any) { ctx.ui.notify(`search failed: ${e?.message}`, "warning"); }
         return;
       }
 
-      // ── rvc ──────────────────────────────────────────────────────────────
+      // ── rvc ────────────────────────────────────────────────────────────────
       if (sub === "rvc") {
         const rvcSub = parts[1] ?? "";
         if (rvcSub === "on" || rvcSub === "off") {
           if (rvcSub === "on" && !config.rvcModel) { ctx.ui.notify("Set a model first: /tts rvc model <name>", "warning"); return; }
           config.rvcEnabled = rvcSub === "on";
-          facade?.swapProcessor(config.rvcEnabled ? new RVCProcessor(config.rvcUrl) : new IdentityProcessor());
+          const f = await engine.ensureFacade();
+          f?.swapProcessor(config.rvcEnabled ? new SmoothingProcessor(new RVCProcessor(config.rvcUrl)) : new IdentityProcessor());
           ctx.ui.notify(`RVC ${config.rvcEnabled ? "enabled" : "disabled"}`, "info");
           updateStatus(ctx);
           return;
         }
         if (rvcSub === "model") {
           if (!parts[2]) {
-            // No arg → interactive picker
             try {
-              const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(3000) });
+              const r    = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(3000) });
               const data = await r.json() as { models?: string[] };
-              const models: string[] = data.models ?? [];
-              if (models.length === 0) { ctx.ui.notify("No models on RVC server -- download one first", "warning"); return; }
+              const models = data.models ?? [];
+              if (!models.length) { ctx.ui.notify("No models on RVC server -- download one first", "warning"); return; }
               const picked = await pickModel(ctx, models, config.rvcModel);
               if (!picked) return;
               config.rvcModel = picked;
@@ -514,21 +404,25 @@ export default async function (pi: ExtensionAPI) {
           } else {
             config.rvcModel = parts[2];
           }
-          if (!config.rvcModel) { ctx.ui.notify("Usage: /tts rvc model <name>", "warning"); return; }
           try {
-            const r = await fetch(`${config.rvcUrl}/models/${encodeURIComponent(config.rvcModel)}`, { method: "POST", signal: AbortSignal.timeout(10_000) });
+            const r = await fetch(`${config.rvcUrl}/models/${encodeURIComponent(config.rvcModel)}`, {
+              method: "POST", signal: AbortSignal.timeout(10_000),
+            });
             ctx.ui.notify(r.ok ? `RVC model loaded: ${config.rvcModel}` : `RVC server ${r.status}`, r.ok ? "info" : "warning");
-            if (r.ok) facade?.swapProcessor(new RVCProcessor(config.rvcUrl));
+            if (r.ok) {
+              const f = await engine.ensureFacade();
+              f?.swapProcessor(new SmoothingProcessor(new RVCProcessor(config.rvcUrl)));
+            }
           } catch { ctx.ui.notify(`RVC unreachable at ${config.rvcUrl}`, "warning"); }
           updateStatus(ctx);
           return;
         }
-        if (rvcSub === "url") { config.rvcUrl = parts[2] ?? config.rvcUrl; ctx.ui.notify(`RVC URL -> ${config.rvcUrl}`, "info"); return; }
+        if (rvcSub === "url")    { config.rvcUrl = parts[2] ?? config.rvcUrl; ctx.ui.notify(`RVC URL -> ${config.rvcUrl}`, "info"); return; }
         if (rvcSub === "models") {
           try {
-            const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(5_000) });
+            const r    = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(5_000) });
             const data = await r.json() as { models?: string[] } | string[];
-            const list: string[] = Array.isArray(data) ? data : (data.models ?? []);
+            const list = Array.isArray(data) ? data : (data.models ?? []);
             ctx.ui.notify(list.length ? `RVC models:\n${list.join("\n")}` : "No models found", "info");
           } catch (e: any) { ctx.ui.notify(`RVC unreachable: ${e?.message}`, "warning"); }
           return;
@@ -537,75 +431,20 @@ export default async function (pi: ExtensionAPI) {
         return;
       }
 
-      // ── stop ─────────────────────────────────────────────────────────────
-      if (sub === "stop") { stopAudio(); ctx.ui.notify("TTS stopped", "info"); return; }
+      // ── stop ───────────────────────────────────────────────────────────────
+      if (sub === "stop") { engine.stop(); ctx.ui.notify("TTS stopped", "info"); return; }
 
-      // ── panel (no args) ──────────────────────────────────────────────────
-      if (!facade) facade = await buildFacade();
-      const panelState = (): FoniPanelState => ({
-        enabled:      config.enabled,
-        inputLang:    config.inputLang,
-        outputLang:   config.outputLang,
-        speed:        config.speed,
-        backendName:  facade?.backendName ?? "none",
-        backendPref:  config.backendPref,
-        rvcEnabled:   config.rvcEnabled,
-        rvcModel:     config.rvcModel,
-        rvcUrl:       config.rvcUrl,
-        rvcServerOk:  null,
-      });
-      const panelActions: FoniPanelActions = {
-        toggle() {
-          config.enabled = !config.enabled;
-          if (config.enabled && !facade) buildFacade().then(f => { facade = f; });
-          stopAudio();
-          state = freshState();
-          updateStatus(ctx);
-        },
-        setLang(inputLang, outputLang) {
-          config.inputLang  = inputLang;
-          config.outputLang = outputLang;
-          rebuildTranslator();
-          updateStatus(ctx);
-        },
-        setSpeed(speed) {
-          config.speed = speed;
-          facade?.setOpts({ speed });
-          updateStatus(ctx);
-        },
-        setBackendPref(pref) {
-          config.backendPref = pref as typeof config.backendPref;
-          facade = null;
-          buildFacade().then(f => { facade = f; updateStatus(ctx); });
-        },
-        toggleRvc() {
-          if (!config.rvcEnabled && !config.rvcModel) return;
-          config.rvcEnabled = !config.rvcEnabled;
-          facade?.swapProcessor(config.rvcEnabled ? new RVCProcessor(config.rvcUrl) : new IdentityProcessor());
-          updateStatus(ctx);
-        },
-        async pickRvcModel() {
-          try {
-            const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(3000) });
-            const data = await r.json() as { models?: string[] };
-            const models = data.models ?? [];
-            if (!models.length) return;
-            const picked = await pickModel(ctx, models, config.rvcModel);
-            if (!picked) return;
-            config.rvcModel = picked;
-            const lr = await fetch(`${config.rvcUrl}/models/${encodeURIComponent(picked)}`, { method: "POST", signal: AbortSignal.timeout(10_000) });
-            if (lr.ok) facade?.swapProcessor(new RVCProcessor(config.rvcUrl));
-            updateStatus(ctx);
-          } catch { /* server unreachable */ }
-        },
-        async checkRvcServer() {
-          try {
-            const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) });
-            return r.ok;
-          } catch { return false; }
-        },
-      };
-      await openFoniPanel(ctx, panelState(), panelActions);
+      // ── toggle (no sub) / open panel ───────────────────────────────────────
+      if (sub === "") {
+        config.enabled = !config.enabled;
+        if (config.enabled) engine.ensureFacade();
+        engine.reset();
+        updateStatus(ctx);
+        return;
+      }
+
+      await engine.ensureFacade();
+      await openFoniPanel(ctx, panelState(), panelActions(ctx));
       updateStatus(ctx);
     },
   });

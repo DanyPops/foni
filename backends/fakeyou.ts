@@ -1,4 +1,13 @@
-import { buildFakeYouHeaders, FAKEYOU_CDN } from "../lib.ts";
+export const FAKEYOU_CDN = "https://storage.googleapis.com/vocodes-public";
+
+function buildFakeYouHeaders(apiKey: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+  return headers;
+}
 import type { TTSBackend, SynthOptions } from "../pipeline/interfaces.ts";
 
 export class FakeYouBackend implements TTSBackend {
