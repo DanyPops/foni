@@ -1,0 +1,33 @@
+{
+  "_description": "Desired state tensor — averaged from 3 STALKER studio recordings",
+  "_sources": [
+    "sidorovich-trader1a",
+    "cherevatenko-barmen-greet",
+    "cherevatenko-barmen-fare"
+  ],
+  "voice": {
+    "f0MeanHz": 202.07442440936234,
+    "f0StdDevHz": 151.76369744832172,
+    "f0SlopeSemi": 8.987188717075362,
+    "f0DeltaSigmaHz": 137.47496365758175,
+    "voicedRatio": 0.5951720342910102,
+    "hnrDbMean": -0.9450561457370893,
+    "hnrDbMax": 3.5543797759626745,
+    "cppMean": 0.23731922909060324,
+    "jitter": 0.19439979967795906,
+    "shimmer": 0.12966287473971383
+  },
+  "spectral": {
+    "rmsDb": -12.631369944606254,
+    "spectralSlope": -7.259097260176797,
+    "spectralTilt": 39.936165149139256,
+    "crestFactor": 12.214634582726253,
+    "presenceRatio": 0.061288074943594506,
+    "hfRatio": 0.019904686718377848,
+    "lfRatio": 0.8511168352204628,
+    "noiseFloorRatio": 0.03489221995434265
+  },
+  "roboticness": {
+    "targetScore": 0
+  }
+}

@@ -1,5 +1,7 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync }   from "node:child_process";
 import type { AudioProcessor } from "./interfaces.ts";
+import { getLogger }   from "../core/logger.ts";
+import { rms, parseWav } from "./audio-utils.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -13,9 +15,13 @@ export const DEFAULT_RVC_TIMEOUT_MS = 60_000;
 
 /**
  * Run an ffmpeg audio filter chain on a WAV buffer via stdio pipes.
- * Returns the original buffer unchanged if ffmpeg is unavailable or errors.
+ * Returns the original buffer unchanged if ffmpeg is unavailable or errors,
+ * and emits a WARN log so silent fallbacks are never invisible.
  */
 function ffmpegFilter(input: Buffer, af: string): Buffer {
+  const log = getLogger();
+  log.debug("ffmpeg", "apply filter", { len: input.length, af: af.slice(0, 120) });
+
   const result = spawnSync(
     "ffmpeg",
     ["-hide_banner", "-loglevel", "error",
@@ -24,7 +30,19 @@ function ffmpegFilter(input: Buffer, af: string): Buffer {
      "-f", "wav", "pipe:1"],
     { input, maxBuffer: FFMPEG_MAX_BUFFER_BYTES },
   );
-  if (result.error || result.status !== 0 || !result.stdout?.length) return input;
+
+  if (result.error || result.status !== 0 || !result.stdout?.length) {
+    const stderr = result.stderr?.toString().trim() ?? "";
+    log.warn("ffmpeg", "filter failed — returning identity", {
+      status: result.status,
+      error:  result.error?.message,
+      stderr: stderr.slice(0, 200),
+      af:     af.slice(0, 120),
+    });
+    return input;
+  }
+
+  log.debug("ffmpeg", "filter OK", { inLen: input.length, outLen: result.stdout.length });
   return result.stdout as Buffer;
 }
 
@@ -215,6 +233,29 @@ export interface SmoothingOptions {
   /** Vibrato modulation depth 0–1. 0.003 = ±0.3% pitch variation. 0 = off. */
   vibratoDepth: number;
 
+  // ── Output normalisation & dynamics ceiling ──────────────────────────────
+
+  /**
+   * loudnorm target integrated loudness in LUFS (negative number).
+   * −14 LUFS ≈ −12 to −13 dBFS RMS, matching STALKER studio recordings.
+   * 0 = use bare loudnorm (old behaviour). Off when normalize=false.
+   */
+  rmsTargetLufs: number;
+
+  /**
+   * Hard limiter ceiling in dBFS (negative number, e.g. −1).
+   * Caps peaks without changing average level — reduces crest factor.
+   * 0 = off. Applied after loudnorm.
+   */
+  limiterDb: number;
+
+  /**
+   * Silence-trim threshold in dBFS for edge silence removal.
+   * Strips leading/trailing silence below this level — closes voiced-ratio gap.
+   * −40 = trim everything below −40 dBFS at the edges. 0 = off.
+   */
+  silenceTrimDb: number;
+
   normalize: boolean;
 }
 
@@ -252,10 +293,11 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   airBoostDb:    0,
   airFreq:       8000,
 
-  // Harmonic saturation — exciter moved to 1.2kHz (warmth, not harshness)
+  // Harmonic saturation — aexciter valid range: 2000–12000 Hz
+  // 2kHz = lowest valid value; warm character without high harshness
   saturationDrive:  1.5,
   saturationAmount: 1.0,
-  saturationFreq:   1200,
+  saturationFreq:   2000,
 
   // Spatial depth — shorter/subtler than round 3
   phaserDepth:      0.08,
@@ -265,15 +307,25 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   reverbOutputGain: 0.88,
 
   // De-robotisation — round 5 all-derobot stack baked in
-  breathinessDb: -45,
-  tiltLowDb:     2,
-  tiltHighDb:    -2,
+  // FON-TSK-51: tilt increased toward STALKER baseline (target 40 dB vs our 22–32 dB)
+  // FON-TSK-52: breathiness nudged quieter so silenceTrimDb doesn’t preserve noise
+  breathinessDb: -48,
+  tiltLowDb:     5,
+  tiltHighDb:    -4,
   presenceDb:    1.5,
   deEssDb:       4,
 
   // Pitch micro-variation — off by default (round 6)
   vibratoFreq:  0,
   vibratoDepth: 0,
+
+  // Output normalisation — FON-TSK-48/49/50
+  // Target −14 LUFS ≈ −12 to −13 dBFS RMS (matches STALKER baseline −12.6 dBFS)
+  rmsTargetLufs: -14,
+  // Hard limiter at −1 dBFS — tames peaks, closes crest-factor gap (FON-TSK-50)
+  limiterDb:     -1,
+  // Trim edge silence — closes voiced-ratio gap from 28% → ~55% (FON-TSK-49)
+  silenceTrimDb: -40,
 
   // Final
   normalize: true,
@@ -362,6 +414,9 @@ function describeField(
     case "highpassFreq":       return `highpass ${hz(Number(val))}`;
     case "fadeSecs":           return `fade ${val}s`;
     case "padSecs":            return `pad ${val}s`;
+    case "rmsTargetLufs":     return `loudnorm I=${val}LUFS`;
+    case "limiterDb":          return `limit ${val}dBFS`;
+    case "silenceTrimDb":      return val ? `silence-trim ${val}dB` : "no-silence-trim";
     case "normalize":          return val ? "loudnorm" : "no-loudnorm";
     default:                   return `${key}=${val}`;
   }
@@ -424,10 +479,21 @@ export class SmoothingProcessor implements AudioProcessor {
       reverbMs, reverbDecay, reverbInputGain, reverbOutputGain,
       breathinessDb, tiltLowDb, tiltHighDb, presenceDb, deEssDb,
       vibratoFreq, vibratoDepth,
-      normalize,
+      normalize, rmsTargetLufs, limiterDb, silenceTrimDb,
     } = this.opts;
 
     const parts: string[] = [];
+
+    // 0. Edge-silence trim — strip espeak leading/trailing silence before processing.
+    //    Closes voiced-ratio gap (28% → ~55%) without touching internal pauses.
+    if (silenceTrimDb < 0) {
+      const th = dbToLinear(silenceTrimDb).toFixed(6);
+      // start_periods=1: only leading edge; stop_periods=-1: trailing edge
+      parts.push(
+        `silenceremove=start_periods=1:start_duration=0.05:start_threshold=${th}` +
+        `:stop_periods=-1:stop_duration=0.1:stop_threshold=${th}:detection=rms`,
+      );
+    }
 
     // 1. Fade in / out — only if non-zero (afade=d:0 silences the signal)
     if (fadeSecs > 0) {
@@ -522,23 +588,57 @@ export class SmoothingProcessor implements AudioProcessor {
       );
     }
 
-    // 9. Room reverb — spatial placement last before normalize
+    // 9. Room reverb — spatial placement before normalize
     if (reverbMs > 0 && reverbDecay > 0) {
       parts.push(
         `aecho=${reverbInputGain}:${reverbOutputGain}:${reverbMs}:${reverbDecay}`,
       );
     }
 
-    // 10. Loudnorm — always the final stage
-    if (normalize) parts.push("loudnorm");
+    // 10. Loudnorm — linear=true required for single-pass pipe mode (ffmpeg 7.x).
+    //     Without linear=true the two-pass algorithm applies zero gain in a pipe.
+    if (normalize) {
+      const lufs = rmsTargetLufs !== 0 ? rmsTargetLufs : -24;
+      parts.push(`loudnorm=I=${lufs}:TP=-1:LRA=11:linear=true`);
+    }
 
-    return parts.join(",");
+    // 11. Hard limiter — tames residual peaks after loudnorm (FON-TSK-50)
+    if (limiterDb < 0) {
+      const limit = dbToLinear(limiterDb).toFixed(6);
+      parts.push(`alimiter=limit=${limit}:attack=5:release=50:level_in=1:level_out=1`);
+    }
+
+    // Guard: ffmpeg rejects an empty -af string. Return identity filter instead.
+    return parts.length > 0 ? parts.join(",") : "anull";
   }
 
   async process(input: Buffer): Promise<Buffer> {
-    const padded = ffmpegFilter(input, this.buildPreFilter());
+    const log = getLogger();
+
+    const toDb = (buf: Buffer): string => {
+      try {
+        const { samples } = parseWav(buf);
+        const r = rms(samples);
+        return r > 0 ? `${(20 * Math.log10(r)).toFixed(1)} dBFS` : "-∞ dBFS";
+      } catch { return "?? dBFS"; }
+    };
+
+    log.debug("SmoothingProcessor", "process start", { inputRms: toDb(input) });
+
+    const preFilter = this.buildPreFilter();
+    const padded    = ffmpegFilter(input, preFilter);
+    log.debug("SmoothingProcessor", "post-pad", { rms: toDb(padded) });
+
     const rvcOut = await this.inner.process(padded);
-    return ffmpegFilter(rvcOut, this.buildPostFilter());
+    log.info("SmoothingProcessor", "post-RVC",
+      { inputRms: toDb(padded), outputRms: toDb(rvcOut) });
+
+    const postFilter = this.buildPostFilter();
+    const final      = ffmpegFilter(rvcOut, postFilter);
+    log.info("SmoothingProcessor", "post-filter",
+      { rvcRms: toDb(rvcOut), finalRms: toDb(final) });
+
+    return final;
   }
 }
 
@@ -559,6 +659,8 @@ export class RVCProcessor implements AudioProcessor {
   ) {}
 
   async process(input: Buffer): Promise<Buffer> {
+    const log   = getLogger();
+    const start = Date.now();
     try {
       const resp = await fetch(`${this.url}/convert`, {
         method:  "POST",
@@ -566,9 +668,20 @@ export class RVCProcessor implements AudioProcessor {
         body:    JSON.stringify({ audio_data: input.toString("base64") }),
         signal:  AbortSignal.timeout(this.timeoutMs),
       });
-      if (!resp.ok) return input;
-      return Buffer.from(await resp.arrayBuffer());
-    } catch {
+      const ms = Date.now() - start;
+      if (!resp.ok) {
+        log.warn("RVCProcessor", "HTTP error — returning identity",
+          { status: resp.status, ms, url: this.url });
+        return input;
+      }
+      const out = Buffer.from(await resp.arrayBuffer());
+      log.info("RVCProcessor", "convert OK",
+        { ms, inBytes: input.length, outBytes: out.length });
+      return out;
+    } catch (err) {
+      const ms = Date.now() - start;
+      log.warn("RVCProcessor", "request failed — returning identity",
+        { ms, error: String(err), url: this.url });
       return input;
     }
   }

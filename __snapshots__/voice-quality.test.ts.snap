@@ -1,0 +1,12 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`roboticness snapshot — pure 200 Hz sine > matches snapshot 1`] = `
+"label: Mechanical
+score: 80.0
+  F0 monotonicity: σ = 0.0 Hz → penalty=30.0
+  Jitter deficit: 0.000 % → penalty=25.0
+  HNR excess: 5.2 dB (max 5.2 dB) → penalty=0.0
+  F0 contour: slope -0.0 st, Δ-σ 0.0 Hz → penalty=15.0
+  Shimmer deficit: 0.00 % → penalty=10.0
+recommendation: Primary factor: F0 monotonicity — Pitch barely varies — sounds mechanical"
+`;
