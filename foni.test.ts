@@ -70,10 +70,8 @@ describe("drainChunks", () => {
     expect(remainder).toBe("Hello there");
   });
 
-  it("splits on sentence boundary (period + space + capital)", () => {
-    const { chunks, remainder } = drainChunks(
-      "Hello there. World is great."
-    );
+  it("splits on sentence boundary (period + space)", () => {
+    const { chunks, remainder } = drainChunks("Hello there. World is great.");
     expect(chunks).toContain("Hello there.");
     expect(remainder).toContain("World");
   });
@@ -89,12 +87,38 @@ describe("drainChunks", () => {
     expect(chunks.every((c) => c.length > 2)).toBe(true);
   });
 
-  it("handles multiple sentences", () => {
+  it("handles multiple English sentences", () => {
     const { chunks } = drainChunks(
       "One sentence. Two sentence. Three sentence. Incomplete"
     );
     expect(chunks.length).toBeGreaterThanOrEqual(2);
     expect(chunks[0]).toBe("One sentence.");
+  });
+
+  it("splits Russian sentences (Cyrillic capitals — previously broken)", () => {
+    const { chunks, remainder } = drainChunks(`Да. Нет. Хорошо. Незаконченный`);
+    expect(chunks).toContain("Да.");
+    expect(chunks).toContain("Нет.");
+    expect(chunks).toContain("Хорошо.");
+    expect(remainder).toBe("Незаконченный");
+  });
+
+  it("each Russian sentence becomes a separate cache key", () => {
+    const text = "Нужно сделать. Понял. Готово.";
+    const { chunks } = drainChunks(text + " ");
+    // Previously returned 1 chunk (whole paragraph)
+    // Now returns 3 separate cacheable sentences
+    expect(chunks).toHaveLength(3);
+    expect(chunks[0]).toBe("Нужно сделать.");
+    expect(chunks[1]).toBe("Понял.");
+    expect(chunks[2]).toBe("Готово.");
+  });
+
+  it("splits on ! and ? too", () => {
+    const { chunks } = drainChunks("Ого! Ну и ну? Хорошо. Дальше");
+    expect(chunks).toContain("Ого!");
+    expect(chunks).toContain("Ну и ну?");
+    expect(chunks).toContain("Хорошо.");
   });
 });
 

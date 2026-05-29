@@ -30,7 +30,10 @@ export function drainChunks(text: string): DrainResult {
   let remaining = text;
 
   const paraRe = /\n\n+/;
-  const sentRe = /([.!?])\s+(?=[A-Z"'(])/;
+  // Language-agnostic split: any .!? followed by whitespace.
+  // The previous lookahead (?=[A-Z]) only matched English capitals,
+  // silently treating entire Russian paragraphs as single unsplit chunks.
+  const sentRe = /([.!?!?])\s+/;
 
   let safety = 0;
   while (safety++ < 50) {
