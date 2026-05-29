@@ -29,7 +29,7 @@ const MIN_SPEAKABLE_LENGTH = 3;
 const LOG_PREVIEW_CHARS = 50;
 
 /** Total bytes the audio LRU cache may hold before evicting. */
-const AUDIO_CACHE_MAX_BYTES = 64 * 1024 * 1024; // 64 MB
+export const AUDIO_CACHE_MAX_BYTES = 64 * 1024 * 1024; // 64 MB
 
 export type Log = (msg: string) => void;
 
