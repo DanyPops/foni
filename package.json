@@ -5,9 +5,16 @@
     "extensions": ["./index.ts"]
   },
   "scripts": {
-    "test": "vitest run",
+    "test":      "vitest run",
     "test:watch": "vitest",
-    "demo": "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run pipeline.e2e -t 'cheeki breeki'"
+    "demo":      "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run pipeline.e2e -t 'cheeki breeki'",
+    "listen:1":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '1. baseline'",
+    "listen:2":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '2. de-mud'",
+    "listen:3":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '3. consonant-forward'",
+    "listen:4":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '4. broadcast'",
+    "listen:5":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '5. natural-dry'",
+    "listen:6":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '6. air-forward'",
+    "listen:all": "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e"
   },
   "devDependencies": {
     "vitest": "^2.0.0"
