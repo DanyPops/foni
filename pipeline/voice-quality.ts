@@ -174,16 +174,26 @@ export function extractF0(
     let peakLag = chosen.lag;
     let peakVal = chosen.val;
 
-    // parabolic interpolation for sub-sample F0 accuracy
+    // Parabolic interpolation for sub-sample F0 accuracy.
+    // Guard 1: raise denom threshold — 1e-4 prevents blow-up on flat/noisy AC.
+    // Guard 2: clamp result to [minLag, maxLag] — the boundary condition at
+    //   minLag=44 allows r[43] into the formula, which can extrapolate peakLag
+    //   to near-zero → f0Hz = 22050/0.001 = millions Hz.
     const iLag = Math.round(peakLag);
     if (iLag > 0 && iLag < r.length - 1) {
       const alpha = r[iLag - 1]!, beta = r[iLag]!, gamma = r[iLag + 1]!;
       const denom = alpha - 2 * beta + gamma;
-      if (Math.abs(denom) > 1e-10) peakLag = iLag + 0.5 * (alpha - gamma) / denom;
+      if (Math.abs(denom) > 1e-4) {
+        const corrected = iLag + 0.5 * (alpha - gamma) / denom;
+        // Guard 2: only accept interpolation if it stays in valid lag range
+        if (corrected >= minLag && corrected <= maxLag) peakLag = corrected;
+      }
     }
 
-    const voiced = peakVal > 0.30;
-    const f0Hz   = voiced ? sampleRate / peakLag : 0;
+    // Guard 3: belt-and-suspenders — reject any voiced frame whose F0 escapes bounds.
+    const inRange = peakLag >= minLag && peakLag <= maxLag;
+    const voiced  = peakVal > 0.30 && inRange;
+    const f0Hz    = voiced ? sampleRate / peakLag : 0;
     // HNR from normalised AC: r = H/(H+N) → HNR = r/(1−r)
     const hnrDb  = voiced && peakVal < 1
       ? 10 * Math.log10(peakVal / (1 - peakVal))

@@ -368,6 +368,55 @@ describe("asciiF0Contour", () => {
   });
 });
 
+
+// ─── F0 bounds invariant (regression: parabolic interpolation blow-up) ───────
+//
+// Bug: denom ≈ 0 on flat AC → correction ±millions of samples → f0Hz = ∞.
+// Every voiced frame MUST produce F0 in [MIN_F0_HZ, MAX_F0_HZ] regardless of input.
+
+describe("extractF0 — F0 bounds invariant", () => {
+  const MIN_F0 = 75, MAX_F0 = 500;
+
+  function assertBounds(label: string, wav: Buffer): void {
+    const { samples } = parseWav(wav);
+    const escapes = extractF0(samples, SAMPLE_RATE)
+      .filter(f => f.voiced && (f.f0Hz < MIN_F0 || f.f0Hz > MAX_F0 || !isFinite(f.f0Hz)));
+    if (escapes.length > 0) {
+      const ex = escapes.slice(0, 3).map(f => f.f0Hz.toFixed(1) + "Hz@" + f.timeMs.toFixed(0) + "ms").join(", ");
+      throw new Error(label + ": " + escapes.length + " voiced frame(s) outside [" + MIN_F0 + "," + MAX_F0 + "]Hz: " + ex);
+    }
+  }
+
+  it("pure sine 200Hz stays in bounds",   () => assertBounds("sine",     generateSineWav(200, 1.0, SAMPLE_RATE)));
+  it("white noise stays in bounds",        () => assertBounds("noise",    generateNoiseWav(1.0, SAMPLE_RATE, 0.5)));
+  it("harmonic series stays in bounds",    () => assertBounds("harmonic", generateHarmonicWav(150, 1.0)));
+  it("near-silent stays in bounds",        () => assertBounds("quiet",    generateSineWav(300, 0.5, SAMPLE_RATE, 0.005)));
+
+  it("concatenated pitch jump stays in bounds", () => {
+    const a = parseWav(generateHarmonicWav(100, 0.3)).samples;
+    const b = parseWav(generateHarmonicWav(300, 0.3)).samples;
+    const combined = new Float32Array(a.length + b.length);
+    combined.set(a); combined.set(b, a.length);
+    const escapes = extractF0(combined, SAMPLE_RATE)
+      .filter(f => f.voiced && (f.f0Hz < MIN_F0 || f.f0Hz > MAX_F0 || !isFinite(f.f0Hz)));
+    expect(escapes).toHaveLength(0);
+  });
+
+  it("beating tones (near-flat AC window) stays in bounds", () => {
+    // 440Hz + 443Hz → 3Hz beat; AC oscillates between clear peak and near-flat.
+    // This specifically targets the parabolic interpolation denom≈0 blow-up.
+    const n = Math.floor(22050 * 0.8);
+    const samples = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      samples[i] = 0.4 * Math.sin(2 * Math.PI * 440 * i / 22050)
+                 + 0.4 * Math.sin(2 * Math.PI * 443 * i / 22050);
+    }
+    const escapes = extractF0(samples, 22050)
+      .filter(f => f.voiced && (f.f0Hz < 75 || f.f0Hz > 500 || !isFinite(f.f0Hz)));
+    expect(escapes).toHaveLength(0);
+  });
+});
+
 // ─── Snapshot: known sine roboticness profile ──────────────────────────────────
 
 describe("roboticness snapshot — pure 200 Hz sine", () => {
