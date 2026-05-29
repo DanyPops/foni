@@ -32,6 +32,24 @@ import { pickModel } from "./tui/model-picker.ts";
 import { openFoniPanel } from "./tui/foni-panel.ts";
 import type { FoniPanelState, FoniPanelActions } from "./tui/foni-panel.ts";
 
+// ─── Prewarm phrases ─────────────────────────────────────────────────────────
+//
+// Synthesised in parallel on session_start so the AudioLRU is warm
+// before Claude speaks. Short phrases = fast synthesis (~3s each);
+// all run concurrently so total prewarm time ≈ time of longest phrase.
+// Only activated when outputLang === 'ru' and rvcEnabled.
+
+const PREWARM_RU: string[] = [
+  // Acknowledgements
+  "Да.", "Нет.", "Хорошо.", "Понял.", "Окей.", "Готово.",
+  // Common short responses
+  "Сейчас.", "Подожди.", "Конечно.",
+  // Mat vocabulary (standalone high-frequency)
+  "Блядь.", "Пиздец.", "Ёпта.", "Сука.",
+  // Interjections
+  "Ого!", "Ах!", "Ух!", "Эх.",
+];
+
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const config = {
@@ -194,6 +212,14 @@ export default async function (pi: ExtensionAPI) {
           } catch { /* RVC load failed, stay disabled */ }
         }
         updateStatus(ctx);
+
+        // Prewarm AudioLRU in parallel — synthesis concurrent, playback serial via queue
+        if (facade && config.outputLang === "ru" && config.rvcEnabled) {
+          Promise.all(PREWARM_RU.map(p => facade!.speak(p).catch(() => {})))
+            .then(() => ctx.ui.notify(
+              `Аудио кэш прогрет (${PREWARM_RU.length} фраз)`, "info",
+            ));
+        }
       })
       .catch(() => {});
   });

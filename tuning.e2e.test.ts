@@ -1,19 +1,18 @@
 /**
- * Tuning iterations — variants on the natural-dry baseline.
+ * Tuning round 2 — variants on baseline v2 (natural-dry + de-harsh + punch).
  *
- * Baseline (DEFAULT_SMOOTHING): pad + fade + highpass(80Hz) + compression(1.5:1) + loudnorm.
- * Everything else off — RVC carries the voice character.
+ * Baseline: pad + fade + highpass(80Hz) + de-harsh(-2dB@3.5kHz)
+ *         + compression(2:1, 20ms attack, +1dB makeup) + loudnorm
  *
- * Each variant adds exactly ONE thing on top of the baseline.
- * Goal: find what improves over natural-dry without over-processing.
+ * Each variant tweaks ONE parameter to explore what's still missing.
  *
- *   npm run listen:1   # baseline (natural-dry)
- *   npm run listen:2   # + tiny room reverb
- *   npm run listen:3   # + air (high shelf 8kHz)
- *   npm run listen:4   # + presence (2.5kHz boost)
- *   npm run listen:5   # + de-harsh (3.5kHz cut)
- *   npm run listen:6   # + punchier compression
- *   npm run listen:all # all 6 in sequence
+ *   npm run listen:1   # baseline v2
+ *   npm run listen:2   # de-harsh deeper (-3dB)
+ *   npm run listen:3   # de-harsh higher freq (4kHz)
+ *   npm run listen:4   # air shelf (8kHz +1dB)
+ *   npm run listen:5   # tiny reverb (8ms)
+ *   npm run listen:6   # de-harsh AND air combined
+ *   npm run listen:all # all 6
  */
 
 import { describe, it, beforeAll } from "vitest";
@@ -29,61 +28,36 @@ const PLAY    = process.env.FONI_PLAY === "1";
 
 const PHRASE = "Ну-ка, чики-брики и в дамке! Понял, брателло?";
 
-// ─── Variants ─────────────────────────────────────────────────────────────────
-//
-// DEFAULT_SMOOTHING is the natural-dry baseline.
-// Each variant overrides exactly one group of fields.
-
 const CONFIGS: Array<{ name: string; label: string; opts: Partial<SmoothingOptions> }> = [
   {
     name:  "1. baseline",
-    label: "Natural-dry — pad + fade + highpass + compression 1.5:1 + loudnorm. Everything else off.",
+    label: "v2 baseline — natural-dry + de-harsh(-2dB@3.5kHz) + punch(2:1, 20ms)",
     opts:  {},
   },
   {
-    name:  "2. reverb",
-    label: "Baseline + tiny room (8ms / 4% decay) — just enough to feel less 'in a box'",
-    opts: {
-      reverbMs:         8,
-      reverbDecay:      0.04,
-      reverbInputGain:  0.8,
-      reverbOutputGain: 0.88,
-    },
+    name:  "2. harder-cut",
+    label: "De-harsh deeper: -3dB instead of -2dB at 3.5kHz",
+    opts:  { deHarshDb: -3 },
   },
   {
-    name:  "3. air",
-    label: "Baseline + high shelf +1.5dB at 8kHz — adds sparkle and breath above RVC",
-    opts: {
-      airBoostDb: 1.5,
-      airFreq:    8000,
-    },
+    name:  "3. higher-cut",
+    label: "De-harsh at 4kHz instead of 3.5kHz — target slightly brighter edge",
+    opts:  { deHarshFreq: 4000 },
   },
   {
-    name:  "4. presence",
-    label: "Baseline + peaking +2dB at 2.5kHz — boosts consonant clarity and intelligibility",
-    opts: {
-      deHarshFreq: 2500,
-      deHarshDb:   2,
-      deHarshBandwidthOctaves: 2,
-    },
+    name:  "4. air",
+    label: "Baseline + high shelf +1.5dB at 8kHz — adds sparkle above the cut",
+    opts:  { airBoostDb: 1.5, airFreq: 8000 },
   },
   {
-    name:  "5. de-harsh",
-    label: "Baseline + peaking -2dB at 3.5kHz — cuts any residual espeak metallic edge",
-    opts: {
-      deHarshFreq: 3500,
-      deHarshDb:   -2,
-      deHarshBandwidthOctaves: 2,
-    },
+    name:  "5. reverb",
+    label: "Baseline + tiny room (8ms / 4% decay) — spatial depth",
+    opts:  { reverbMs: 8, reverbDecay: 0.04, reverbInputGain: 0.8, reverbOutputGain: 0.88 },
   },
   {
-    name:  "6. punch",
-    label: "Baseline + faster compression (2:1, 20ms attack) — tighter, punchier dynamics",
-    opts: {
-      compressionRatio:    2,
-      compressionAttackMs: 20,
-      compressionMakeupDb: 1,
-    },
+    name:  "6. cut-and-air",
+    label: "De-harsh -3dB at 4kHz AND air +1.5dB at 8kHz — cut the bad, add the good",
+    opts:  { deHarshFreq: 4000, deHarshDb: -3, airBoostDb: 1.5, airFreq: 8000 },
   },
 ];
 

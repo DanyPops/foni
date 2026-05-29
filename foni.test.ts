@@ -474,6 +474,18 @@ describe("SpeakFacade serial play queue", () => {
     expect(player.play).toHaveBeenCalledOnce();
   });
 
+  it("Promise.all() prewarm: all phrases synthesised, played in order", async () => {
+    const { facade, backend, playOrder } = makeFacade();
+    const phrases = ["Да.", "Нет.", "Хорошо.", "Понял."];
+
+    await Promise.all(phrases.map(p => facade.speak(p)));
+
+    // Every phrase was synthesised exactly once
+    expect(backend.synthesize).toHaveBeenCalledTimes(phrases.length);
+    // Played in call order
+    expect(playOrder).toEqual(phrases);
+  });
+
   it("speak() resolves only after playback completes", async () => {
     const events: string[] = [];
     const { facade, player } = makeFacade();

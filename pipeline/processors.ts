@@ -201,9 +201,10 @@ export interface SmoothingOptions {
   normalize: boolean;
 }
 
-// Natural-dry: trust RVC to carry the voice character.
-// Minimal processing — pad, fade, highpass, light compression, loudnorm.
-// Everything else off. Chosen as the best-sounding baseline after A/B testing.
+// Baseline v2: natural-dry + de-harsh + punch.
+// Round 1 winner: natural-dry (trust RVC).
+// Round 2 additions: de-harsh (-2dB @ 3.5kHz softens espeak metal edge)
+//                   + punch (2:1 compression, 20ms attack, 1dB makeup).
 export const DEFAULT_SMOOTHING: SmoothingOptions = {
   // Edge handling
   padSecs:  0.3,
@@ -212,20 +213,20 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   // Mud removal
   highpassFreq: 80,
 
-  // Corrective EQ — off (RVC handles character)
+  // Corrective EQ — de-harsh only
   deBoxFreq:             900,
   deBoxDb:               0,
   deBoxBandwidthOctaves: 1.5,
   deHarshFreq:             3500,
-  deHarshDb:               0,
+  deHarshDb:               -2,
   deHarshBandwidthOctaves: 2,
 
-  // Dynamics — barely touching
-  compressionRatio:       1.5,
-  compressionAttackMs:    50,
+  // Dynamics — punchy
+  compressionRatio:       2,
+  compressionAttackMs:    20,
   compressionReleaseMs:   150,
   compressionThresholdDb: -18,
-  compressionMakeupDb:    0,
+  compressionMakeupDb:    1,
 
   // Creative EQ — off
   warmthBoostDb: 0,
