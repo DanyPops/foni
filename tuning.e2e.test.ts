@@ -1,26 +1,18 @@
 /**
- * Tuning round 3 — targeting robotic voice specifically.
+ * Tuning round 4 — how far can we push each anti-robotic lever?
  *
- * Baseline: natural-dry + de-harsh(-2dB@3.5kHz) + punch(2:1, 20ms)
+ * Baseline v3: de-harsh + punch + exciter(1.5@5kHz) + phaser(0.15) + reverb(12ms/6%)
  *
- * Root cause of robotic quality:
- *   - espeak formant synthesis: perfectly timed, flat harmonics
- *   - no organic imperfections, no breath, no micro-variation
+ * Each variant pushes ONE lever harder to find the sweet spot before
+ * it tips over into "over-processed" or "echo-y" territory.
  *
- * Three levers that specifically fight roboticness:
- *   aexciter  — adds synthetic harmonics above a threshold freq
- *               brain interprets harmonic richness as "warmth/natural"
- *   aphaser   — subtle phase movement breaks flat formant pattern
- *               adds micro-variation that organic voices have naturally
- *   reverb    — room presence — brain interprets dry=microphone=robotic
- *               even very small room makes voice feel more natural
- *
- *   npm run listen:1   # baseline
- *   npm run listen:2   # + light exciter (drive=1.5 @ 5kHz)
- *   npm run listen:3   # + phaser (depth=0.15)
- *   npm run listen:4   # + reverb (12ms / 6% decay)
- *   npm run listen:5   # exciter + phaser combined
- *   npm run listen:6   # all three: exciter + phaser + reverb
+ *   npm run listen:1   # baseline v3
+ *   npm run listen:2   # exciter harder (drive=2.5)
+ *   npm run listen:3   # exciter lower freq (4kHz — hits more of the midrange)
+ *   npm run listen:4   # phaser deeper (0.3)
+ *   npm run listen:5   # reverb longer (20ms / 8% decay)
+ *   npm run listen:6   # all levers pushed (2.5 drive + 0.3 phaser + 20ms reverb)
+ *   npm run listen:all # all 6 in sequence
  */
 
 import { describe, it, beforeAll } from "vitest";
@@ -39,57 +31,38 @@ const PHRASE = "Ну-ка, чики-брики и в дамке! Понял, б�
 const CONFIGS: Array<{ name: string; label: string; opts: Partial<SmoothingOptions> }> = [
   {
     name:  "1. baseline",
-    label: "v2 baseline — natural-dry + de-harsh(-2dB@3.5kHz) + punch(2:1, 20ms). Reference point.",
+    label: "v3 — exciter(1.5@5kHz) + phaser(0.15) + reverb(12ms/6%). Reference.",
     opts:  {},
   },
   {
-    name:  "2. exciter",
-    label: "Harmonic exciter: drive=1.5 above 5kHz. Adds subtle odd harmonics — brain reads as warmth.",
-    opts:  {
-      saturationDrive:  1.5,
-      saturationAmount: 1.0,
-      saturationFreq:   5000,
-    },
+    name:  "2. exciter-harder",
+    label: "Exciter drive=2.5 (was 1.5). More harmonic richness — does it warm up or distort?",
+    opts:  { saturationDrive: 2.5 },
   },
   {
-    name:  "3. phaser",
-    label: "Phaser depth=0.15. Creates micro phase-shifts in formants — breaks the flat robotic pattern.",
-    opts:  {
-      phaserDepth: 0.15,
-    },
+    name:  "3. exciter-lower",
+    label: "Exciter freq=4kHz (was 5kHz). Excites more of the midrange — more body or more harsh?",
+    opts:  { saturationFreq: 4000 },
   },
   {
-    name:  "4. reverb",
-    label: "Reverb: 12ms / 6% decay. Small room presence — dry voice = robotic, any room = more human.",
-    opts:  {
-      reverbMs:         12,
-      reverbDecay:      0.06,
-      reverbInputGain:  0.8,
-      reverbOutputGain: 0.88,
-    },
+    name:  "4. phaser-deeper",
+    label: "Phaser depth=0.3 (was 0.15). More phase movement — more organic or too wobbly?",
+    opts:  { phaserDepth: 0.3 },
   },
   {
-    name:  "5. exciter-phaser",
-    label: "Exciter + phaser combined. Harmonic richness AND micro-variation together.",
-    opts:  {
-      saturationDrive:  1.5,
-      saturationAmount: 1.0,
-      saturationFreq:   5000,
-      phaserDepth:      0.15,
-    },
+    name:  "5. reverb-longer",
+    label: "Reverb 20ms / 8% decay (was 12ms/6%). More room — more natural or too echo-y?",
+    opts:  { reverbMs: 20, reverbDecay: 0.08 },
   },
   {
-    name:  "6. all-three",
-    label: "Exciter + phaser + reverb. Full anti-robotic stack — the kitchen sink.",
+    name:  "6. all-pushed",
+    label: "All three levers pushed: drive=2.5 + phaser=0.3 + reverb=20ms/8%.",
     opts:  {
-      saturationDrive:  1.5,
-      saturationAmount: 1.0,
-      saturationFreq:   5000,
-      phaserDepth:      0.15,
-      reverbMs:         12,
-      reverbDecay:      0.06,
-      reverbInputGain:  0.8,
-      reverbOutputGain: 0.88,
+      saturationDrive: 2.5,
+      saturationFreq:  4000,
+      phaserDepth:     0.3,
+      reverbMs:        20,
+      reverbDecay:     0.08,
     },
   },
 ];
@@ -128,7 +101,7 @@ describe("Tuning iterations — rate each 1–5", () => {
     const rvcOk    = await isRvcReachable();
     skip = !espeakOk || !rvcOk;
     if (skip) console.warn("[tuning] espeak or RVC not available — skipping");
-    if (PLAY) console.info(`\n[tuning] Focus: robotic voice\n[tuning] Phrase: "${PHRASE}"\n`);
+    if (PLAY) console.info(`\n[tuning] Round 4: how far can we push?\n[tuning] Phrase: "${PHRASE}"\n`);
   });
 
   for (const { name, label, opts } of CONFIGS) {

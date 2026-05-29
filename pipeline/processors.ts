@@ -201,10 +201,11 @@ export interface SmoothingOptions {
   normalize: boolean;
 }
 
-// Baseline v2: natural-dry + de-harsh + punch.
-// Round 1 winner: natural-dry (trust RVC).
-// Round 2 additions: de-harsh (-2dB @ 3.5kHz softens espeak metal edge)
-//                   + punch (2:1 compression, 20ms attack, 1dB makeup).
+// Baseline v3: natural-dry + de-harsh + punch + exciter + phaser + reverb.
+// Round 1: natural-dry (trust RVC) won.
+// Round 2: de-harsh + punch added.
+// Round 3: all-three anti-robotic stack won —
+//          exciter (drive=1.5 @ 5kHz) + phaser (0.15) + reverb (12ms/6%).
 export const DEFAULT_SMOOTHING: SmoothingOptions = {
   // Edge handling
   padSecs:  0.3,
@@ -234,15 +235,15 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   airBoostDb:    0,
   airFreq:       8000,
 
-  // Harmonic saturation — off
-  saturationDrive:  0,
-  saturationAmount: 0,
-  saturationFreq:   6000,
+  // Harmonic saturation — light exciter above 5kHz
+  saturationDrive:  1.5,
+  saturationAmount: 1.0,
+  saturationFreq:   5000,
 
-  // Spatial depth — off
-  phaserDepth:      0,
-  reverbMs:         0,
-  reverbDecay:      0.08,
+  // Spatial depth — subtle phaser + small room reverb
+  phaserDepth:      0.15,
+  reverbMs:         12,
+  reverbDecay:      0.06,
   reverbInputGain:  0.8,
   reverbOutputGain: 0.88,
 
