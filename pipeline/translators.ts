@@ -267,11 +267,105 @@ export function compose(stack: TextMiddleware[]): (ctx: TextCtx) => Promise<void
 
 // ─── Middleware factories ─────────────────────────────────────────────────────
 
-/** Translate ctx.input → ctx.text using MyMemory. */
+/**
+ * Translate ctx.text → ctx.text using MyMemory.
+ * Reads ctx.text (not ctx.input) so upstream middleware like
+ * makeITGlossaryMiddleware can pre-process the text first.
+ */
 export function makeTranslateMiddleware(from: string, to: string): TextMiddleware {
-  const t = from === to ? new IdentityTranslatorImpl() : new MyMemoryTranslatorImpl(from, to);
+  const t = from === to ? new IdentityTranslatorImpl() : new LibreTranslateTranslatorImpl(from, to);
   return async (ctx, next) => {
-    ctx.text = await t.translate(ctx.input);
+    ctx.text = await t.translate(ctx.text); // ctx.text may be pre-processed by glossary
+    await next();
+  };
+}
+
+// ─── IT Glossary middleware ─────────────────────────────────────────────────────────
+//
+// Pure string replacement, <1ms, zero network calls.
+// Replaces unambiguous English IT terms with Russian developer loanwords
+// BEFORE any translator sees the text, so downstream translation leaves
+// the already-Russian terms untouched.
+//
+// Example:
+//   'Deploy the service and commit the changes'
+//   → 'деплоить the service and коммит the changes'
+//   → MyMemory → 'деплоить сервис и коммит изменений'
+
+type GlossaryEntry = [RegExp, string];
+
+/**
+ * English IT term → Russian developer loanword.
+ * Only terms that are unambiguous in a coding context.
+ * Verbs use the infinitive form; the translator handles conjugation.
+ */
+export const IT_GLOSSARY: GlossaryEntry[] = [
+  // Version control
+  [/\bpull\s+request(s)?\b/gi, 'пуллреквест'],
+  [/\bcommit(s|ted|ting)?\b/gi, 'коммит'],
+  [/\bmerge(d|ing)?\b/gi,       'мерж'],
+  [/\brebase(d|ing)?\b/gi,      'ребейс'],
+  [/\bcheckout\b/gi,            'чекаут'],
+  [/\bstash\b/gi,               'стеш'],
+  [/\bpush(ed|ing)?\b/gi,       'пуш'],
+  [/\bpull(ed|ing)?\b/gi,       'пулл'],
+  [/\bfork(ed|ing)?\b/gi,       'форк'],
+  [/\bbranch(es)?\b/gi,         'ветка'],
+  [/\b(git|Git)\b/g,            'гит'],
+
+  // Deployment
+  [/\bdeploy(ment|ed|ing|s)?\b/gi, 'деплой'],
+  [/\brollback\b/gi,            'роллбек'],
+  [/\bpipeline(s)?\b/gi,        'пайплайн'],
+  [/\bCI\/CD\b/g,               'CI/CD'],
+  [/\bstaging\b/gi,             'стейджинг'],
+  [/\bprod(uction)?\b/gi,       'прод'],
+  [/\bcontainer(s)?\b/gi,       'контейнер'],
+  [/\b[Dd]ocker\b/g,            'докер'],
+  [/\b[Kk]ubernetes\b/g,        'кубернетес'],
+  [/\bk8s\b/g,                  'кубернетес'],
+
+  // Code
+  [/\bdebug(ging|ged)?\b/gi,    'дебаг'],
+  [/\brefactor(ing|ed)?\b/gi,   'рефактор'],
+  [/\bbuild(ing|s)?\b/gi,       'билд'],
+  [/\btest(s|ing|ed)?\b/gi,     'тест'],
+  [/\bfeature(s)?\b/gi,         'фича'],
+  [/\bbug(s|fix)?\b/gi,         'баг'],
+  [/\bfix(ed|ing|es)?\b/gi,     'фикс'],
+  [/\bcache\b/gi,               'кэш'],
+  [/\blog(s|ging)?\b/gi,        'лог'],
+
+  // Architecture & infra
+  [/\bbackend\b/gi,             'бэкенд'],
+  [/\bfrontend\b/gi,            'фронтенд'],
+  [/\bAPI\b/g,                  'API'],
+  [/\bSQL\b/g,                  'SQL'],
+  [/\bHTTP\b/g,                 'HTTP'],
+  [/\bJSON\b/g,                 'JSON'],
+  [/\bserver(s)?\b/gi,          'сервер'],
+  [/\bdatabase\b/gi,            'база данных'],
+  [/\b(PR|pr)\b/g,              'PR'],
+  [/\brelease(s|d)?\b/gi,       'релиз'],
+  [/\bcode\s+review\b/gi,       'ревью'],
+  [/\breview(ed|ing|s)?\b/gi,   'ревью'],
+  [/\bsprint(s)?\b/gi,          'спринт'],
+  [/\bstandup\b/gi,             'стендап'],
+  [/\bticket(s)?\b/gi,          'тикет'],
+];
+
+/**
+ * IT glossary middleware — pre-process English IT terms to Russian loanwords.
+ * Zero latency (<1ms), zero network, deterministic.
+ * Must run BEFORE makeTranslateMiddleware.
+ */
+export function makeITGlossaryMiddleware(): TextMiddleware {
+  return async (ctx, next) => {
+    let text = ctx.text;
+    for (const [pattern, replacement] of IT_GLOSSARY) {
+      text = text.replace(pattern, replacement);
+    }
+    ctx.text = text;
     await next();
   };
 }
@@ -323,17 +417,35 @@ class IdentityTranslatorImpl {
   async translate(text: string): Promise<string> { return text; }
 }
 
-class MyMemoryTranslatorImpl {
-  constructor(private readonly from: string, private readonly to: string) {}
+/**
+ * Self-hosted LibreTranslate (localhost:5000).
+ * Run via: podman run -d -p 5000:5000 libretranslate/libretranslate --load-only en,ru
+ *
+ * Falls back to identity (passthrough) if server is not running.
+ * Use inputLang === outputLang (passthrough mode) when no translation server
+ * is available — have Claude write in the target language directly.
+ */
+class LibreTranslateTranslatorImpl {
+  constructor(
+    private readonly from: string,
+    private readonly to: string,
+    private readonly url: string = "http://localhost:5000",
+  ) {}
 
   async translate(text: string): Promise<string> {
     try {
-      const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${this.from}|${this.to}`;
-      const resp = await fetch(url, { signal: AbortSignal.timeout(TRANSLATION_TIMEOUT_MS) });
+      const resp = await fetch(`${this.url}/translate`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ q: text, source: this.from, target: this.to, format: "text" }),
+        signal:  AbortSignal.timeout(TRANSLATION_TIMEOUT_MS),
+      });
       if (!resp.ok) return text;
-      const data = await resp.json() as { responseData: { translatedText: string } };
-      return data.responseData.translatedText || text;
+      const data = await resp.json() as { translatedText: string };
+      return data.translatedText || text;
     } catch {
+      // Server not running — passthrough. Start with:
+      // podman run -d -p 5000:5000 libretranslate/libretranslate --load-only en,ru
       return text;
     }
   }
@@ -347,19 +459,30 @@ export class IdentityTranslator implements Translator {
   }
 }
 
+/** @deprecated Use LibreTranslateTranslator (self-hosted) or set inputLang===outputLang for passthrough. */
 export class MyMemoryTranslator implements Translator {
   constructor(private readonly from: string, private readonly to: string) {}
-
   async translate(text: string): Promise<string> {
-    try {
-      const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${this.from}|${this.to}`;
-      const resp = await fetch(url, { signal: AbortSignal.timeout(TRANSLATION_TIMEOUT_MS) });
-      if (!resp.ok) return text;
-      const data = await resp.json() as { responseData: { translatedText: string } };
-      return data.responseData.translatedText || text;
-    } catch {
-      return text;
-    }
+    console.warn("[foni] MyMemoryTranslator is deprecated — it uses a cloud API. Use LibreTranslateTranslator or passthrough mode.");
+    return text;
+  }
+}
+
+/**
+ * Self-hosted LibreTranslate translator (implements Translator interface).
+ * Requires: podman run -d -p 5000:5000 libretranslate/libretranslate --load-only en,ru
+ */
+export class LibreTranslateTranslator implements Translator {
+  private readonly impl: LibreTranslateTranslatorImpl;
+  constructor(
+    private readonly from: string,
+    private readonly to: string,
+    url = "http://localhost:5000",
+  ) {
+    this.impl = new LibreTranslateTranslatorImpl(from, to, url);
+  }
+  async translate(text: string): Promise<string> {
+    return this.impl.translate(text);
   }
 }
 

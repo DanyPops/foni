@@ -1,6 +1,8 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { AudioLRU, SpeakFacade } from "./pipeline/speak-facade.ts";
+import { makeITGlossaryMiddleware, IT_GLOSSARY, compose } from "./pipeline/translators.ts";
+import type { TextCtx } from "./pipeline/translators.ts";
 import {
   stripMarkdown,
   drainChunks,
@@ -521,5 +523,62 @@ describe("SpeakFacade serial play queue", () => {
     await facade.speak("hello");
     events.push("resolved");
     expect(events).toEqual(["start:hello", "end:hello", "resolved"]);
+  });
+});
+
+// ─── IT Glossary middleware ─────────────────────────────────────────────────────
+
+describe("makeITGlossaryMiddleware", () => {
+  function runGlossary(text: string): string {
+    const mw  = makeITGlossaryMiddleware();
+    const ctx: TextCtx = { input: text, text, lang: "en" };
+    // run synchronously via the compose helper
+    let result = text;
+    mw(ctx, async () => {}).then(() => { result = ctx.text; });
+    // Force microtask — glossary is sync inside async wrapper
+    return ctx.text;
+  }
+
+  it("replaces 'deploy' with 'деплой'", () => {
+    expect(runGlossary("Deploy the service.")).toContain("деплой");
+  });
+
+  it("replaces 'commit' with 'коммит'", () => {
+    expect(runGlossary("Commit the changes.")).toContain("коммит");
+  });
+
+  it("replaces 'merge' with 'мерж'", () => {
+    expect(runGlossary("Merge the branch.")).toContain("мерж");
+  });
+
+  it("replaces 'pull request' with 'пуллреквест'", () => {
+    expect(runGlossary("Open a pull request.")).toContain("пуллреквест");
+  });
+
+  it("keeps API, SQL, CI/CD unchanged", () => {
+    const result = runGlossary("Call the API and run SQL via CI/CD.");
+    expect(result).toContain("API");
+    expect(result).toContain("SQL");
+    expect(result).toContain("CI/CD");
+  });
+
+  it("handles multiple replacements in one sentence", () => {
+    const result = runGlossary("Deploy the service, commit changes, and merge the branch.");
+    expect(result).toContain("деплой");
+    expect(result).toContain("коммит");
+    expect(result).toContain("мерж");
+  });
+
+  it("is case-insensitive", () => {
+    expect(runGlossary("DEPLOY the service.")).toContain("деплой");
+    expect(runGlossary("Debug the issue.")).toContain("дебаг");
+  });
+
+  it("completes in under 5ms (zero latency)", () => {
+    const start = Date.now();
+    for (let i = 0; i < 100; i++) {
+      runGlossary("Deploy the service, commit changes, merge the branch, debug the issue.");
+    }
+    expect(Date.now() - start).toBeLessThan(50); // 100 runs in <50ms
   });
 });

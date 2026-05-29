@@ -19,6 +19,7 @@ import { SpeakFacade } from "./pipeline/speak-facade.ts";
 import {
   IdentityTranslator, MyMemoryTranslator, MatTranslator, InterjectTranslator,
   PipelineTranslator, makeTranslateMiddleware, makeMatMiddleware, makeInterjectMiddleware,
+  makeITGlossaryMiddleware,
   type TextMiddleware,
 } from "./pipeline/translators.ts";
 import { IdentityProcessor, RVCProcessor, SmoothingProcessor } from "./pipeline/processors.ts";
@@ -123,10 +124,16 @@ function rebuildTranslator() {
 
 function buildPipeline(): TextMiddleware[] {
   const stack: TextMiddleware[] = [];
+
+  // IT glossary always runs first — <1ms, no network, works with any translator
+  // Replaces English IT terms with Russian developer loanwords before translation
+  stack.push(makeITGlossaryMiddleware());
+
   // Translate only when languages differ — same lang = passthrough, no network call
   if (config.inputLang !== config.outputLang) {
     stack.push(makeTranslateMiddleware(config.inputLang, config.outputLang));
   }
+
   // Mat and interject operate on the output language
   if (config.outputLang === "ru") {
     if (config.matEnabled)       stack.push(makeMatMiddleware(config.matProb, config.matStretch));
