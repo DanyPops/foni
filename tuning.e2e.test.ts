@@ -1,18 +1,26 @@
 /**
- * Tuning round 2 — variants on baseline v2 (natural-dry + de-harsh + punch).
+ * Tuning round 3 — targeting robotic voice specifically.
  *
- * Baseline: pad + fade + highpass(80Hz) + de-harsh(-2dB@3.5kHz)
- *         + compression(2:1, 20ms attack, +1dB makeup) + loudnorm
+ * Baseline: natural-dry + de-harsh(-2dB@3.5kHz) + punch(2:1, 20ms)
  *
- * Each variant tweaks ONE parameter to explore what's still missing.
+ * Root cause of robotic quality:
+ *   - espeak formant synthesis: perfectly timed, flat harmonics
+ *   - no organic imperfections, no breath, no micro-variation
  *
- *   npm run listen:1   # baseline v2
- *   npm run listen:2   # de-harsh deeper (-3dB)
- *   npm run listen:3   # de-harsh higher freq (4kHz)
- *   npm run listen:4   # air shelf (8kHz +1dB)
- *   npm run listen:5   # tiny reverb (8ms)
- *   npm run listen:6   # de-harsh AND air combined
- *   npm run listen:all # all 6
+ * Three levers that specifically fight roboticness:
+ *   aexciter  — adds synthetic harmonics above a threshold freq
+ *               brain interprets harmonic richness as "warmth/natural"
+ *   aphaser   — subtle phase movement breaks flat formant pattern
+ *               adds micro-variation that organic voices have naturally
+ *   reverb    — room presence — brain interprets dry=microphone=robotic
+ *               even very small room makes voice feel more natural
+ *
+ *   npm run listen:1   # baseline
+ *   npm run listen:2   # + light exciter (drive=1.5 @ 5kHz)
+ *   npm run listen:3   # + phaser (depth=0.15)
+ *   npm run listen:4   # + reverb (12ms / 6% decay)
+ *   npm run listen:5   # exciter + phaser combined
+ *   npm run listen:6   # all three: exciter + phaser + reverb
  */
 
 import { describe, it, beforeAll } from "vitest";
@@ -31,33 +39,58 @@ const PHRASE = "Ну-ка, чики-брики и в дамке! Понял, б�
 const CONFIGS: Array<{ name: string; label: string; opts: Partial<SmoothingOptions> }> = [
   {
     name:  "1. baseline",
-    label: "v2 baseline — natural-dry + de-harsh(-2dB@3.5kHz) + punch(2:1, 20ms)",
+    label: "v2 baseline — natural-dry + de-harsh(-2dB@3.5kHz) + punch(2:1, 20ms). Reference point.",
     opts:  {},
   },
   {
-    name:  "2. harder-cut",
-    label: "De-harsh deeper: -3dB instead of -2dB at 3.5kHz",
-    opts:  { deHarshDb: -3 },
+    name:  "2. exciter",
+    label: "Harmonic exciter: drive=1.5 above 5kHz. Adds subtle odd harmonics — brain reads as warmth.",
+    opts:  {
+      saturationDrive:  1.5,
+      saturationAmount: 1.0,
+      saturationFreq:   5000,
+    },
   },
   {
-    name:  "3. higher-cut",
-    label: "De-harsh at 4kHz instead of 3.5kHz — target slightly brighter edge",
-    opts:  { deHarshFreq: 4000 },
+    name:  "3. phaser",
+    label: "Phaser depth=0.15. Creates micro phase-shifts in formants — breaks the flat robotic pattern.",
+    opts:  {
+      phaserDepth: 0.15,
+    },
   },
   {
-    name:  "4. air",
-    label: "Baseline + high shelf +1.5dB at 8kHz — adds sparkle above the cut",
-    opts:  { airBoostDb: 1.5, airFreq: 8000 },
+    name:  "4. reverb",
+    label: "Reverb: 12ms / 6% decay. Small room presence — dry voice = robotic, any room = more human.",
+    opts:  {
+      reverbMs:         12,
+      reverbDecay:      0.06,
+      reverbInputGain:  0.8,
+      reverbOutputGain: 0.88,
+    },
   },
   {
-    name:  "5. reverb",
-    label: "Baseline + tiny room (8ms / 4% decay) — spatial depth",
-    opts:  { reverbMs: 8, reverbDecay: 0.04, reverbInputGain: 0.8, reverbOutputGain: 0.88 },
+    name:  "5. exciter-phaser",
+    label: "Exciter + phaser combined. Harmonic richness AND micro-variation together.",
+    opts:  {
+      saturationDrive:  1.5,
+      saturationAmount: 1.0,
+      saturationFreq:   5000,
+      phaserDepth:      0.15,
+    },
   },
   {
-    name:  "6. cut-and-air",
-    label: "De-harsh -3dB at 4kHz AND air +1.5dB at 8kHz — cut the bad, add the good",
-    opts:  { deHarshFreq: 4000, deHarshDb: -3, airBoostDb: 1.5, airFreq: 8000 },
+    name:  "6. all-three",
+    label: "Exciter + phaser + reverb. Full anti-robotic stack — the kitchen sink.",
+    opts:  {
+      saturationDrive:  1.5,
+      saturationAmount: 1.0,
+      saturationFreq:   5000,
+      phaserDepth:      0.15,
+      reverbMs:         12,
+      reverbDecay:      0.06,
+      reverbInputGain:  0.8,
+      reverbOutputGain: 0.88,
+    },
   },
 ];
 
@@ -95,7 +128,7 @@ describe("Tuning iterations — rate each 1–5", () => {
     const rvcOk    = await isRvcReachable();
     skip = !espeakOk || !rvcOk;
     if (skip) console.warn("[tuning] espeak or RVC not available — skipping");
-    if (PLAY) console.info(`\n[tuning] Phrase: "${PHRASE}"\n`);
+    if (PLAY) console.info(`\n[tuning] Focus: robotic voice\n[tuning] Phrase: "${PHRASE}"\n`);
   });
 
   for (const { name, label, opts } of CONFIGS) {
