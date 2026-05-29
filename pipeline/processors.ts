@@ -312,10 +312,10 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
 
   // De-robotisation — round 5 all-derobot stack baked in
   // FON-TSK-51: tilt pushed further — target 40 dB, prev tilt 5/-4 gave 25-30 dB
-  breathinessDb: -48,
+  breathinessDb: -43,   // more room noise to close noise-floor gap (was -48)
   tiltLowDb:     8,
   tiltHighDb:    -6,
-  presenceDb:    1.5,
+  presenceDb:    0,      // 2.5kHz boost was hurting presence-ratio gap (was 1.5)
   deEssDb:       4,
 
   // Pitch micro-variation — vibrato-subtle from round 6 (6Hz/0.003)
