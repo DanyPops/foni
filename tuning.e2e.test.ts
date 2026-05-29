@@ -17,7 +17,7 @@
 
 import { describe, it, beforeAll } from "vitest";
 import { EspeakBackend }      from "./backends/espeak.ts";
-import { RVCProcessor, SmoothingProcessor, DEFAULT_SMOOTHING } from "./pipeline/processors.ts";
+import { RVCProcessor, SmoothingProcessor, DEFAULT_SMOOTHING, describeSmoothingDiff } from "./pipeline/processors.ts";
 import type { SmoothingOptions }    from "./pipeline/processors.ts";
 import { SystemPlayer }       from "./pipeline/player.ts";
 import { SpeakFacade }        from "./pipeline/speak-facade.ts";
@@ -28,44 +28,23 @@ const PLAY    = process.env.FONI_PLAY === "1";
 
 const PHRASE = "Ну-ка, чики-брики и в дамке! Понял, брателло?";
 
-const CONFIGS: Array<{ name: string; label: string; opts: Partial<SmoothingOptions> }> = [
-  {
-    name:  "1. baseline",
-    label: "v3 — exciter(1.5@5kHz) + phaser(0.15) + reverb(12ms/6%). Reference.",
-    opts:  {},
-  },
-  {
-    name:  "2. exciter-harder",
-    label: "Exciter drive=2.5 (was 1.5). More harmonic richness — does it warm up or distort?",
-    opts:  { saturationDrive: 2.5 },
-  },
-  {
-    name:  "3. exciter-lower",
-    label: "Exciter freq=4kHz (was 5kHz). Excites more of the midrange — more body or more harsh?",
-    opts:  { saturationFreq: 4000 },
-  },
-  {
-    name:  "4. phaser-deeper",
-    label: "Phaser depth=0.3 (was 0.15). More phase movement — more organic or too wobbly?",
-    opts:  { phaserDepth: 0.3 },
-  },
-  {
-    name:  "5. reverb-longer",
-    label: "Reverb 20ms / 8% decay (was 12ms/6%). More room — more natural or too echo-y?",
-    opts:  { reverbMs: 20, reverbDecay: 0.08 },
-  },
-  {
-    name:  "6. all-pushed",
-    label: "All three levers pushed: drive=2.5 + phaser=0.3 + reverb=20ms/8%.",
-    opts:  {
-      saturationDrive: 2.5,
-      saturationFreq:  4000,
-      phaserDepth:     0.3,
-      reverbMs:        20,
-      reverbDecay:     0.08,
-    },
-  },
+// slug = human intent label. name and description are fully auto-generated.
+// name  = “${index+1}. ${slug}”
+// label = describeSmoothingDiff(opts)
+const SLUGS: Array<{ slug: string; opts: Partial<SmoothingOptions> }> = [
+  { slug: "baseline",       opts: {} },
+  { slug: "exciter-harder", opts: { saturationDrive: 2.5 } },
+  { slug: "exciter-lower",  opts: { saturationFreq: 4000 } },
+  { slug: "phaser-deeper",  opts: { phaserDepth: 0.3 } },
+  { slug: "reverb-longer",  opts: { reverbMs: 20, reverbDecay: 0.08 } },
+  { slug: "all-pushed",     opts: { saturationDrive: 2.5, saturationFreq: 4000, phaserDepth: 0.3, reverbMs: 20, reverbDecay: 0.08 } },
 ];
+
+export const CONFIGS = SLUGS.map(({ slug, opts }, i) => ({
+  name:  `${i + 1}. ${slug}`,
+  label: describeSmoothingDiff(opts),
+  opts,
+}));
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

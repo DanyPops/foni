@@ -263,6 +263,101 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
  * All parameters exposed as named SmoothingOptions — no raw filter strings.
  * Falls back transparently if ffmpeg is not installed.
  */
+// ─── Auto-label: describe a SmoothingOptions diff against DEFAULT_SMOOTHING ───────────
+//
+// Generates a human-readable string from changed fields only.
+// Companion fields are absorbed into their primary (e.g. reverbDecay → reverbMs).
+// Empty diff → 'baseline (DEFAULT_SMOOTHING)'.
+//
+// Usage in tuning.e2e.test.ts:
+//   const CONFIGS = [
+//     { name: '1. baseline', opts: {} },
+//     { name: '2. exciter', opts: { saturationDrive: 2.5 } },
+//   ];
+//   // label auto-generated: 'exciter drive=2.5 @ 5kHz'
+
+/** Fields that are described via another primary field — skip in diff output. */
+const ABSORBED_FIELDS = new Set<keyof SmoothingOptions>([
+  "saturationAmount", "saturationFreq",       // → saturationDrive
+  "reverbDecay", "reverbInputGain", "reverbOutputGain", // → reverbMs
+  "deHarshFreq", "deHarshBandwidthOctaves",   // → deHarshDb
+  "deBoxFreq", "deBoxBandwidthOctaves",        // → deBoxDb
+  "warmthFreq",                                // → warmthBoostDb
+  "airFreq",                                   // → airBoostDb
+  "compressionReleaseMs", "compressionThresholdDb", // → compressionRatio
+]);
+
+function describeField(
+  key: keyof SmoothingOptions,
+  val: number | boolean,
+  opts: Partial<SmoothingOptions>,
+  base: SmoothingOptions,
+): string {
+  const hz = (f: number) => f >= 1000 ? `${(f / 1000).toFixed(f % 1000 === 0 ? 0 : 1)}kHz` : `${f}Hz`;
+  const db = (v: number) => `${v > 0 ? '+' : ''}${v}dB`;
+
+  switch (key) {
+    case "saturationDrive": {
+      const freq = hz(opts.saturationFreq ?? base.saturationFreq);
+      return `exciter drive=${val} @ ${freq}`;
+    }
+    case "deHarshDb": {
+      const freq = hz(opts.deHarshFreq ?? base.deHarshFreq);
+      return `${Number(val) > 0 ? 'presence' : 'de-harsh'} ${db(Number(val))} @ ${freq}`;
+    }
+    case "deBoxDb": {
+      const freq = hz(opts.deBoxFreq ?? base.deBoxFreq);
+      return `de-box ${db(Number(val))} @ ${freq}`;
+    }
+    case "warmthBoostDb": {
+      const freq = hz(opts.warmthFreq ?? base.warmthFreq);
+      return `warmth ${db(Number(val))} @ ${freq}`;
+    }
+    case "airBoostDb": {
+      const freq = hz(opts.airFreq ?? base.airFreq);
+      return `air ${db(Number(val))} @ ${freq}`;
+    }
+    case "reverbMs": {
+      const decay  = ((opts.reverbDecay ?? base.reverbDecay) * 100).toFixed(0);
+      return `reverb ${val}ms / ${decay}% decay`;
+    }
+    case "phaserDepth":        return `phaser depth=${val}`;
+    case "compressionRatio":   return `compression ${val}:1`;
+    case "compressionAttackMs": return `attack ${val}ms`;
+    case "compressionMakeupDb": return Number(val) !== 0 ? `makeup ${db(Number(val))}` : "";
+    case "highpassFreq":       return `highpass ${hz(Number(val))}`;
+    case "fadeSecs":           return `fade ${val}s`;
+    case "padSecs":            return `pad ${val}s`;
+    case "normalize":          return val ? "loudnorm" : "no-loudnorm";
+    default:                   return `${key}=${val}`;
+  }
+}
+
+/**
+ * Generate a human-readable description of opts relative to DEFAULT_SMOOTHING.
+ * Each changed field becomes a clause; absorbed companion fields are skipped.
+ *
+ * @example
+ * describeSmoothingDiff({}) // 'baseline (DEFAULT_SMOOTHING)'
+ * describeSmoothingDiff({ saturationDrive: 2.5, reverbMs: 20, reverbDecay: 0.08 })
+ * // 'exciter drive=2.5 @ 5kHz, reverb 20ms / 8% decay'
+ */
+export function describeSmoothingDiff(
+  opts: Partial<SmoothingOptions>,
+  base: SmoothingOptions = DEFAULT_SMOOTHING,
+): string {
+  const clauses: string[] = [];
+
+  for (const [k, val] of Object.entries(opts) as [keyof SmoothingOptions, number | boolean][]) {
+    if (ABSORBED_FIELDS.has(k)) continue;
+    if (val === (base as Record<string, unknown>)[k]) continue; // unchanged
+    const clause = describeField(k, val, opts, base);
+    if (clause) clauses.push(clause);
+  }
+
+  return clauses.length === 0 ? "baseline (DEFAULT_SMOOTHING)" : clauses.join(", ");
+}
+
 export class SmoothingProcessor implements AudioProcessor {
   private readonly opts: SmoothingOptions;
 

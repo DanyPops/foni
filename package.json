@@ -8,13 +8,7 @@
     "test":      "vitest run",
     "test:watch": "vitest",
     "demo":      "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run pipeline.e2e -t 'cheeki breeki'",
-    "listen:1":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '1. baseline'",
-    "listen:2":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '2. exciter-harder'",
-    "listen:3":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '3. exciter-lower'",
-    "listen:4":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '4. phaser-deeper'",
-    "listen:5":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '5. reverb-longer'",
-    "listen:6":  "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e -t '6. all-pushed'",
-    "listen:all": "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run tuning.e2e"
+    "listen":    "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 node scripts/listen.mjs"
   },
   "devDependencies": {
     "vitest": "^2.0.0"
