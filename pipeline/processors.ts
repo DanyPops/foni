@@ -247,6 +247,13 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   reverbInputGain:  0.8,
   reverbOutputGain: 0.88,
 
+  // De-robotisation — all off in baseline (round 3 winner unchanged)
+  breathinessDb: 0,
+  tiltLowDb:     0,
+  tiltHighDb:    0,
+  presenceDb:    0,
+  deEssDb:       0,
+
   // Final
   normalize: true,
 };
@@ -321,6 +328,11 @@ function describeField(
       const decay  = ((opts.reverbDecay ?? base.reverbDecay) * 100).toFixed(0);
       return `reverb ${val}ms / ${decay}% decay`;
     }
+    case "breathinessDb":      return `breathiness ${val}dB`;
+    case "tiltLowDb":         return `tilt +${val}dB@100Hz`;
+    case "tiltHighDb":         return `tilt ${val}dB@8kHz`;
+    case "presenceDb":         return `presence ${val > 0 ? "+" : ""}${val}dB@2.5kHz`;
+    case "deEssDb":            return `de-ess −${val}dB@7kHz`;
     case "phaserDepth":        return `phaser depth=${val}`;
     case "compressionRatio":   return `compression ${val}:1`;
     case "compressionAttackMs": return `attack ${val}ms`;
@@ -388,6 +400,7 @@ export class SmoothingProcessor implements AudioProcessor {
       saturationDrive, saturationAmount, saturationFreq,
       phaserDepth,
       reverbMs, reverbDecay, reverbInputGain, reverbOutputGain,
+      breathinessDb, tiltLowDb, tiltHighDb, presenceDb, deEssDb,
       normalize,
     } = this.opts;
 
@@ -402,6 +415,25 @@ export class SmoothingProcessor implements AudioProcessor {
     // 2. Mud removal — strip sub-bass before any boosting
     if (highpassFreq > 0) {
       parts.push(`highpass=f=${highpassFreq}`);
+    }
+
+    // 2b. Spectral tilt — restore natural −6dB/oct voice roll-off flattened by RVC
+    if (tiltLowDb !== 0) {
+      parts.push(`lowshelf=g=${tiltLowDb}:f=100:width_type=s:width=0.7`);
+    }
+    if (tiltHighDb !== 0) {
+      parts.push(`highshelf=g=${tiltHighDb}:f=8000:width_type=s:width=0.7`);
+    }
+
+    // 2c. De-esser — suppress metallic sibilant artifacts at 7kHz
+    if (deEssDb > 0) {
+      parts.push(`equalizer=f=7000:width_type=o:width=1.0:g=${-deEssDb}`);
+    }
+
+    // 2d. Breathiness — add noise floor to simulate human airflow
+    if (breathinessDb < 0) {
+      const ng = dbToLinear(breathinessDb);
+      parts.push(`aeval=val(0)+${ng.toFixed(6)}*(random(0)-0.5)*2:c=same`);
     }
 
     // 3. Corrective EQ — cut problems before adding character
@@ -432,6 +464,11 @@ export class SmoothingProcessor implements AudioProcessor {
     // 5. Warmth — low shelf boost for body and chest resonance
     if (warmthBoostDb !== 0) {
       parts.push(`lowshelf=g=${warmthBoostDb}:f=${warmthFreq}:width_type=s:width=0.5`);
+    }
+
+    // 5b. Presence — voice intelligibility sweet spot at 2.5kHz
+    if (presenceDb !== 0) {
+      parts.push(`equalizer=f=2500:width_type=o:width=1.5:g=${presenceDb}`);
     }
 
     // 6. Air — high shelf boost for sparkle and presence above 8kHz

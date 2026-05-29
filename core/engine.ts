@@ -80,8 +80,9 @@ export class FoniEngine {
       const ew = effectiveWeights(this.emotionState);
       const matProb       = Math.min(1, this.config.matProb       * ew.matMultiplier);
       const interjectProb = Math.min(1, this.config.interjectProb * ew.interjectMultiplier);
-      if (this.config.matEnabled)       stack.push(makeMatMiddleware(matProb, this.config.matStretch));
-      if (this.config.interjectEnabled) stack.push(makeInterjectMiddleware(interjectProb));
+      const bias = ew.wordBias;
+      if (this.config.matEnabled)       stack.push(makeMatMiddleware(matProb, this.config.matStretch, bias));
+      if (this.config.interjectEnabled) stack.push(makeInterjectMiddleware(interjectProb, bias));
     }
     return stack;
   }

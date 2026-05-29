@@ -1,4 +1,6 @@
 import type { Translator } from "./interfaces.ts";
+import { BIAS_WORDS }     from "../core/emotion.ts";
+import type { WordBias }   from "../core/emotion.ts";
 
 // ─── Translator defaults ────────────────────────────────────────────────────────────────
 
@@ -149,9 +151,12 @@ const INTERJECT: Record<"prefix" | "suffix" | "mid", string[]> = {
  * @param text        Russian text to mutate.
  * @param prob        0–1 probability per opportunity.
  * @param diversifier WordDiversifier instance for this session.
+ * @param bias        Optional emotion bias — overrides word pools with curated sets.
  */
-function injectInterject(text: string, prob: number, diversifier: WordDiversifier): string {
+function injectInterject(text: string, prob: number, diversifier: WordDiversifier, bias?: WordBias): string {
   if (prob <= 0) return text;
+
+  const bw = bias && bias !== "neutral" ? BIAS_WORDS[bias] : null;
 
   const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
 
@@ -159,13 +164,13 @@ function injectInterject(text: string, prob: number, diversifier: WordDiversifie
     const scores = scorePlacement(sentence);
 
     if (Math.random() < prob * scores.prefix) {
-      sentence = diversifier.pick(INTERJECT.prefix) + " " + sentence;
+      sentence = diversifier.pick(bw?.prefix ?? INTERJECT.prefix) + " " + sentence;
     }
 
     const clauses = sentence.split(",");
     const mutated = clauses.map((clause, i) => {
       if (i === 0) return clause;
-      if (Math.random() < prob * scores.mid) return " " + diversifier.pick(INTERJECT.mid) + "," + clause;
+      if (Math.random() < prob * scores.mid) return " " + diversifier.pick(bw?.standalone ?? INTERJECT.mid) + "," + clause;
       return clause;
     });
     sentence = mutated.join(",");
@@ -173,7 +178,7 @@ function injectInterject(text: string, prob: number, diversifier: WordDiversifie
     if (Math.random() < prob * scores.suffix) {
       const stripped = sentence.replace(/[.!?]+$/, "");
       const punct    = sentence.match(/[.!?]+$/)?.[0] ?? ".";
-      sentence = stripped + diversifier.pick(INTERJECT.suffix) + punct;
+      sentence = stripped + diversifier.pick(bw?.suffix ?? INTERJECT.suffix) + punct;
     }
 
     return sentence;
@@ -262,12 +267,16 @@ export function stretchExpression(expr: string, repeats: number): string {
  * @param stretchProb 0–1 probability that an injected expression gets
  *                    expressive lengthening applied to its key vowel.
  * @param diversifier WordDiversifier instance for this session.
+ * @param bias        Optional emotion bias — overrides word pools with curated sets.
  */
-function injectMat(text: string, prob: number, stretchProb: number, diversifier: WordDiversifier): string {
+function injectMat(text: string, prob: number, stretchProb: number, diversifier: WordDiversifier, bias?: WordBias): string {
   if (prob <= 0) return text;
 
-  function pickMat(arr: readonly string[]): string {
-    const expr = diversifier.pick(arr);
+  const bw = bias && bias !== "neutral" ? BIAS_WORDS[bias] : null;
+
+  function pickMat(arr: readonly string[], biasArr?: readonly string[]): string {
+    const pool = biasArr ?? arr;
+    const expr = diversifier.pick(pool);
     if (stretchProb > 0 && Math.random() < stretchProb) {
       const repeats = STRETCH_REPEATS_MIN + Math.floor(Math.random() * (STRETCH_REPEATS_MAX - STRETCH_REPEATS_MIN + 1));
       return stretchExpression(expr, repeats);
@@ -281,13 +290,13 @@ function injectMat(text: string, prob: number, stretchProb: number, diversifier:
     const scores = scorePlacement(sentence);
 
     if (Math.random() < prob * scores.prefix) {
-      sentence = pickMat(MAT.prefix) + " " + sentence;
+      sentence = pickMat(MAT.prefix, bw?.prefix) + " " + sentence;
     }
 
     const clauses = sentence.split(",");
     const mutated = clauses.map((clause, i) => {
       if (i === 0) return clause;
-      if (Math.random() < prob * scores.mid) return " " + pickMat(MAT.interject) + "," + clause;
+      if (Math.random() < prob * scores.mid) return " " + pickMat(MAT.interject, bw?.standalone) + "," + clause;
       return clause;
     });
     sentence = mutated.join(",");
@@ -295,7 +304,7 @@ function injectMat(text: string, prob: number, stretchProb: number, diversifier:
     if (Math.random() < prob * scores.suffix) {
       const stripped = sentence.replace(/[.!?]+$/, "");
       const punct    = sentence.match(/[.!?]+$/)?.[0] ?? ".";
-      sentence = stripped + pickMat(MAT.suffix) + punct;
+      sentence = stripped + pickMat(MAT.suffix, bw?.suffix) + punct;
     }
 
     return sentence;
@@ -449,20 +458,20 @@ export function makeITGlossaryMiddleware(): TextMiddleware {
 }
 
 /** Inject Russian mat into ctx.text after downstream runs. */
-export function makeMatMiddleware(prob: number, stretch: number): TextMiddleware {
+export function makeMatMiddleware(prob: number, stretch: number, bias?: WordBias): TextMiddleware {
   const diversifier = new WordDiversifier();
   return async (ctx, next) => {
     await next();
-    ctx.text = injectMat(ctx.text, prob, stretch, diversifier);
+    ctx.text = injectMat(ctx.text, prob, stretch, diversifier, bias);
   };
 }
 
 /** Inject Russian interjections into ctx.text after downstream runs. */
-export function makeInterjectMiddleware(prob: number): TextMiddleware {
+export function makeInterjectMiddleware(prob: number, bias?: WordBias): TextMiddleware {
   const diversifier = new WordDiversifier();
   return async (ctx, next) => {
     await next();
-    ctx.text = injectInterject(ctx.text, prob, diversifier);
+    ctx.text = injectInterject(ctx.text, prob, diversifier, bias);
   };
 }
 

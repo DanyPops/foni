@@ -1,18 +1,23 @@
 /**
- * Tuning round 4 — how far can we push each anti-robotic lever?
+ * Tuning round 5 — de-robotisation.
  *
- * Baseline v3: de-harsh + punch + exciter(1.5@5kHz) + phaser(0.15) + reverb(12ms/6%)
+ * Research finding: RVC espeak output sounds robotic because:
+ *   1. Missing jitter/shimmer (too perfect) → breathiness noise injection
+ *   2. Wrong spectral tilt (too flat, too bright) → tilt EQ
+ *   3. Metallic sibilant artifacts (S/SH) → de-esser at 7kHz
+ *   4. Missing presence (2.5kHz) → presence EQ
+ *   5. Exciter at 5kHz adds harshness → move to 1.2kHz for warmth
  *
- * Each variant pushes ONE lever harder to find the sweet spot before
- * it tips over into "over-processed" or "echo-y" territory.
+ * Baseline: round 3 winner (v3 defaults) unchanged.
+ * Each variant isolates ONE de-robotisation lever, then all-derobot stacks them.
  *
- *   npm run listen:1   # baseline v3
- *   npm run listen:2   # exciter harder (drive=2.5)
- *   npm run listen:3   # exciter lower freq (4kHz — hits more of the midrange)
- *   npm run listen:4   # phaser deeper (0.3)
- *   npm run listen:5   # reverb longer (20ms / 8% decay)
- *   npm run listen:6   # all levers pushed (2.5 drive + 0.3 phaser + 20ms reverb)
- *   npm run listen:all # all 6 in sequence
+ *   npm run listen 1   # baseline (round 3 winner — v3 defaults)
+ *   npm run listen 2   # breathiness: −45dB noise floor
+ *   npm run listen 3   # tilt: +2dB@100Hz / −2dB@8kHz
+ *   npm run listen 4   # de-ess: −4dB@7kHz sibilant cut
+ *   npm run listen 5   # presence: +1.5dB@2.5kHz
+ *   npm run listen 6   # exciter-warm: move 5kHz→1.2kHz
+ *   npm run listen 7   # all-derobot: full stack + shorter reverb/phaser
  */
 
 import { describe, it, beforeAll } from "vitest";
@@ -32,12 +37,21 @@ const PHRASE = "Ну-ка, чики-брики и в дамке! Понял, б�
 // name  = “${index+1}. ${slug}”
 // label = describeSmoothingDiff(opts)
 const SLUGS: Array<{ slug: string; opts: Partial<SmoothingOptions> }> = [
-  { slug: "baseline",       opts: {} },
-  { slug: "exciter-harder", opts: { saturationDrive: 2.5 } },
-  { slug: "exciter-lower",  opts: { saturationFreq: 4000 } },
-  { slug: "phaser-deeper",  opts: { phaserDepth: 0.3 } },
-  { slug: "reverb-longer",  opts: { reverbMs: 20, reverbDecay: 0.08 } },
-  { slug: "all-pushed",     opts: { saturationDrive: 2.5, saturationFreq: 4000, phaserDepth: 0.3, reverbMs: 20, reverbDecay: 0.08 } },
+  { slug: "baseline-r3",  opts: {} },
+  { slug: "breathiness",  opts: { breathinessDb: -45 } },
+  { slug: "tilt",         opts: { tiltLowDb: 2, tiltHighDb: -2 } },
+  { slug: "deess",        opts: { deEssDb: 4 } },
+  { slug: "presence",     opts: { presenceDb: 1.5 } },
+  { slug: "exciter-warm", opts: { saturationFreq: 1200 } },
+  { slug: "all-derobot",  opts: {
+    breathinessDb: -45,
+    tiltLowDb: 2, tiltHighDb: -2,
+    deEssDb: 4,
+    presenceDb: 1.5,
+    saturationFreq: 1200,
+    reverbMs: 8, reverbDecay: 0.04,
+    phaserDepth: 0.08,
+  }},
 ];
 
 export const CONFIGS = SLUGS.map(({ slug, opts }, i) => ({
