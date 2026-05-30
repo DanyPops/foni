@@ -22,8 +22,9 @@ export type Emotion =
   | "neutral";    // default weights
 
 // WordBias lives in pipeline/interfaces.ts to avoid pipeline→core circular import.
-// Re-exported here for backward compat (core consumers still import from core).
-export type { WordBias } from "../pipeline/interfaces.ts";
+// Imported here for use within this file; re-exported for backward compat.
+import type { WordBias } from "../pipeline/interfaces.ts";
+export type { WordBias };
 
 export interface EmotionWeights {
   /** Multiplier on config.matProb. 2.0 = double. */
@@ -73,7 +74,7 @@ export const EMOTION_EMOJI: Record<Emotion, string> = {
 // When wordBias is set, the injection pipeline substitutes these lists
 // in place of the default MAT/INTERJECT arrays.
 
-export const BIAS_WORDS: Record<WordBias, { suffix: string[]; standalone: string[]; prefix: string[] }> = {
+export const BIAS_WORDS: import("../pipeline/interfaces.ts").BiasWordMap = {
   aggressive: {
     suffix:     [", блядь", ", сука", ", пиздец", ", ёб твою мать"],
     standalone: ["блядь", "сука", "пиздец", "охуеть"],

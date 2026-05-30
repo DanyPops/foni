@@ -393,7 +393,7 @@ function describeField(
     case "breathinessDb":      return `breathiness ${val}dB`;
     case "tiltLowDb":         return `tilt +${val}dB@100Hz`;
     case "tiltHighDb":         return `tilt ${val}dB@8kHz`;
-    case "presenceDb":         return `presence ${val > 0 ? "+" : ""}${val}dB@2.5kHz`;
+    case "presenceDb":         return `presence ${Number(val) > 0 ? "+" : ""}${val}dB@2.5kHz`;
     case "deEssDb":            return `de-ess −${val}dB@7kHz`;
     case "phaserDepth":        return `phaser depth=${val}`;
     case "compressionRatio":   return `compression ${val}:1`;
@@ -427,7 +427,7 @@ export function describeSmoothingDiff(
 
   for (const [k, val] of Object.entries(opts) as [keyof SmoothingOptions, number | boolean][]) {
     if (ABSORBED_FIELDS.has(k)) continue;
-    if (val === (base as Record<string, unknown>)[k]) continue; // unchanged
+    if (val === (base as unknown as Record<string, unknown>)[k]) continue; // unchanged
     const clause = describeField(k, val, opts, base);
     if (clause) clauses.push(clause);
   }
