@@ -22,7 +22,7 @@ import {
 }                              from "../pipeline/gap-scorer.ts";
 import { analyseVoiceBuffer }  from "../pipeline/voice-analysis.ts";
 import { computeVoiceQuality } from "../pipeline/voice-quality.ts";
-import { SmoothingProcessor, RVCProcessor } from "../pipeline/processors.ts";
+import { SmoothingProcessor, RVCProcessor, DEFAULT_SMOOTHING } from "../pipeline/processors.ts";
 import { DEFAULT_CONFIG }      from "../core/config.ts";
 
 // ─── Pipeline ─────────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ async function synthesiseFull(phrase: string): Promise<Buffer> {
   const raw  = synthesiseEspeak(phrase);
   const proc = new SmoothingProcessor(
     new RVCProcessor(DEFAULT_CONFIG.rvcUrl),
-    DEFAULT_CONFIG.smoothing,
+    DEFAULT_SMOOTHING,
   );
   return proc.process(raw);
 }

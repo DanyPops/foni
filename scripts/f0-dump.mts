@@ -8,8 +8,8 @@ import { spawnSync }                             from "node:child_process";
 import { join }                                  from "node:path";
 import { tmpdir }                                from "node:os";
 import { extractF0, f0ContourStats }             from "../pipeline/voice-quality.ts";
-import { SmoothingProcessor, RVCProcessor }      from "../pipeline/processors.ts";
-import { DEFAULT_CONFIG }                        from "../core/config.ts";
+import { SmoothingProcessor, RVCProcessor, DEFAULT_SMOOTHING } from "../pipeline/processors.ts";
+import { DEFAULT_CONFIG }                                       from "../core/config.ts";
 import { parseWav }                              from "../pipeline/audio-utils.ts";
 
 const PHRASE      = "Ну что брат как дела";
@@ -23,7 +23,7 @@ if (!existsSync(out)) throw new Error("espeak-ng failed");
 const raw = readFileSync(out);
 
 // Full pipeline
-const proc = new SmoothingProcessor(new RVCProcessor(DEFAULT_CONFIG.rvcUrl), DEFAULT_CONFIG.smoothing);
+const proc = new SmoothingProcessor(new RVCProcessor(DEFAULT_CONFIG.rvcUrl), DEFAULT_SMOOTHING);
 const wav  = await proc.process(raw);
 const { samples } = parseWav(wav);
 

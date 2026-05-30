@@ -1,16 +1,25 @@
 {
   "name": "foni",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "scripts": {
-    "test":      "vitest run",
+    "test": "vitest run",
     "test:watch": "vitest",
-    "demo":      "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run pipeline.e2e -t 'cheeki breeki'",
-    "listen":    "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 node scripts/listen.mjs"
+    "typecheck": "tsc --noEmit",
+    "demo": "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 vitest run pipeline.e2e -t 'cheeki breeki'",
+    "listen": "FONI_PLAY=1 RVC_URL=http://127.0.0.1:5050 node scripts/listen.mjs"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.78.0",
+    "@earendil-works/pi-tui": "^0.78.0",
+    "@types/node": "^25.9.1",
+    "typescript": "^6.0.3",
     "vitest": "^2.0.0"
   }
 }

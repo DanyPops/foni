@@ -102,9 +102,10 @@ export default async function (pi: ExtensionAPI) {
     // Auto-detect RVC server
     fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(1500) })
       .then(r => r.ok ? r.json() : null)
-      .then(async (data: { models: string[] } | null) => {
-        if (!data) return;
-        const models: string[] = data.models ?? [];
+      .then(async (data: unknown) => {
+        const typed = data as { models: string[] } | null;
+        if (!typed) return;
+        const models: string[] = typed.models ?? [];
         if (models.length > 0 && !config.rvcModel) config.rvcModel = models[0];
         if (!config.rvcEnabled && config.rvcModel) {
           try {
@@ -118,7 +119,7 @@ export default async function (pi: ExtensionAPI) {
           } catch { /* RVC load failed */ }
         }
         updateStatus(ctx);
-        engine.prewarm().then(() =>
+        engine.prewarm().then(async () =>
           ctx.ui.notify(`Аудио кэш прогрет (${(await import("./core/config.ts")).PREWARM_RU.length} фраз)`, "info"),
         );
       })
@@ -241,8 +242,9 @@ export default async function (pi: ExtensionAPI) {
       if (sub === "test") {
         const lines = ["Foni diagnostic:", ""];
         lines.push(config.enabled ? ok("TTS enabled") : err("TTS disabled -- run /tts to toggle on"));
-        const backend = await engine.detectBackend();
-        const player  = (await engine.ensureFacade())?.backendName;
+        const facade   = await engine.ensureFacade();
+        const backend  = { name: facade?.backendName ?? "none" };
+        const player   = facade?.backendName;
         lines.push(backend ? ok(`backend: ${backend.name}`) : err("no backend -- install espeak-ng or start Silero/Kokoro"));
         if (config.inputLang !== config.outputLang) {
           const t = await new MyMemoryTranslator(config.inputLang, config.outputLang).translate("Hello stalker");
@@ -260,8 +262,8 @@ export default async function (pi: ExtensionAPI) {
           lines.push(warn("RVC disabled -- /tts rvc on to enable bandit voice"));
         }
         ctx.ui.notify(lines.join("\n"), "info");
-        if (backend) {
-          const testFacade = new SpeakFacade(new IdentityTranslator(), backend, new IdentityProcessor(),
+        if (backend && 'synthesize' in backend) {
+          const testFacade = new SpeakFacade(new IdentityTranslator(), backend as import("./pipeline/interfaces.ts").TTSBackend, new IdentityProcessor(),
             (await engine.ensureFacade() as any)?.player ?? { play: async () => {}, detected: () => "none" },
             { voice: config.voice, speed: config.speed });
           await testFacade.speak("Test. One two three.", (m) => ctx.ui.notify(`  > ${m}`, "info"));
