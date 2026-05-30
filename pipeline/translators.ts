@@ -153,7 +153,7 @@ const INTERJECT: Record<"prefix" | "suffix" | "mid", string[]> = {
  * @param bias        Optional emotion bias — overrides word pools with curated sets.
  */
 function injectInterject(text: string, prob: number, diversifier: WordDiversifier, bias?: WordBias, biasWords?: BiasWordMap | null): string {
-  if (prob <= 0) return text;
+  if (!text || prob <= 0) return text ?? "";
 
   const bw = bias && bias !== "neutral" && biasWords ? biasWords[bias] : null;
 
@@ -269,7 +269,7 @@ export function stretchExpression(expr: string, repeats: number): string {
  * @param bias        Optional emotion bias — overrides word pools with curated sets.
  */
 function injectMat(text: string, prob: number, stretchProb: number, diversifier: WordDiversifier, bias?: WordBias, biasWords?: BiasWordMap | null): string {
-  if (prob <= 0) return text;
+  if (!text || prob <= 0) return text ?? "";
 
   const bw = bias && bias !== "neutral" && biasWords ? biasWords[bias] : null;
 

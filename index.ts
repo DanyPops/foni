@@ -119,9 +119,12 @@ export default async function (pi: ExtensionAPI) {
           } catch { /* RVC load failed */ }
         }
         updateStatus(ctx);
-        engine.prewarm().then(async () =>
-          ctx.ui.notify(`Аудио кэш прогрет (${(await import("./core/config.ts")).PREWARM_RU.length} фраз)`, "info"),
-        );
+        engine.prewarm().then(async () => {
+          try {
+            const { PREWARM_RU } = await import("./core/config.ts");
+            ctx.ui.notify(`Аудио кэш прогрет (${PREWARM_RU.length} фраз)`, "info");
+          } catch { /* ctx may be stale in CLI sessions — ignore */ }
+        });
       })
       .catch(() => {});
   });

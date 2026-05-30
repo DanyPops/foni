@@ -176,6 +176,7 @@ export interface ProsodyOptions {
  * Returns a full <speak>...</speak> SSML document for espeak-ng -m.
  */
 export function annotateProsody(text: string, opts: ProsodyOptions = {}): string {
+  if (!text) return "<speak></speak>";
   const {
     breaks            = true,
     prosodyVariation  = true,
