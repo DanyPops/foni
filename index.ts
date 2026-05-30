@@ -12,11 +12,56 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { FoniEngine }        from "./core/engine.ts";
+import { FoniEngine, type BackendFactory, type ProcessorFactory } from "./core/engine.ts";
 import { DEFAULT_CONFIG }    from "./core/config.ts";
+import type { FoniConfig }   from "./core/config.ts";
 import { IdentityTranslator, MyMemoryTranslator } from "./pipeline/translators.ts";
 import { IdentityProcessor, RVCProcessor, SmoothingProcessor } from "./pipeline/processors.ts";
+import { ProsodyBackend }    from "./pipeline/prosody.ts";
+import { BreathProcessor }   from "./pipeline/breath-injector.ts";
 import { SpeakFacade }       from "./pipeline/speak-facade.ts";
+import { SystemPlayer }      from "./pipeline/player.ts";
+import { SileroBackend }     from "./backends/silero.ts";
+import { KokoroBackend }     from "./backends/kokoro.ts";
+import { FakeYouBackend }    from "./backends/fakeyou.ts";
+import { EspeakBackend }     from "./backends/espeak.ts";
+
+// ─── Factory implementations (index.ts is the composition root) ───────────────────
+//
+// All concrete backend/processor construction lives here, not in core/engine.ts.
+// This is the Composition Root pattern: one place wires everything together.
+
+const backendFactory: BackendFactory = async (cfg: FoniConfig) => {
+  const candidates = [
+    new SileroBackend(cfg.sileroUrl),
+    new KokoroBackend(cfg.kokoroUrl),
+    new FakeYouBackend(cfg.fakeyouToken, cfg.fakeyouApiKey),
+    new EspeakBackend(cfg.outputLang === "ru" ? "ru" : "en"),
+  ];
+  if (cfg.backendPref !== "auto") {
+    const preferred = candidates.find(b => b.name === cfg.backendPref);
+    if (preferred && await preferred.isAvailable()) {
+      return cfg.prosodyEnabled && cfg.outputLang === "ru"
+        ? new ProsodyBackend(preferred)
+        : preferred;
+    }
+    return null;
+  }
+  for (const b of candidates) {
+    if (await b.isAvailable()) {
+      return cfg.prosodyEnabled && cfg.outputLang === "ru"
+        ? new ProsodyBackend(b)
+        : b;
+    }
+  }
+  return null;
+};
+
+const processorFactory: ProcessorFactory = (cfg: FoniConfig) => {
+  if (!cfg.rvcEnabled || !cfg.rvcModel) return new IdentityProcessor();
+  const inner = new SmoothingProcessor(new RVCProcessor(cfg.rvcUrl));
+  return cfg.breathEnabled ? new BreathProcessor(inner) : inner;
+};
 import { pickModel }         from "./tui/model-picker.ts";
 import { openFoniPanel }     from "./tui/foni-panel.ts";
 import type { FoniPanelState, FoniPanelActions } from "./tui/foni-panel.ts";
@@ -24,7 +69,12 @@ import type { FoniPanelState, FoniPanelActions } from "./tui/foni-panel.ts";
 // ─── Extension entry point ────────────────────────────────────────────────────
 
 export default async function (pi: ExtensionAPI) {
-  const engine = new FoniEngine({ ...DEFAULT_CONFIG });
+  const engine = new FoniEngine(
+    { ...DEFAULT_CONFIG },
+    backendFactory,
+    processorFactory,
+    new SystemPlayer(),
+  );
   const config = engine.config;
 
   // ── Status bar ─────────────────────────────────────────────────────────────
@@ -143,7 +193,7 @@ export default async function (pi: ExtensionAPI) {
         if (!config.rvcEnabled && !config.rvcModel) return;
         config.rvcEnabled = !config.rvcEnabled;
         engine.ensureFacade().then(f =>
-          f?.swapProcessor(config.rvcEnabled ? new SmoothingProcessor(new RVCProcessor(config.rvcUrl)) : new IdentityProcessor()),
+          f?.swapProcessor(processorFactory(config)),
         );
         updateStatus(ctx);
       },
@@ -160,7 +210,7 @@ export default async function (pi: ExtensionAPI) {
           });
           if (lr.ok) {
             const f = await engine.ensureFacade();
-            f?.swapProcessor(new SmoothingProcessor(new RVCProcessor(config.rvcUrl)));
+            f?.swapProcessor(processorFactory(config));
           }
           updateStatus(ctx);
         } catch { /* server unreachable */ }
@@ -395,7 +445,7 @@ export default async function (pi: ExtensionAPI) {
           if (rvcSub === "on" && !config.rvcModel) { ctx.ui.notify("Set a model first: /tts rvc model <name>", "warning"); return; }
           config.rvcEnabled = rvcSub === "on";
           const f = await engine.ensureFacade();
-          f?.swapProcessor(config.rvcEnabled ? new SmoothingProcessor(new RVCProcessor(config.rvcUrl)) : new IdentityProcessor());
+          f?.swapProcessor(processorFactory(config));
           ctx.ui.notify(`RVC ${config.rvcEnabled ? "enabled" : "disabled"}`, "info");
           updateStatus(ctx);
           return;
@@ -421,7 +471,7 @@ export default async function (pi: ExtensionAPI) {
             ctx.ui.notify(r.ok ? `RVC model loaded: ${config.rvcModel}` : `RVC server ${r.status}`, r.ok ? "info" : "warning");
             if (r.ok) {
               const f = await engine.ensureFacade();
-              f?.swapProcessor(new SmoothingProcessor(new RVCProcessor(config.rvcUrl)));
+              f?.swapProcessor(processorFactory(config));
             }
           } catch { ctx.ui.notify(`RVC unreachable at ${config.rvcUrl}`, "warning"); }
           updateStatus(ctx);

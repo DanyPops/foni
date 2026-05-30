@@ -38,3 +38,31 @@ export interface AudioProcessor {
 export interface Player {
   play(buf: Buffer): Promise<void>;
 }
+
+// ─── Shared domain types ──────────────────────────────────────────────────────
+// Placed here (not core/) so pipeline/ can use them without importing from core/.
+
+/**
+ * Word selection bias — driven by the detected emotion state.
+ * The values mirror EmotionState.bias but live in pipeline/interfaces.ts
+ * so translators.ts never needs to import from core/.
+ */
+export type WordBias =
+  | "aggressive"    // heat-3 mat only
+  | "commiseration" // empathetic mat + prison jargon
+  | "mockery"       // ironic/dismissive interjections
+  | "excitement"    // ого!, нихуя себе!, нехило!
+  | "neutral";
+
+/** Word pool for a single bias category (suffix / standalone / prefix positions). */
+export interface BiasWordSet {
+  suffix:     string[];
+  standalone: string[];
+  prefix:     string[];
+}
+
+/**
+ * Full bias word map — injected into middleware factories from core/emotion.ts.
+ * Lives here so pipeline/translators.ts never imports from core/.
+ */
+export type BiasWordMap = Record<WordBias, BiasWordSet>;
