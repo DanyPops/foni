@@ -237,7 +237,7 @@ export interface SmoothingOptions {
 
   /**
    * loudnorm target integrated loudness in LUFS (negative number).
-   * −14 LUFS ≈ −12 to −13 dBFS RMS, matching STALKER studio recordings.
+   * −14 LUFS ≈ −12 to −13 dBFS RMS.
    * 0 = use bare loudnorm (old behaviour). Off when normalize=false.
    */
   rmsTargetLufs: number;
@@ -251,19 +251,13 @@ export interface SmoothingOptions {
 
   /**
    * Silence-trim threshold in dBFS for edge silence removal.
-   * Strips leading/trailing silence below this level — closes voiced-ratio gap.
-   * −40 = trim everything below −40 dBFS at the edges. 0 = off.
+   * Strips leading/trailing silence below this level at the audio edges. 0 = off.
    */
   silenceTrimDb: number;
 
   normalize: boolean;
 }
 
-// Baseline v5: round 5 winner — all-derobot stack.
-// Round 1: natural-dry (trust RVC) won.
-// Round 2: de-harsh + punch added.
-// Round 3: all-three anti-robotic stack won — exciter(1.5@5kHz) + phaser(0.15) + reverb(12ms/6%).
-// Round 5: de-robotisation stack won — breathiness + tilt + de-ess + presence + exciter→1.2kHz.
 export const DEFAULT_SMOOTHING: SmoothingOptions = {
   // Edge handling
   padSecs:  0.3,
@@ -280,10 +274,7 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   deHarshDb:               -2,
   deHarshBandwidthOctaves: 2,
 
-  // Dynamics — compress crest factor to ~12 dB before loudnorm (FON-TSK-50)
-  // Pre-analysis: RVC output has ~17 dB crest factor at -21 dBFS RMS.
-  // Loudnorm at -14 LUFS boosts by ~7 dB → peaks hit +3 dBFS → limiter undoes normalisation.
-  // Fix: compress peaks down first so loudnorm can boost cleanly without limiter interference.
+  // Dynamics
   compressionRatio:       3,
   compressionAttackMs:    10,
   compressionReleaseMs:   80,
@@ -296,42 +287,35 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   airBoostDb:    0,
   airFreq:       8000,
 
-  // Harmonic saturation — DISABLED: aexciter was silently invalid at 1200 Hz in round 5
-  // (aexciter requires freq 2000–12000 Hz). The round-5 winner ran WITHOUT this filter.
-  // At 2000 Hz it floods the presence band and worsens spectral tilt. Off by default.
+  // Harmonic saturation — aexciter valid range is 2000–12000 Hz; disabled because
+  // 2000 Hz saturates the presence band and degrades spectral tilt.
   saturationDrive:  0,
   saturationAmount: 0,
   saturationFreq:   2000,
 
-  // Spatial depth — shorter/subtler than round 3
+  // Spatial depth
   phaserDepth:      0.08,
   reverbMs:         8,
   reverbDecay:      0.04,
   reverbInputGain:  0.8,
   reverbOutputGain: 0.88,
 
-  // De-robotisation — round 5 all-derobot stack baked in
-  // FON-TSK-51: tilt pushed further — target 40 dB, prev tilt 5/-4 gave 25-30 dB
-  breathinessDb: -43,   // more room noise to close noise-floor gap (was -48)
+  // De-robotisation
+  breathinessDb: -43,
   tiltLowDb:     8,
   tiltHighDb:    -6,
-  presenceDb:    0,      // 2.5kHz boost was hurting presence-ratio gap (was 1.5)
+  presenceDb:    0,
   deEssDb:       4,
 
-  // Pitch micro-variation — vibrato-subtle from round 6 (6Hz/0.003)
-  // Adds ~30 Hz F0 stdDev variation to close the 22% F0 gap (FON-TSK-53)
+  // Pitch micro-variation
   vibratoFreq:  6,
   vibratoDepth: 0.003,
 
-  // Output normalisation — FON-TSK-48/49/50
-  // Target −14 LUFS ≈ −12 to −13 dBFS RMS (matches STALKER baseline −12.6 dBFS)
+  // Output normalisation
   rmsTargetLufs: -14,
-  // Hard limiter at −1 dBFS — tames peaks, closes crest-factor gap (FON-TSK-50)
   limiterDb:     -1,
-  // Trim edge silence — closes voiced-ratio gap from 28% → ~55% (FON-TSK-49)
   silenceTrimDb: -40,
 
-  // Final
   normalize: true,
 };
 
@@ -488,13 +472,11 @@ export class SmoothingProcessor implements AudioProcessor {
 
     const parts: string[] = [];
 
-    // 0. Edge-silence trim — strip espeak leading/trailing silence before processing.
-    //    Closes voiced-ratio gap (28% → ~55%) without touching internal pauses.
+    // 0. Edge-silence trim — strip espeak leading/trailing silence.
+    //    stop_periods=1 (not -1): removes only the trailing edge, preserving
+    //    interior pauses inserted by SSML <break> tags.
     if (silenceTrimDb < 0) {
       const th = dbToLinear(silenceTrimDb).toFixed(6);
-      // start_periods=1: only leading edge; stop_periods=-1: trailing edge
-      // stop_periods=1 removes only the TRAILING edge silence.
-      // stop_periods=-1 would strip ALL interior pauses — including SSML breaks.
       parts.push(
         `silenceremove=start_periods=1:start_duration=0.05:start_threshold=${th}` +
         `:stop_periods=1:stop_duration=0.1:stop_threshold=${th}:detection=rms`,

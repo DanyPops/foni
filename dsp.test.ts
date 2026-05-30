@@ -52,7 +52,7 @@ const ISO: Partial<SmoothingOptions> = {
   vibratoFreq:      0,
   vibratoDepth:     0,
   normalize:        false,
-  // FON-TSK-48/49: new options — explicitly off so individual filter tests are isolated
+  // explicitly off so individual filter tests are isolated
   rmsTargetLufs:    0,
   limiterDb:        0,
   silenceTrimDb:    0,   // must be 0: sine avg = 0, detection=rms still trims edges
