@@ -139,7 +139,10 @@ export default async function (pi: ExtensionAPI) {
   pi.on("message_end", (_event, ctx) => {
     if (_event.message.role === "user") {
       // Detect emotion from user input, update decay state, rebuild translator
-      const text = (_event.message.content ?? "") as string;
+      const raw  = _event.message.content;
+      const text  = Array.isArray(raw)
+        ? raw.map((c: any) => c?.text ?? c).filter(Boolean).join(" ")
+        : (raw ?? "") as string;
       if (text) {
         engine.onUserMessage(text);
         updateStatus(ctx);
