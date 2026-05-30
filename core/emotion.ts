@@ -21,12 +21,9 @@ export type Emotion =
   | "cute"        // mock them for being a sissy — mockery injections
   | "neutral";    // default weights
 
-export type WordBias =
-  | "aggressive"    // heat-3 mat only
-  | "commiseration" // empathetic mat + prison jargon
-  | "mockery"       // ironic/dismissive interjections
-  | "excitement"    // ого!, нихуя себе!, нехило!
-  | "neutral";
+// WordBias lives in pipeline/interfaces.ts to avoid pipeline→core circular import.
+// Re-exported here for backward compat (core consumers still import from core).
+export type { WordBias } from "../pipeline/interfaces.ts";
 
 export interface EmotionWeights {
   /** Multiplier on config.matProb. 2.0 = double. */

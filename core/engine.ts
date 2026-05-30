@@ -11,8 +11,7 @@
 //   5. Reads engine.status() to update the status bar
 //   6. Routes /tts commands to engine mutators
 
-import { execFileSync } from "node:child_process";
-import { platform }     from "node:os";
+
 
 import type { FoniConfig }    from "./config.ts";
 import { PREWARM_RU }         from "./config.ts";
@@ -24,11 +23,7 @@ import {
 } from "./emotion.ts";
 import type { EmotionState } from "./emotion.ts";
 
-import { SpeakFacade }        from "../pipeline/speak-facade.ts";
-import { SystemPlayer }       from "../pipeline/player.ts";
-import { IdentityProcessor, RVCProcessor, SmoothingProcessor } from "../pipeline/processors.ts";
-import { ProsodyBackend } from "../pipeline/prosody.ts";
-import { BreathProcessor } from "../pipeline/breath-injector.ts";
+import { SpeakFacade } from "../pipeline/speak-facade.ts";
 import {
   PipelineTranslator,
   makeTranslateMiddleware,
@@ -37,12 +32,21 @@ import {
   makeITGlossaryMiddleware,
   type TextMiddleware,
 } from "../pipeline/translators.ts";
+import type { TTSBackend, AudioProcessor, Player } from "../pipeline/interfaces.ts";
 
-import { SileroBackend }  from "../backends/silero.ts";
-import { KokoroBackend }  from "../backends/kokoro.ts";
-import { FakeYouBackend } from "../backends/fakeyou.ts";
-import { EspeakBackend }  from "../backends/espeak.ts";
-import type { TTSBackend } from "../pipeline/interfaces.ts";
+import { BIAS_WORDS } from "./emotion.ts";
+
+// ─── Dependency-injection types ───────────────────────────────────────────────
+//
+// FoniEngine receives factories from the adapter layer (index.ts).
+// This keeps core/ free of concrete backend/processor/player imports.
+// Dependency Inversion Principle: depend on abstractions, not implementations.
+
+/** Detects availability and constructs the appropriate TTSBackend. */
+export type BackendFactory = (config: FoniConfig) => Promise<TTSBackend | null>;
+
+/** Constructs the AudioProcessor chain (RVC, smoothing, breath injection). */
+export type ProcessorFactory = (config: FoniConfig) => AudioProcessor;
 
 // ─── Status snapshot (read by extension for status bar) ──────────────────────
 
@@ -65,9 +69,20 @@ export class FoniEngine {
   private audioQueue: Promise<void>  = Promise.resolve();
   private streamState: StreamState   = freshState();
   private emotionState: EmotionState = neutralState();
-  private readonly player            = new SystemPlayer();
 
-  constructor(public readonly config: FoniConfig) {}
+  /**
+   * FoniEngine receives abstract factories rather than constructing backends
+   * and processors itself. This satisfies the Dependency Inversion Principle
+   * and breaks the core↔pipeline↔backends import cycle.
+   *
+   * The adapter layer (index.ts) supplies concrete implementations.
+   */
+  constructor(
+    public readonly config:            FoniConfig,
+    private readonly backendFactory:   BackendFactory,
+    private readonly processorFactory: ProcessorFactory,
+    private readonly player:           Player,
+  ) {}
 
   // ── Pipeline assembly ───────────────────────────────────────────────────────
 
@@ -83,57 +98,20 @@ export class FoniEngine {
       const matProb       = Math.min(1, this.config.matProb       * ew.matMultiplier);
       const interjectProb = Math.min(1, this.config.interjectProb * ew.interjectMultiplier);
       const bias = ew.wordBias;
-      if (this.config.matEnabled)       stack.push(makeMatMiddleware(matProb, this.config.matStretch, bias));
-      if (this.config.interjectEnabled) stack.push(makeInterjectMiddleware(interjectProb, bias));
+      // BIAS_WORDS injected here — not imported in translators.ts (breaks pipeline→core cycle)
+      if (this.config.matEnabled)       stack.push(makeMatMiddleware(matProb, this.config.matStretch, bias, BIAS_WORDS));
+      if (this.config.interjectEnabled) stack.push(makeInterjectMiddleware(interjectProb, bias, BIAS_WORDS));
     }
     return stack;
   }
 
-  private buildBackends(): TTSBackend[] {
-    return [
-      new SileroBackend(this.config.sileroUrl),
-      new KokoroBackend(this.config.kokoroUrl),
-      new FakeYouBackend(this.config.fakeyouToken, this.config.fakeyouApiKey),
-      new EspeakBackend(this.config.outputLang === "ru" ? "ru" : "en"),
-    ];
-  }
-
-  async detectBackend(): Promise<TTSBackend | null> {
-    const backends = this.buildBackends();
-    if (this.config.backendPref !== "auto") {
-      const preferred = backends.find(b => b.name === this.config.backendPref);
-      if (preferred && await preferred.isAvailable()) return preferred;
-      return null;
-    }
-    for (const b of backends) {
-      if (await b.isAvailable()) return b;
-    }
-    if (platform() === "darwin") {
-      try { execFileSync("which", ["say"], { stdio: "ignore" }); return new EspeakBackend("en"); }
-      catch { /* no say */ }
-    }
-    return null;
-  }
-
   async buildFacade(): Promise<SpeakFacade | null> {
-    let backend = await this.detectBackend();
+    // Concrete construction fully delegated to injected factories (DIP).
+    const backend = await this.backendFactory(this.config);
     if (!backend) return null;
 
-    // Prosody annotation — wrap backend with SSML break/rate/pitch (FON-TSK-58)
-    if (this.config.prosodyEnabled && this.config.outputLang === "ru") {
-      backend = new ProsodyBackend(backend);
-    }
-
     const translator = new PipelineTranslator(this.buildPipeline(), this.config.outputLang);
-
-    // Build processor chain — breath injection wraps the inner chain (FON-TSK-59)
-    let processor: ConstructorParameters<typeof SpeakFacade>[2];
-    if (this.config.rvcEnabled && this.config.rvcModel) {
-      const inner = new SmoothingProcessor(new RVCProcessor(this.config.rvcUrl));
-      processor   = this.config.breathEnabled ? new BreathProcessor(inner) : inner;
-    } else {
-      processor = new IdentityProcessor();
-    }
+    const processor  = this.processorFactory(this.config);
 
     return new SpeakFacade(translator, backend, processor, this.player, {
       voice: this.config.voice,
@@ -152,10 +130,13 @@ export class FoniEngine {
     );
   }
 
-  swapProcessor(p: ConstructorParameters<typeof RVCProcessor>[0] | null): void {
-    this.facade?.swapProcessor(
-      p ? new SmoothingProcessor(new RVCProcessor(p)) : new IdentityProcessor(),
-    );
+  /**
+   * Hot-swap the audio processor chain.
+   * The adapter layer (index.ts) constructs and passes the pre-built processor
+   * — engine.ts never touches concrete processor classes.
+   */
+  swapProcessor(p: AudioProcessor): void {
+    this.facade?.swapProcessor(p);
   }
 
   invalidateFacade(): void { this.facade = null; }

@@ -1,6 +1,5 @@
 import type { Translator } from "./interfaces.ts";
-import { BIAS_WORDS }     from "../core/emotion.ts";
-import type { WordBias }   from "../core/emotion.ts";
+import type { WordBias, BiasWordMap } from "./interfaces.ts";
 
 // ─── Translator defaults ────────────────────────────────────────────────────────────────
 
@@ -153,10 +152,10 @@ const INTERJECT: Record<"prefix" | "suffix" | "mid", string[]> = {
  * @param diversifier WordDiversifier instance for this session.
  * @param bias        Optional emotion bias — overrides word pools with curated sets.
  */
-function injectInterject(text: string, prob: number, diversifier: WordDiversifier, bias?: WordBias): string {
+function injectInterject(text: string, prob: number, diversifier: WordDiversifier, bias?: WordBias, biasWords?: BiasWordMap | null): string {
   if (prob <= 0) return text;
 
-  const bw = bias && bias !== "neutral" ? BIAS_WORDS[bias] : null;
+  const bw = bias && bias !== "neutral" && biasWords ? biasWords[bias] : null;
 
   const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
 
@@ -269,10 +268,10 @@ export function stretchExpression(expr: string, repeats: number): string {
  * @param diversifier WordDiversifier instance for this session.
  * @param bias        Optional emotion bias — overrides word pools with curated sets.
  */
-function injectMat(text: string, prob: number, stretchProb: number, diversifier: WordDiversifier, bias?: WordBias): string {
+function injectMat(text: string, prob: number, stretchProb: number, diversifier: WordDiversifier, bias?: WordBias, biasWords?: BiasWordMap | null): string {
   if (prob <= 0) return text;
 
-  const bw = bias && bias !== "neutral" ? BIAS_WORDS[bias] : null;
+  const bw = bias && bias !== "neutral" && biasWords ? biasWords[bias] : null;
 
   function pickMat(arr: readonly string[], biasArr?: readonly string[]): string {
     const pool = biasArr ?? arr;
@@ -458,20 +457,20 @@ export function makeITGlossaryMiddleware(): TextMiddleware {
 }
 
 /** Inject Russian mat into ctx.text after downstream runs. */
-export function makeMatMiddleware(prob: number, stretch: number, bias?: WordBias): TextMiddleware {
+export function makeMatMiddleware(prob: number, stretch: number, bias?: WordBias, biasWords?: BiasWordMap | null): TextMiddleware {
   const diversifier = new WordDiversifier();
   return async (ctx, next) => {
     await next();
-    ctx.text = injectMat(ctx.text, prob, stretch, diversifier, bias);
+    ctx.text = injectMat(ctx.text, prob, stretch, diversifier, bias, biasWords);
   };
 }
 
 /** Inject Russian interjections into ctx.text after downstream runs. */
-export function makeInterjectMiddleware(prob: number, bias?: WordBias): TextMiddleware {
+export function makeInterjectMiddleware(prob: number, bias?: WordBias, biasWords?: BiasWordMap | null): TextMiddleware {
   const diversifier = new WordDiversifier();
   return async (ctx, next) => {
     await next();
-    ctx.text = injectInterject(ctx.text, prob, diversifier, bias);
+    ctx.text = injectInterject(ctx.text, prob, diversifier, bias, biasWords);
   };
 }
 
