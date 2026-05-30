@@ -1,0 +1,71 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`gap summary snapshot 1`] = `
+"══════════════════════════════════════════════════════════════════
+  BASELINE GAP SUMMARY
+──────────────────────────────────────────────────────────────────
+  "Давай, шевелись."  →  28.5%
+  "Ну что, брат, как дела?"  →  21.3%
+  "Слушай, тут такое дело."  →  21.7%
+──────────────────────────────────────────────────────────────────
+  Mean gap: 23.8%
+
+  Worst dimensions:
+    Spectral tilt      ███████░░░░░░░░░░░░░ 34.4%
+    Voiced ratio       ███████░░░░░░░░░░░░░ 33.3%
+    RMS level          ██████░░░░░░░░░░░░░░ 28.8%
+    Spectral slope     ██████░░░░░░░░░░░░░░ 27.8%
+    Crest factor       █████░░░░░░░░░░░░░░░ 22.9%
+    Presence ratio     ████░░░░░░░░░░░░░░░░ 18.1%
+    Noise floor        ███░░░░░░░░░░░░░░░░░ 13.5%
+    F0 stdDev          ██░░░░░░░░░░░░░░░░░░ 12%
+══════════════════════════════════════════════════════════════════"
+`;
+
+exports[`gap table per phrase > snapshot — "Давай, шевелись." 1`] = `
+"Phrase: "Давай, шевелись."
+Metric             Target         Actual         Gap%   Verdict
+──────────────────────────────────────────────────────────────────
+RMS level          -12.63 dBFS    -16.81 dBFS    41.8%  🟠 far
+Crest factor       12.21 dB       15.81 dB       35.9%  🟠 far
+Spectral slope     -7.26 dB/oct   -12.24 dB/oct  49.8%  🟠 far
+Spectral tilt      39.94 dB       49.47 dB       23.8%  🟡 near
+Noise floor        0.03           0.02             16%  🟡 near
+Presence ratio     0.06           0.01           18.3%  🟡 near
+Voiced ratio       0.60           0.75           31.7%  🟡 near
+F0 stdDev          151.76 Hz      167.82 Hz      10.7%  ✅ close
+──────────────────────────────────────────────────────────────────
+Mean gap: 28.5%"
+`;
+
+exports[`gap table per phrase > snapshot — "Ну что, брат, как дела?" 1`] = `
+"Phrase: "Ну что, брат, как дела?"
+Metric             Target         Actual         Gap%   Verdict
+──────────────────────────────────────────────────────────────────
+RMS level          -12.63 dBFS    -14.93 dBFS      23%  🟡 near
+Crest factor       12.21 dB       13.93 dB       17.2%  🟡 near
+Spectral slope     -7.26 dB/oct   -7.16 dB/oct      1%  ✅ close
+Spectral tilt      39.94 dB       19.04 dB       52.2%  🟠 far
+Noise floor        0.03           0.02           12.4%  ✅ close
+Presence ratio     0.06           0.12           20.5%  🟡 near
+Voiced ratio       0.60           0.76           32.3%  🟡 near
+F0 stdDev          151.76 Hz      133.70 Hz        12%  ✅ close
+──────────────────────────────────────────────────────────────────
+Mean gap: 21.3%"
+`;
+
+exports[`gap table per phrase > snapshot — "Слушай, тут такое дело." 1`] = `
+"Phrase: "Слушай, тут такое дело."
+Metric             Target         Actual         Gap%   Verdict
+──────────────────────────────────────────────────────────────────
+RMS level          -12.63 dBFS    -14.79 dBFS    21.6%  🟡 near
+Crest factor       12.21 dB       13.79 dB       15.7%  🟡 near
+Spectral slope     -7.26 dB/oct   -10.51 dB/oct  32.5%  🟡 near
+Spectral tilt      39.94 dB       29.04 dB       27.2%  🟡 near
+Noise floor        0.03           0.02             12%  ✅ close
+Presence ratio     0.06           0.11           15.4%  🟡 near
+Voiced ratio       0.60           0.78             36%  🟠 far
+F0 stdDev          151.76 Hz      131.72 Hz      13.4%  ✅ close
+──────────────────────────────────────────────────────────────────
+Mean gap: 21.7%"
+`;
