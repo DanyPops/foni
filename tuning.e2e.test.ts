@@ -23,6 +23,7 @@ import { EspeakBackend }      from "./backends/espeak.ts";
 import { RVCProcessor, SmoothingProcessor, DEFAULT_SMOOTHING, describeSmoothingDiff } from "./pipeline/processors.ts";
 import type { SmoothingOptions }    from "./pipeline/processors.ts";
 import { SystemPlayer }       from "./pipeline/player.ts";
+import type { Player }         from "./pipeline/interfaces.ts";
 import { SpeakFacade }        from "./pipeline/speak-facade.ts";
 import { IdentityTranslator } from "./pipeline/translators.ts";
 
@@ -57,8 +58,8 @@ export const CONFIGS = SLUGS.map(({ slug, opts }, i) => ({
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-class NullPlayer {
-  detected() { return "null" as const; }
+/** Silent player used when FONI_PLAY is not set. Implements Player so no cast is needed. */
+class NullPlayer implements Player {
   async play(_buf: Buffer): Promise<void> {}
 }
 
@@ -74,7 +75,7 @@ function buildFacade(opts: Partial<SmoothingOptions>): SpeakFacade {
     new IdentityTranslator(),
     new EspeakBackend("ru"),
     new SmoothingProcessor(new RVCProcessor(RVC_URL), opts),
-    PLAY ? new SystemPlayer() : new NullPlayer() as unknown as SystemPlayer,
+    PLAY ? new SystemPlayer() : new NullPlayer(),
     { voice: "ru", speed: 1.15 },
   );
 }

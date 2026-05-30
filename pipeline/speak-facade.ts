@@ -31,7 +31,8 @@ const LOG_PREVIEW_CHARS = 50;
 /** Total bytes the audio LRU cache may hold before evicting. */
 export const AUDIO_CACHE_MAX_BYTES = 64 * 1024 * 1024; // 64 MB
 
-export type Log = (msg: string) => void;
+/** Progress callback passed to SpeakFacade.speak() — receives one-line status strings per synthesis stage. */
+export type SpeakProgressCallback = (msg: string) => void;
 
 // ─── Audio LRU cache ──────────────────────────────────────────────────────────
 
@@ -59,8 +60,10 @@ export class AudioLRU {
   }
 
   set(key: string, buf: Buffer): void {
-    if (this.map.has(key)) {
-      this._bytes -= this.map.get(key)!.length;
+    // Use get() directly — the result is the source of truth, avoiding a redundant has() check
+    const existing = this.map.get(key);
+    if (existing !== undefined) {
+      this._bytes -= existing.length;
       this.map.delete(key);
     }
     this.map.set(key, buf);
@@ -137,7 +140,7 @@ export class SpeakFacade {
    * (or been cancelled).  Callers may fire-and-forget or await — the play
    * queue is correct either way.
    */
-  async speak(rawText: string, log?: Log): Promise<void> {
+  async speak(rawText: string, log?: SpeakProgressCallback): Promise<void> {
     const emit = log ?? ((_m: string) => {});
     const gen  = this.generation;
 

@@ -215,7 +215,7 @@ export function asciiF0Contour(
   for (let row = 0; row < height; row++) {
     const f0Val = maxF0 - (row / (height - 1)) * (maxF0 - minF0);
     const label = `${Math.round(f0Val)}`.padStart(4);
-    lines.push(`${label} │${grid[row]!.join("")}`);
+    lines.push(`${label} │${(grid[row] ?? []).join("")}`);
   }
   lines.push("     └" + "─".repeat(width));
   lines.push(`      0ms${ " ".repeat(width - 8) }${totalMs.toFixed(0)}ms`);
