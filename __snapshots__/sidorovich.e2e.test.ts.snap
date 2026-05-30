@@ -1,0 +1,17 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`gap table snapshot — trader1a vs our synthesis 1`] = `
+"Phrase: "Подойди-ка, надо тебе ситуацию прояснить."
+Metric             Target         Actual         Gap%   Verdict
+──────────────────────────────────────────────────────────────────
+RMS level          -13.54 dBFS    -16.89 dBFS    33.5%  🟡 near
+Crest factor       13.03 dB       15.89 dB       28.6%  🟡 near
+Spectral slope     -5.97 dB/oct   -5.20 dB/oct    7.7%  ✅ close
+Spectral tilt      22.89 dB       21.15 dB        4.3%  ✅ close
+Noise floor        0.09           0.02           78.6%  🔴 very far
+Presence ratio     0.14           0.07           25.1%  🟡 near
+Voiced ratio       0.57           0.80           47.2%  🟠 far
+F0 stdDev          131.23 Hz      136.97 Hz       3.8%  ✅ close
+──────────────────────────────────────────────────────────────────
+Mean gap: 28.6%"
+`;
