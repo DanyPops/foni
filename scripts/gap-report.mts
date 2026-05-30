@@ -5,6 +5,7 @@
  * This script only handles I/O: synthesise → analyse → print → persist.
  *
  * Run: npx tsx scripts/gap-report.mts
+ * Debug: FONI_LOG_LEVEL=INFO npx tsx scripts/gap-report.mts  (logs to ~/.cache/foni/foni.log)
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
