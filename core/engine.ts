@@ -66,6 +66,7 @@ export interface EngineStatus {
 
 export class FoniEngine {
   private facade: SpeakFacade | null = null;
+  private facadePromise: Promise<SpeakFacade | null> | null = null;
   private audioQueue: Promise<void>  = Promise.resolve();
   private streamState: StreamState   = freshState();
   private emotionState: EmotionState = neutralState();
@@ -120,8 +121,12 @@ export class FoniEngine {
   }
 
   async ensureFacade(): Promise<SpeakFacade | null> {
-    if (!this.facade) this.facade = await this.buildFacade();
-    return this.facade;
+    if (this.facade) return this.facade;
+    if (!this.facadePromise) this.facadePromise = this.buildFacade();
+    const facade = await this.facadePromise;
+    if (!facade) this.facadePromise = null; // allow retry when no backend is available
+    else this.facade = facade;
+    return facade;
   }
 
   rebuildTranslator(): void {
@@ -139,7 +144,7 @@ export class FoniEngine {
     this.facade?.swapProcessor(p);
   }
 
-  invalidateFacade(): void { this.facade = null; }
+  invalidateFacade(): void { this.facade = null; this.facadePromise = null; }
 
   // ── Play queue ──────────────────────────────────────────────────────────────
 
