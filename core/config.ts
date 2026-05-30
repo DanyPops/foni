@@ -32,10 +32,10 @@ export interface FoniConfig {
   rvcUrl:     string;
   rvcModel:   string;
 
-  // Prosody — SSML break/rate/pitch annotation (FON-TSK-58)
+  // Prosody — SSML break/rate/pitch annotation
   prosodyEnabled: boolean;
 
-  // Breath injection — splice breath sounds at silence gaps (FON-TSK-59)
+  // Breath injection — splice breath sounds at silence gaps
   breathEnabled: boolean;
 }
 

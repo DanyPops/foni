@@ -9,7 +9,7 @@
  *
  *   Storage
  *     Memory: AudioLRU.bytes (in-process cache) + process RSS
- *     Disk:   not yet (PhraseLedger — FON-TSK-21)
+ *     Disk:   not yet (phrase ledger not implemented)
  *
  * Instrumentation: Spy pattern on Player — zero production code changes.
  *

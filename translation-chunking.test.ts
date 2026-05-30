@@ -1,5 +1,5 @@
 /**
- * Translation chunking test harness (FON-TSK-31)
+ * Translation chunking test harness
  *
  * Measures the tradeoff between chunking granularity and translation quality.
  * When an LLM translator sees shorter chunks it loses inter-sentence context,
