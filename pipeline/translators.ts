@@ -46,6 +46,7 @@ export interface PlacementScores {
  *  - Question mark          → suppresses suffix entirely
  */
 export function scorePlacement(sentence: string): PlacementScores {
+  if (!sentence) return { prefix: 0, mid: 0, suffix: 0 };
   const clauseCount = (sentence.match(/,/g) ?? []).length + 1;
   const wordCount   = sentence.trim().split(/\s+/).length;
   const isQuestion  = /\?$/.test(sentence.trim());
