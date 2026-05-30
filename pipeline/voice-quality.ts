@@ -383,11 +383,12 @@ export function computeVoiceQuality(
   const hopSize = Math.floor(sampleRate * hopMs  / 1000);
   let cppSum = 0, cppCount = 0;
   for (let fi = 0; fi < frames.length; fi++) {
-    if (!frames[fi]!.voiced) continue;
+    const frame = frames[fi];
+    if (!frame?.voiced) continue;
     const start = fi * hopSize;
     if (start + fSize > samples.length) continue;
     const rawFrame = new Float64Array(fSize);
-    for (let i = 0; i < fSize; i++) rawFrame[i] = samples[start + i]!;
+    for (let i = 0; i < fSize; i++) rawFrame[i] = samples[start + i] ?? 0;
     cppSum += computeCPP(rawFrame, sampleRate);
     cppCount++;
   }

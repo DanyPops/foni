@@ -34,9 +34,14 @@ export class SystemPlayer implements Player {
       afplay: ["/dev/stdin"],
     };
     return new Promise<void>((resolve) => {
-      const proc = spawn(bin, args[bin], { stdio: ["pipe", "ignore", "ignore"] });
-      proc.stdin!.write(buf);
-      proc.stdin!.end();
+      // args[bin] is always defined: bin is a PlayerBin key and args covers all variants
+      const argv = args[bin] ?? [];
+      const proc = spawn(bin, argv, { stdio: ["pipe", "ignore", "ignore"] });
+      // stdin is guaranteed non-null when stdio[0] = "pipe"
+      const stdin = proc.stdin;
+      if (!stdin) { resolve(); return; }  // guard: makes guarantee compiler-visible
+      stdin.write(buf);
+      stdin.end();
       proc.on("close", () => resolve());
       proc.on("error", () => resolve());
     });
