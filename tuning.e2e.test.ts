@@ -1,53 +1,41 @@
 /**
- * Tuning round 6 — pitch naturalness & body.
+ * Tuning — noise floor variants, A/B vs Sidorovich original.
  *
- * Baseline: round 5 winner (all-derobot) baked into DEFAULT_SMOOTHING.
- * Remaining roboticness sources:
- *   1. Mechanical pitch — espeak F0 is stepped/discrete → vibrato micro-variation
- *   2. Missing body/chest resonance — warmth EQ at 180Hz
- *   3. Missing air — high shelf at 10kHz
- *   4. Dynamics too flat — reduce compression 2:1 → 1.5:1
- *   5. Stack all together
+ * breathinessDb at -43 dB causes audible white noise and fails the
+ * no-static-noise RED criterion (noiseFloorRatio > 0.02).
  *
- *   npm run listen 1   # baseline-r5 (DEFAULT_SMOOTHING — all-derobot)
- *   npm run listen 2   # vibrato-subtle: 6Hz / depth=0.003
- *   npm run listen 3   # vibrato-medium: 5Hz / depth=0.006
- *   npm run listen 4   # warmth: +2.5dB@180Hz low shelf
- *   npm run listen 5   # air: +1.5dB@10kHz high shelf
- *   npm run listen 6   # compress-light: ratio 2→1.5
- *   npm run listen 7   # all-r6: vibrato + warmth + air + lighter compression
+ * Each variant plays: [original game WAV] → [our synthesis]
+ *
+ *   npm run listen 1   # noise-a:   -48 dB — subtle air
+ *   npm run listen 2   # noise-b:   -50 dB — barely-there
+ *   npm run listen 3   # noise-off:   0    — silent between words
  */
 
-import { describe, it, beforeAll } from "vitest";
-import { EspeakBackend }      from "./backends/espeak.ts";
-import { RVCProcessor, SmoothingProcessor, DEFAULT_SMOOTHING, describeSmoothingDiff } from "./pipeline/processors.ts";
-import type { SmoothingOptions }    from "./pipeline/processors.ts";
-import { SystemPlayer }       from "./pipeline/player.ts";
-import type { Player }         from "./pipeline/interfaces.ts";
-import { SpeakFacade }        from "./pipeline/speak-facade.ts";
-import { IdentityTranslator } from "./pipeline/translators.ts";
+import { describe, it, beforeAll }    from "vitest";
+import { readFileSync }                from "node:fs";
+import { EspeakBackend }               from "./backends/espeak.ts";
+import { RVCProcessor, SmoothingProcessor, describeSmoothingDiff } from "./pipeline/processors.ts";
+import type { SmoothingOptions }       from "./pipeline/processors.ts";
+import { SystemPlayer }                from "./pipeline/player.ts";
+import type { Player }                 from "./pipeline/interfaces.ts";
+import { SpeakFacade }                 from "./pipeline/speak-facade.ts";
+import { IdentityTranslator }          from "./pipeline/translators.ts";
 
 const RVC_URL = process.env.RVC_URL ?? "http://127.0.0.1:5050";
 const PLAY    = process.env.FONI_PLAY === "1";
 
-const PHRASE = "Ну-ка, чики-брики и в дамке! Понял, брателло?";
+// Sidorovich trader1a — "Подойди-ка, надо тебе ситуацию прояснить."
+// This is the exact WAV used for the acoustic baseline tensor.
+const PHRASE      = "Подойди-ка, надо тебе ситуацию прояснить.";
+const ORIGINAL_WAV = "baseline/stalker/wav/sidorovich/trader1a.wav";
 
 // slug = human intent label. name and description are fully auto-generated.
-// name  = “${index+1}. ${slug}”
+// name  = "${index+1}. ${slug}"
 // label = describeSmoothingDiff(opts)
 const SLUGS: Array<{ slug: string; opts: Partial<SmoothingOptions> }> = [
-  { slug: "baseline-r5",     opts: {} },
-  { slug: "vibrato-subtle",  opts: { vibratoFreq: 6, vibratoDepth: 0.003 } },
-  { slug: "vibrato-medium",  opts: { vibratoFreq: 5, vibratoDepth: 0.006 } },
-  { slug: "warmth",          opts: { warmthBoostDb: 2.5, warmthFreq: 180 } },
-  { slug: "air",             opts: { airBoostDb: 1.5, airFreq: 10000 } },
-  { slug: "compress-light",  opts: { compressionRatio: 1.5 } },
-  { slug: "all-r6",          opts: {
-    vibratoFreq: 6, vibratoDepth: 0.003,
-    warmthBoostDb: 2, warmthFreq: 180,
-    airBoostDb: 1, airFreq: 10000,
-    compressionRatio: 1.5,
-  }},
+  { slug: "noise-a",   opts: { breathinessDb: -48 } },
+  { slug: "noise-b",   opts: { breathinessDb: -50 } },
+  { slug: "noise-off", opts: { breathinessDb: 0   } },
 ];
 
 export const CONFIGS = SLUGS.map(({ slug, opts }, i) => ({
@@ -82,14 +70,14 @@ function buildFacade(opts: Partial<SmoothingOptions>): SpeakFacade {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe("Tuning iterations — rate each 1–5", () => {
+describe("Tuning iterations - rate each 1-5", () => {
   let skip = false;
 
   beforeAll(async () => {
     const espeakOk = await new EspeakBackend("ru").isAvailable();
     const rvcOk    = await isRvcReachable();
     skip = !espeakOk || !rvcOk;
-    if (skip) console.warn("[tuning] espeak or RVC not available — skipping");
+    if (skip) console.warn("[tuning] espeak or RVC not available - skipping");
     if (PLAY) console.info(`\n[tuning] Round 4: how far can we push?\n[tuning] Phrase: "${PHRASE}"\n`);
   });
 
@@ -98,9 +86,16 @@ describe("Tuning iterations — rate each 1–5", () => {
       if (skip) return;
       if (PLAY) {
         console.info(`\n${"─".repeat(60)}`);
-        console.info(`▶  ${name}`);
-        console.info(`   ${label}`);
+        console.info(`▶  ${name}  —  ${label}`);
+        console.info(`   "${PHRASE}"`);
         console.info(`${"─".repeat(60)}`);
+
+        const player = new SystemPlayer();
+
+        console.info(`   [1/2] original game WAV`);
+        await player.play(readFileSync(ORIGINAL_WAV));
+
+        console.info(`   [2/2] our synthesis`);
       }
       const facade = buildFacade(opts);
       await facade.speak(PHRASE, msg => {
