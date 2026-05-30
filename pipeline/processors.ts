@@ -301,7 +301,7 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   reverbOutputGain: 0.88,
 
   // De-robotisation
-  breathinessDb: -43,
+  breathinessDb: 0,
   tiltLowDb:     8,
   tiltHighDb:    -6,
   presenceDb:    0,
@@ -473,14 +473,14 @@ export class SmoothingProcessor implements AudioProcessor {
     const parts: string[] = [];
 
     // 0. Edge-silence trim — strip espeak leading/trailing silence.
-    //    stop_periods=1 (not -1): removes only the trailing edge, preserving
-    //    interior pauses inserted by SSML <break> tags.
+    //    Two-pass reversal: trim leading silence forward, trim trailing silence
+    //    by reversing → trim → reverse. Interior pauses (commas, SSML breaks)
+    //    are preserved because silenceremove only sees the audio start each pass.
     if (silenceTrimDb < 0) {
       const th = dbToLinear(silenceTrimDb).toFixed(6);
-      parts.push(
-        `silenceremove=start_periods=1:start_duration=0.05:start_threshold=${th}` +
-        `:stop_periods=1:stop_duration=0.1:stop_threshold=${th}:detection=rms`,
-      );
+      const trim = `silenceremove=start_periods=1:start_duration=0.05:start_threshold=${th}:detection=rms`;
+      parts.push(trim);                          // leading edge
+      parts.push(`areverse,${trim},areverse`);   // trailing edge
     }
 
     // 1. Fade in / out — only if non-zero (afade=d:0 silences the signal)
