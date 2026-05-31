@@ -407,6 +407,7 @@ dependencies = [
  "ebur128",
  "foni-analyse",
  "hound",
+ "ndarray 0.15.6",
  "ort",
  "reqwest",
  "serde",
