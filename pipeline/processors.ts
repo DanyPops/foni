@@ -454,7 +454,7 @@ export class SmoothingProcessor implements AudioProcessor {
       const resp = await fetch(`${this.synthUrl}/process`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ audio_data: rvcOut.toString("base64") }),
+        body:    JSON.stringify({ audio_data: rvcOut.toString("base64"), opts: this.opts }),
         signal:  AbortSignal.timeout(30_000),
       });
       if (!resp.ok) {

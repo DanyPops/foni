@@ -31,17 +31,17 @@ pub struct ConvertRequest {
     pub f0_up_key: i32,
 }
 
-fn find_pretrained(filename: &str) -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("FONI_MODELS_DIR") {
-        let p = PathBuf::from(dir).join("pretrained").join(filename);
-        if p.exists() {
-            return Some(p);
-        }
+fn find_pretrained(state: &AppState, filename: &str) -> Option<PathBuf> {
+    // models_dir is e.g. rvc/models — pretrained lives alongside the named models
+    let p = state.0.models_dir.join("pretrained").join(filename);
+    if p.exists() {
+        return Some(p);
     }
+    // Workspace-relative fallback for dev runs from arbitrary CWD
     for base in &["../../rvc/models/pretrained", "../rvc/models/pretrained"] {
-        let p = PathBuf::from(base).join(filename);
-        if p.exists() {
-            return Some(p);
+        let q = PathBuf::from(base).join(filename);
+        if q.exists() {
+            return Some(q);
         }
     }
     None
@@ -95,6 +95,141 @@ fn run_contentvec(
     Ok(repeated)
 }
 
+// Fixed mel-spectrogram params required by the RMVPE model training config.
+const RMVPE_N_FFT: usize = 1024;
+const RMVPE_HOP: usize = 160;
+const RMVPE_N_MELS: usize = 128;
+const RMVPE_FMIN: f32 = 30.0;
+const RMVPE_FMAX: f32 = 8_000.0;
+// 360-bin pitch tokenisation: cents = 20*i + 1997.379...
+const RMVPE_BINS: usize = 360;
+const RMVPE_CENTS_OFFSET: f32 = 1_997.379_4;
+const RMVPE_CENTS_STEP: f32 = 20.0;
+
+/// Center-padded mel spectrogram → `[1, 128, T_frames]` flat row-major buffer.
+fn audio_to_mel(audio: &[f32]) -> (Vec<f32>, usize) {
+    use rustfft::{num_complex::Complex, FftPlanner};
+    use std::f32::consts::PI;
+
+    let n_fft = RMVPE_N_FFT;
+    let hop = RMVPE_HOP;
+    let sr = 16_000u32;
+    let n_spec = n_fft / 2 + 1;
+
+    let window: Vec<f32> = (0..n_fft)
+        .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f32 / (n_fft - 1) as f32).cos()))
+        .collect();
+
+    let mel_hz = |hz: f32| 2595.0 * (1.0 + hz / 700.0).log10();
+    let imel = |m: f32| 700.0 * (10f32.powf(m / 2595.0) - 1.0);
+    let mel_lo = mel_hz(RMVPE_FMIN);
+    let mel_hi = mel_hz(RMVPE_FMAX);
+    let mel_pts: Vec<f32> = (0..=RMVPE_N_MELS + 1)
+        .map(|i| imel(mel_lo + i as f32 * (mel_hi - mel_lo) / (RMVPE_N_MELS + 1) as f32))
+        .collect();
+    let fft_freqs: Vec<f32> = (0..n_spec)
+        .map(|k| k as f32 * sr as f32 / n_fft as f32)
+        .collect();
+    let mut fb = vec![vec![0.0f32; n_spec]; RMVPE_N_MELS];
+    for m in 0..RMVPE_N_MELS {
+        let (f0, fc, f1) = (mel_pts[m], mel_pts[m + 1], mel_pts[m + 2]);
+        for (k, &f) in fft_freqs.iter().enumerate() {
+            fb[m][k] = if f >= f0 && f <= fc {
+                (f - f0) / (fc - f0)
+            } else if f > fc && f <= f1 {
+                (f1 - f) / (f1 - fc)
+            } else {
+                0.0
+            };
+        }
+    }
+
+    let pad = n_fft / 2;
+    let mut padded = vec![0.0f32; pad + audio.len() + pad];
+    padded[pad..pad + audio.len()].copy_from_slice(audio);
+
+    let n_frames = audio.len().div_ceil(hop) + 1;
+    let mut planner: FftPlanner<f32> = FftPlanner::new();
+    let fft = planner.plan_fft_forward(n_fft);
+
+    // Row-major: [n_mels, n_frames] then reshaped to [1, n_mels, n_frames]
+    let mut out = vec![0.0f32; RMVPE_N_MELS * n_frames];
+    let mut buf = vec![Complex::default(); n_fft];
+    for fi in 0..n_frames {
+        let start = fi * hop;
+        buf.iter_mut().enumerate().for_each(|(i, c)| {
+            let s = padded.get(start + i).copied().unwrap_or(0.0);
+            *c = Complex {
+                re: s * window[i],
+                im: 0.0,
+            };
+        });
+        fft.process(&mut buf);
+        let mags: Vec<f32> = buf[..n_spec].iter().map(|c| c.norm()).collect();
+        for m in 0..RMVPE_N_MELS {
+            out[m * n_frames + fi] = fb[m].iter().zip(&mags).map(|(&w, &x)| w * x).sum();
+        }
+    }
+
+    // RMVPE UNet has 5 encoder stages each with stride 2 along time → T must be
+    // divisible by 32 for the skip connections to match.
+    let padded_frames = n_frames.div_ceil(32) * 32;
+    if padded_frames > n_frames {
+        out.resize(RMVPE_N_MELS * padded_frames, 0.0);
+        // Zero-filled columns are already correct; re-layout: currently [n_mels, n_frames],
+        // need [n_mels, padded_frames] — existing data is contiguous per mel row so we must
+        // shift rows apart. Easiest: build new buffer.
+        let mut padded_out = vec![0.0f32; RMVPE_N_MELS * padded_frames];
+        for m in 0..RMVPE_N_MELS {
+            padded_out[m * padded_frames..m * padded_frames + n_frames]
+                .copy_from_slice(&out[m * n_frames..(m + 1) * n_frames]);
+        }
+        return (padded_out, n_frames); // return original n_frames for downstream use
+    }
+
+    (out, n_frames)
+}
+
+/// RMVPE local-average-cents decoder: salience `[T, 360]` → F0 Hz per frame.
+fn salience_to_hz(salience: &[f32], n_frames: usize, threshold: f32) -> Vec<f32> {
+    // cents_mapping with 4-element padding on each side (as in Python)
+    let cents: Vec<f32> = (0..RMVPE_BINS + 8)
+        .map(|i| {
+            if !(4..RMVPE_BINS + 4).contains(&i) {
+                0.0
+            } else {
+                RMVPE_CENTS_OFFSET + RMVPE_CENTS_STEP * (i as f32 - 4.0)
+            }
+        })
+        .collect();
+
+    (0..n_frames)
+        .map(|t| {
+            let row = &salience[t * RMVPE_BINS..(t + 1) * RMVPE_BINS];
+            let (center, &max_val) = row
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                .unwrap_or((0, &0.0));
+            if max_val <= threshold {
+                return 0.0;
+            }
+            let lo = center + 4; // cents array is padded by 4
+            let (product, weight): (f32, f32) = (0..9)
+                .map(|d| {
+                    let bi = (center + d).saturating_sub(4).min(RMVPE_BINS - 1);
+                    (row[bi] * cents[lo + d - 4], row[bi])
+                })
+                .fold((0.0, 0.0), |(p, w), (pi, wi)| (p + pi, w + wi));
+            if weight == 0.0 {
+                0.0
+            } else {
+                10.0 * 2.0f32.powf(product / weight / 1200.0)
+            }
+        })
+        .collect()
+}
+
 fn run_rmvpe(
     audio_16k: &[f32],
     t_phone: usize,
@@ -103,19 +238,37 @@ fn run_rmvpe(
 ) -> Result<(Vec<i64>, Vec<f32>), String> {
     use ort::value::Tensor;
 
-    let t = audio_16k.len();
-    let input =
-        Tensor::<f32>::from_array(([1usize, t], audio_16k.to_vec())).map_err(|e| e.to_string())?;
+    let (mel_flat, n_frames) = audio_to_mel(audio_16k);
+    let padded_frames = mel_flat.len() / RMVPE_N_MELS; // may be > n_frames if padded to multiple of 32
+
+    let input = Tensor::<f32>::from_array(([1usize, RMVPE_N_MELS, padded_frames], mel_flat))
+        .map_err(|e| e.to_string())?;
 
     let outputs = session
         .run(ort::inputs!["input" => input])
         .map_err(|e| e.to_string())?;
 
-    let (_, data) = outputs["output"]
+    let (shape, data) = outputs["output"]
         .try_extract_tensor::<f32>()
         .map_err(|e| e.to_string())?;
 
-    let f0_raw: Vec<f32> = data.to_vec();
+    // Output may be [B, T, 360] or [B, 360, T] — detect by checking dim 1 vs 2
+    let salience: Vec<f32> = if shape[2] as usize == RMVPE_BINS {
+        data.to_vec() // already [B, T, 360] → take [T, 360] slice
+    } else {
+        // [B, 360, T] → transpose to [T, 360]
+        let t = shape[2] as usize;
+        let mut out = vec![0.0f32; n_frames * RMVPE_BINS];
+        for ti in 0..t.min(n_frames) {
+            for b in 0..RMVPE_BINS {
+                out[ti * RMVPE_BINS + b] = data[b * t + ti];
+            }
+        }
+        out
+    };
+    let model_frames = shape[1] as usize;
+
+    let f0_raw = salience_to_hz(&salience, model_frames.min(n_frames), 0.03);
     let semitone_scale = 2.0f32.powf(f0_up_key as f32 / 12.0);
 
     let pitchf: Vec<f32> = (0..t_phone)
@@ -143,31 +296,36 @@ fn run_rmvpe(
     Ok((pitch, pitchf))
 }
 
-fn run_generator(
-    phone: Vec<f32>,
-    t_phone: usize,
-    pitch: Vec<i64>,
-    pitchf: Vec<f32>,
+// The generator was exported with T=200 as the trace size. The TorchScript exporter
+// bakes the attention K-length from the trace, so only T=200 works without shape errors.
+// Process in 200-frame chunks and concatenate audio output.
+const GENERATOR_CHUNK: usize = 200;
+
+fn run_generator_chunk(
+    phone: &[f32],
+    pitch: &[i64],
+    pitchf: &[f32],
     speaker_id: i64,
     session: &mut ort::session::Session,
 ) -> Result<Vec<f32>, String> {
     use ort::value::Tensor;
     use rand::Rng;
 
-    let noise: Vec<f32> = (0..NOISE_CHANNELS * t_phone)
+    let t = GENERATOR_CHUNK;
+    let noise: Vec<f32> = (0..NOISE_CHANNELS * t)
         .map(|_| rand::thread_rng().gen::<f32>() * 0.1)
         .collect();
 
     let phone_t =
-        Tensor::<f32>::from_array(([1usize, t_phone, 768], phone)).map_err(|e| e.to_string())?;
+        Tensor::<f32>::from_array(([1usize, t, 768], phone.to_vec())).map_err(|e| e.to_string())?;
     let lengths =
-        Tensor::<i64>::from_array(([1usize], vec![t_phone as i64])).map_err(|e| e.to_string())?;
+        Tensor::<i64>::from_array(([1usize], vec![t as i64])).map_err(|e| e.to_string())?;
     let pitch_t =
-        Tensor::<i64>::from_array(([1usize, t_phone], pitch)).map_err(|e| e.to_string())?;
+        Tensor::<i64>::from_array(([1usize, t], pitch.to_vec())).map_err(|e| e.to_string())?;
     let pitchf_t =
-        Tensor::<f32>::from_array(([1usize, t_phone], pitchf)).map_err(|e| e.to_string())?;
+        Tensor::<f32>::from_array(([1usize, t], pitchf.to_vec())).map_err(|e| e.to_string())?;
     let ds = Tensor::<i64>::from_array(([1usize], vec![speaker_id])).map_err(|e| e.to_string())?;
-    let rnd = Tensor::<f32>::from_array(([1usize, NOISE_CHANNELS, t_phone], noise))
+    let rnd = Tensor::<f32>::from_array(([1usize, NOISE_CHANNELS, t], noise))
         .map_err(|e| e.to_string())?;
 
     let outputs = session
@@ -184,8 +342,63 @@ fn run_generator(
     let (_, data) = outputs["audio"]
         .try_extract_tensor::<f32>()
         .map_err(|e| e.to_string())?;
-
     Ok(data.to_vec())
+}
+
+fn run_generator(
+    phone: Vec<f32>,
+    t_phone: usize,
+    pitch: Vec<i64>,
+    pitchf: Vec<f32>,
+    speaker_id: i64,
+    session: &mut ort::session::Session,
+) -> Result<Vec<f32>, String> {
+    // Pad inputs to a multiple of GENERATOR_CHUNK, then process chunk-by-chunk.
+    let n_chunks = t_phone.div_ceil(GENERATOR_CHUNK);
+    let t_padded = n_chunks * GENERATOR_CHUNK;
+
+    let mut phone_p = phone;
+    phone_p.resize(t_padded * 768, 0.0);
+    let mut pitch_p = pitch;
+    pitch_p.resize(t_padded, 1);
+    let mut pitchf_p = pitchf;
+    pitchf_p.resize(t_padded, 0.0);
+
+    // Probe first chunk to learn samples_per_chunk (export-time constant: 80000/200=400).
+    let samples_per_chunk = {
+        let out = run_generator_chunk(
+            &phone_p[..GENERATOR_CHUNK * 768],
+            &pitch_p[..GENERATOR_CHUNK],
+            &pitchf_p[..GENERATOR_CHUNK],
+            speaker_id,
+            session,
+        )?;
+        out.len() / GENERATOR_CHUNK
+    };
+
+    let mut audio_out = Vec::with_capacity(t_phone * samples_per_chunk);
+
+    // First chunk already processed above — re-process from start for simplicity
+    for chunk in 0..n_chunks {
+        let s = chunk * GENERATOR_CHUNK;
+        let chunk_audio = run_generator_chunk(
+            &phone_p[s * 768..(s + GENERATOR_CHUNK) * 768],
+            &pitch_p[s..s + GENERATOR_CHUNK],
+            &pitchf_p[s..s + GENERATOR_CHUNK],
+            speaker_id,
+            session,
+        )?;
+        // Trim the last chunk — it may contain silence from zero-padding.
+        let voiced_frames = if chunk == n_chunks - 1 {
+            t_phone - chunk * GENERATOR_CHUNK
+        } else {
+            GENERATOR_CHUNK
+        };
+        let keep = voiced_frames * samples_per_chunk;
+        audio_out.extend_from_slice(&chunk_audio[..keep.min(chunk_audio.len())]);
+    }
+
+    Ok(audio_out)
 }
 
 fn resample_to_16k(samples: &[f32], src_sr: u32) -> Vec<f32> {
@@ -216,11 +429,11 @@ pub async fn convert(
             .unwrap_or_else(|| guard.as_deref().unwrap_or("bandit").to_string())
     };
 
-    let cv_path = find_pretrained("contentvec-768-l12.onnx").ok_or((
+    let cv_path = find_pretrained(&state, "contentvec-768-l12.onnx").ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "ContentVec ONNX not found. Run: python3 rvc/export_contentvec_onnx.py".to_string(),
     ))?;
-    let rmvpe_path = find_pretrained("rmvpe.onnx").ok_or((
+    let rmvpe_path = find_pretrained(&state, "rmvpe.onnx").ok_or((
         StatusCode::SERVICE_UNAVAILABLE,
         "RMVPE ONNX not found. Download from HuggingFace lj1995/VoiceConversionWebUI".to_string(),
     ))?;
