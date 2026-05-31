@@ -1,5 +1,16 @@
 use serde::Serialize;
 
+const FRAME_MS: f32 = 10.0;
+
+/// Per-frame RMS energy envelope (one value per 10ms frame).
+pub fn energy_envelope(samples: &[f32], sample_rate: u32) -> Vec<f32> {
+    let frame = (sample_rate as f32 * FRAME_MS / 1000.0) as usize;
+    if frame == 0 { return vec![]; }
+    samples.chunks(frame)
+        .map(|c| (c.iter().map(|&s| s * s).sum::<f32>() / c.len() as f32).sqrt())
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LoudnessMetrics {
     /// RMS level in dBFS.

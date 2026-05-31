@@ -20,6 +20,7 @@
 
 import { createHash } from "node:crypto";
 import { stripMarkdown } from "../lib.ts";
+import type { FacadePort } from "../core/interfaces.ts";
 import type { AudioProcessor, Player, SynthOptions, Translator, TTSBackend } from "./interfaces.ts";
 
 /** Texts shorter than this after markdown stripping are not worth speaking. */
@@ -83,7 +84,7 @@ export class AudioLRU {
 
 // ─── SpeakFacade ──────────────────────────────────────────────────────────────
 
-export class SpeakFacade {
+export class SpeakFacade implements FacadePort {
   readonly cache: AudioLRU;
 
   /**

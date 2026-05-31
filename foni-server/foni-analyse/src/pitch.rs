@@ -17,35 +17,36 @@ pub struct PitchMetrics {
     pub voiced_ratio:  f32,
 }
 
-pub fn compute(samples: &[f32], sample_rate: u32) -> PitchMetrics {
+/// Run pyin and return both aggregate metrics and per-frame F0 contour.
+/// f0_contour[i] = F0 in Hz for frame i, 0.0 if unvoiced.
+pub fn compute_with_contour(samples: &[f32], sample_rate: u32) -> (PitchMetrics, Vec<f32>) {
     if samples.len() < FRAME_LENGTH {
-        return PitchMetrics { f0_mean_hz: 0.0, f0_stddev_hz: 0.0, f0_slope_semi: 0.0, voiced_ratio: 0.0 };
+        return (PitchMetrics { f0_mean_hz: 0.0, f0_stddev_hz: 0.0, f0_slope_semi: 0.0, voiced_ratio: 0.0 }, vec![]);
     }
-
     let wav: Vec<f64> = samples.iter().map(|&s| s as f64).collect();
+    let mut executor = PYINExecutor::new(FMIN, FMAX, sample_rate, FRAME_LENGTH, None, None, None);
+    let (_ts, f0, voiced_flag, _vp) = executor.pyin(&wav, f64::NAN, Framing::Center(PadMode::Constant(0.)));
 
-    let mut executor = PYINExecutor::new(
-        FMIN, FMAX,
-        sample_rate,
-        FRAME_LENGTH,
-        None, None, None,
-    );
-    let (_timestamps, f0, voiced_flag, _voiced_prob) =
-        executor.pyin(&wav, f64::NAN, Framing::Center(PadMode::Constant(0.)));
+    // Contour: 0.0 for unvoiced frames, F0 Hz for voiced
+    let contour: Vec<f32> = f0.iter().zip(voiced_flag.iter())
+        .map(|(&f, &v)| if v && f.is_finite() { f as f32 } else { 0.0 })
+        .collect();
 
+    let metrics = metrics_from_pyin(&f0, &voiced_flag, sample_rate);
+    (metrics, contour)
+}
+
+pub fn compute(samples: &[f32], sample_rate: u32) -> PitchMetrics {
+    compute_with_contour(samples, sample_rate).0
+}
+
+fn metrics_from_pyin(f0: &[f64], voiced_flag: &[bool], sample_rate: u32) -> PitchMetrics {
     let total_frames = voiced_flag.len();
     if total_frames == 0 {
         return PitchMetrics { f0_mean_hz: 0.0, f0_stddev_hz: 0.0, f0_slope_semi: 0.0, voiced_ratio: 0.0 };
     }
-
-    // Collect voiced F0 values (non-NAN)
-    let voiced: Vec<f64> = f0.iter()
-        .zip(voiced_flag.iter())
-        .filter(|(_, &v)| v)
-        .map(|(&f, _)| f)
-        .filter(|f| f.is_finite())
-        .collect();
-
+    let voiced: Vec<f64> = f0.iter().zip(voiced_flag.iter())
+        .filter(|(_, &v)| v).map(|(&f, _)| f).filter(|f| f.is_finite()).collect();
     let voiced_ratio = voiced_flag.iter().filter(|&&v| v).count() as f32 / total_frames as f32;
 
     if voiced.is_empty() {
