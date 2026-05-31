@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { generateSineWav, generateNoiseWav, parseWav } from "./pipeline/audio-test-utils.ts";
+import { generateSineWav, generateNoiseWav, parseWav } from "./pipeline/analysis/audio-test-utils.ts";
 import {
   fft,
   extractF0,
@@ -19,8 +19,8 @@ import {
   computeCPP,
   computeVoiceQuality,
   roboticnessScore,
-} from "./pipeline/voice-quality.ts";
-import { asciiSpectrogram, asciiPSD, asciiF0Contour } from "./pipeline/spectrogram.ts";
+} from "./pipeline/analysis/voice-quality.ts";
+import { asciiSpectrogram, asciiPSD, asciiF0Contour } from "./pipeline/analysis/spectrogram.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

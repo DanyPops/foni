@@ -8,7 +8,7 @@
 import { describe, it, expect } from "vitest";
 import { annotateProsody, isSsml, ProsodyBackend } from "./pipeline/prosody.ts";
 import { injectBreaths, BreathProcessor }          from "./pipeline/breath-injector.ts";
-import { generateSineWav, generateNoiseWav, parseWav, rms } from "./pipeline/audio-test-utils.ts";
+import { generateSineWav, generateNoiseWav, parseWav, rms } from "./pipeline/analysis/audio-test-utils.ts";
 
 const SR = 22050;
 

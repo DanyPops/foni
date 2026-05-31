@@ -20,9 +20,9 @@ import {
   formatGapTable,
   formatGapSummary,
   type TargetTensor,
-}                              from "../pipeline/gap-scorer.ts";
-import { analyseVoiceBuffer }  from "../pipeline/voice-analysis.ts";
-import { computeVoiceQuality } from "../pipeline/voice-quality.ts";
+}                              from "../pipeline/analysis/gap-scorer.ts";
+import { analyseVoiceBuffer }  from "../pipeline/analysis/voice-analysis.ts";
+import { computeVoiceQuality } from "../pipeline/analysis/voice-quality.ts";
 import { SmoothingProcessor, RVCProcessor, DEFAULT_SMOOTHING } from "../pipeline/processors.ts";
 import { DEFAULT_CONFIG }      from "../core/config.ts";
 

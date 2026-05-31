@@ -8,8 +8,8 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { computeVoiceQuality, roboticnessScore } from "../pipeline/voice-quality.ts";
-import { analyseVoiceBuffer }                    from "../pipeline/audio-test-utils.ts";
+import { computeVoiceQuality, roboticnessScore } from "../pipeline/analysis/voice-quality.ts";
+import { analyseVoiceBuffer }                    from "../pipeline/analysis/audio-test-utils.ts";
 
 const SAMPLE_RATE = 22050;
 const BASE        = "./baseline/stalker/wav";

@@ -1,0 +1,45 @@
+{
+  "_source": "trader1a.wav",
+  "_model": "base",
+  "total_duration_s": 3.212,
+  "words": [
+    {
+      "word": "Подайди-ка,",
+      "start_s": 0.06,
+      "end_s": 0.86,
+      "confidence": 0.719
+    },
+    {
+      "word": "надо",
+      "start_s": 1.18,
+      "end_s": 1.5,
+      "confidence": 0.94
+    },
+    {
+      "word": "тебе",
+      "start_s": 1.5,
+      "end_s": 1.76,
+      "confidence": 0.984
+    },
+    {
+      "word": "ситуацию",
+      "start_s": 1.76,
+      "end_s": 2.4,
+      "confidence": 0.99
+    },
+    {
+      "word": "прояснить.",
+      "start_s": 2.4,
+      "end_s": 3.02,
+      "confidence": 0.882
+    }
+  ],
+  "pauses": [
+    {
+      "after_word": "Подайди-ка,",
+      "start_s": 0.86,
+      "end_s": 1.18,
+      "duration_s": 0.32
+    }
+  ]
+}

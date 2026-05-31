@@ -9,8 +9,10 @@ hound    = { workspace = true }
 rustfft  = { workspace = true }
 ebur128  = { workspace = true }
 pyin     = { workspace = true }
+ndarray  = { workspace = true }
 serde    = { workspace = true }
 thiserror = { workspace = true }
+serde_json.workspace = true
 
 [dev-dependencies]
 # no extra deps — unit tests use synthetic signals only

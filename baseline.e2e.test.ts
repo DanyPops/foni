@@ -32,11 +32,12 @@ import {
   formatGapTable,
   formatGapSummary,
   type TargetTensor,
-} from "./pipeline/gap-scorer.ts";
-import { analyseVoiceBuffer }  from "./pipeline/voice-analysis.ts";
-import { computeVoiceQuality } from "./pipeline/voice-quality.ts";
+} from "./pipeline/analysis/gap-scorer.ts";
+import { analyseVoiceBuffer }  from "./pipeline/analysis/voice-analysis.ts";
+import { computeVoiceQuality } from "./pipeline/analysis/voice-quality.ts";
 import { SmoothingProcessor, RVCProcessor } from "./pipeline/processors.ts";
 import { DEFAULT_CONFIG }      from "./core/config.ts";
+import { ESPEAK_BASE_WPM }     from "./backends/espeak.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ function synthesiseEspeak(phrase: string): Buffer {
   const out = join(dir, "out.wav");
   const r   = spawnSync(
     "espeak-ng",
-    ["-v", "ru", "-s", "145", "-p", "50", "-a", "200", "-w", out, phrase],
+    ["-v", "ru", "-s", String(Math.round(ESPEAK_BASE_WPM * 1.15)), "-p", "50", "-a", "200", "-w", out, phrase],
     { encoding: "buffer" },
   );
   if (r.error || !existsSync(out)) {
