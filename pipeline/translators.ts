@@ -359,8 +359,12 @@ export function compose(stack: TextMiddleware[]): (ctx: TextCtx) => Promise<void
  * Reads ctx.text (not ctx.input) so upstream middleware like
  * makeITGlossaryMiddleware can pre-process the text first.
  */
-export function makeTranslateMiddleware(from: string, to: string): TextMiddleware {
-  const t = from === to ? new IdentityTranslatorImpl() : new LibreTranslateTranslatorImpl(from, to);
+export function makeTranslateMiddleware(from: string, to: string, useOllama = false): TextMiddleware {
+  const t = from === to
+    ? new IdentityTranslatorImpl()
+    : useOllama
+      ? new OllamaTranslator("http://localhost:11434", "qwen3:4b", from, to)
+      : new LibreTranslateTranslatorImpl(from, to);
   return async (ctx, next) => {
     ctx.text = await t.translate(ctx.text); // ctx.text may be pre-processed by glossary
     await next();
@@ -618,6 +622,56 @@ export class MatTranslator implements Translator {
  * @param inner       Translator to delegate to first.
  * @param probability 0–1 injection probability per opportunity (default 0.25).
  */
+// ─── OllamaTranslator — local LLM EN→RU with IT engineer system prompt ──────────
+
+/**
+ * Uses a local Ollama instance for context-aware EN→RU translation.
+ * Falls back to LibreTranslate if Ollama is unreachable.
+ *
+ * Preferred model: qwen3:4b (fast, good Russian, understands IT context).
+ * System prompt steers the model to keep IT terms as Russian loanwords
+ * (e.g. "deploy" → "деплоить", "commit" → "коммит").
+ */
+export class OllamaTranslator implements Translator {
+  private readonly fallback: LibreTranslateTranslator;
+
+  constructor(
+    private readonly ollamaUrl:  string = "http://localhost:11434",
+    private readonly model:      string = "qwen3:4b",
+    private readonly from:       string = "en",
+    private readonly to:         string = "ru",
+  ) {
+    this.fallback = new LibreTranslateTranslator(from, to);
+  }
+
+  async translate(text: string): Promise<string> {
+    try {
+      const resp = await fetch(`${this.ollamaUrl}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model:  this.model,
+          prompt: text,
+          stream: false,
+          system: [
+            `You are a professional ${this.from.toUpperCase()}-to-${this.to.toUpperCase()} translator for software engineers.`,
+            "Rules:",
+            "1. Translate the text naturally and fluently.",
+            "2. Keep IT/programming terms as common Russian loanwords: deploy→деплоить, commit→коммит, branch→ветка, merge→мержить, pull request→пулл-реквест, docker→докер.",
+            "3. Return ONLY the translation. No explanations, no quotes, no comments.",
+          ].join("\n"),
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!resp.ok) throw new Error(`Ollama ${resp.status}`);
+      const { response } = await resp.json() as { response: string };
+      return response.trim() || text;
+    } catch {
+      return this.fallback.translate(text);
+    }
+  }
+}
+
 export class InterjectTranslator implements Translator {
   private readonly diversifier = new WordDiversifier();
   constructor(

@@ -16,7 +16,7 @@ import { FoniEngine, type FacadeFactory, type TranslatorFactory, type ProcessorF
 import { DEFAULT_CONFIG }    from "./core/config.ts";
 import type { FoniConfig }   from "./core/config.ts";
 import {
-  IdentityTranslator, MyMemoryTranslator, PipelineTranslator,
+  IdentityTranslator, LibreTranslateTranslator, PipelineTranslator,
   makeTranslateMiddleware, makeMatMiddleware, makeInterjectMiddleware, makeITGlossaryMiddleware,
 } from "./pipeline/translators.ts";
 import { BIAS_WORDS, effectiveWeights } from "./core/emotion.ts";
@@ -282,8 +282,8 @@ export default async function (pi: ExtensionAPI) {
         const player   = facade?.backendName;
         lines.push(backend ? ok(`backend: ${backend.name}`) : err("no backend -- install espeak-ng or start Silero/Kokoro"));
         if (config.inputLang !== config.outputLang) {
-          const t = await new MyMemoryTranslator(config.inputLang, config.outputLang).translate("Hello stalker");
-          lines.push(t !== "Hello stalker" ? ok(`translation: "${t}"`) : warn("translation unreachable"));
+          const t = await new LibreTranslateTranslator(config.inputLang, config.outputLang).translate("Hello stalker");
+          lines.push(t !== "Hello stalker" ? ok(`translation: "${t}"`) : warn("translation unreachable (is LibreTranslate running on :5000?)"));
         } else {
           lines.push(ok(`language: ${config.outputLang.toUpperCase()} (passthrough)`));
         }
