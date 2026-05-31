@@ -1,14 +1,14 @@
-/// Word Error Rate via Whisper transcription.
+/// Word Error Rate via Whisper CLI transcription.
 ///
 /// WER = (S + D + I) / N  where S=substitutions, D=deletions, I=insertions, N=ref words.
 /// Implemented with Wagner-Fischer dynamic programming (pure Rust).
 ///
-/// Whisper is invoked as a Python subprocess — requires `whisper` installed.
+/// Invokes the `whisper` binary (openai-whisper CLI) — no inline Python.
 /// Results are returned as `None` when Whisper is unavailable (test gating).
 
 use std::process::Command;
 use std::io::Write;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 
 #[derive(Debug, Clone)]
 pub struct WerResult {
@@ -26,20 +26,29 @@ pub fn compute_wer(wav_bytes: &[u8], reference: &str, language: &str) -> Option<
     tmp.write_all(wav_bytes).ok()?;
     let tmp_path = tmp.path().to_str()?.to_string();
 
-    // Run: python3 -c "import whisper; ..."
-    let script = format!(
-        r#"import whisper, sys
-model = whisper.load_model("base")
-r = model.transcribe("{}", language="{}")
-print(r["text"].strip())
-"#,
-        tmp_path.replace('\\', "/"),
-        language,
-    );
-
-    let out = Command::new("python3").args(["-c", &script]).output().ok()?;
+    // Run: whisper --model base --language <lang> --output_format txt <file>
+    // The whisper CLI writes <stem>.txt in the output directory.
+    let out_dir = TempDir::new().ok()?;
+    let out = Command::new("whisper")
+        .args([
+            tmp_path.as_str(),
+            "--model",         "base",
+            "--language",      language,
+            "--output_format", "txt",
+            "--output_dir",    out_dir.path().to_str()?,
+        ])
+        .output()
+        .ok()?;
     if !out.status.success() { return None; }
-    let transcript = String::from_utf8(out.stdout).ok()?.trim().to_string();
+
+    // Read the generated .txt file
+    let txt_file = out_dir.path().join(
+        std::path::Path::new(&tmp_path)
+            .file_stem()?
+            .to_string_lossy()
+            .as_ref()
+    ).with_extension("txt");
+    let transcript = std::fs::read_to_string(&txt_file).ok()?.trim().to_string();
     if transcript.is_empty() { return None; }
 
     let (edits, ref_words) = edit_distance_words(reference, &transcript);
