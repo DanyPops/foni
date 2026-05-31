@@ -8,8 +8,18 @@ license.workspace = true
 name = "foni-cli"
 path = "src/main.rs"
 
+[[bin]]
+name = "fonictl"
+path = "src/fonictl.rs"
+
 [dependencies]
 foni-analyse = { path = "../foni-analyse" }
+clap         = { workspace = true }
+dialoguer    = { workspace = true }
+indicatif    = { workspace = true }
 hound        = { workspace = true }
+serde        = { workspace = true }
 serde_json   = { workspace = true }
+reqwest      = { workspace = true }
+tokio        = { workspace = true }
 thiserror    = { workspace = true }
