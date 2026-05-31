@@ -409,6 +409,7 @@ dependencies = [
  "hound",
  "ndarray 0.15.6",
  "ort",
+ "rand",
  "reqwest",
  "serde",
  "serde_json",

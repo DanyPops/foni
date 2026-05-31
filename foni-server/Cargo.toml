@@ -34,6 +34,7 @@ ebur128      = "0.1"
 # pitch detection — pYIN algorithm (same as librosa)
 pyin         = "1.2"
 ndarray      = "0.15"
+rand         = "0.8"
 
 # ONNX runtime — RVC model inference
 ort          = { version = "2.0.0-rc.12", features = ["copy-dylibs"] }
