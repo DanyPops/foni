@@ -1,0 +1,44 @@
+[workspace]
+members = [
+    "foni-synth",
+    "foni-analyse",
+    "foni-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version     = "0.1.0"
+edition     = "2021"
+license     = "MIT"
+authors     = ["danypops"]
+
+[workspace.dependencies]
+# async runtime
+tokio        = { version = "1",    features = ["full"] }
+
+# HTTP server
+axum         = { version = "0.7",  features = ["macros"] }
+tower        = "0.4"
+tower-http   = { version = "0.5",  features = ["trace"] }
+
+# serialization
+serde        = { version = "1",    features = ["derive"] }
+serde_json   = "1"
+serde_yaml   = "0.9"
+
+# audio I/O + DSP
+hound        = "3"
+rustfft      = "6"
+ebur128      = "0.1"
+
+# pitch detection — pYIN algorithm (same as librosa)
+pyin         = "1.2"
+
+# ONNX runtime — RVC model inference
+ort          = { version = "2.0.0-rc.12", features = ["copy-dylibs"] }
+
+# utility
+base64       = "0.22"
+thiserror    = "1"
+tracing      = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
