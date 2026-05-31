@@ -3,7 +3,9 @@ use std::net::SocketAddr;
 use tracing_subscriber::EnvFilter;
 
 mod config;
+pub mod dsp;
 mod routes;
+pub mod ssml;
 mod state;
 
 #[tokio::main]
