@@ -161,7 +161,7 @@ export function validateVoiceBuffer(wav: Buffer, sampleRate: number): Validation
   const lo       = Math.max(1e-10, bandEnergy(samples, sampleRate, 80, 500));
   const hi       = Math.max(1e-10, bandEnergy(samples, sampleRate, 2000, 8000));
   const spectralSlope = 20 * Math.log10(hi / lo) / (Math.log10(4000) - Math.log10(280));
-  const spectralTilt  = 20 * Math.log10(hi / lo);
+  const spectralTilt  = 20 * Math.log10(lo / hi); // positive = low-freq dominant (natural speech)
 
   const analysis: AudioAnalysis = {
     rmsDb, peakDb, crestFactor: peakDb - rmsDb,
