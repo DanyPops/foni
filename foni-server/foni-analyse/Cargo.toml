@@ -16,5 +16,6 @@ thiserror = { workspace = true }
 serde_json.workspace = true
 
 [dev-dependencies]
-# no extra deps — unit tests use synthetic signals only
+foni-synth   = { path = "../foni-synth" }
+serde_json   = { workspace = true }
 tempfile = "3"
