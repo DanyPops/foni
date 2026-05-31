@@ -59,8 +59,8 @@ const backendFactory: BackendFactory = async (cfg: FoniConfig) => {
 
 const processorFactory: ProcessorFactory = (cfg: FoniConfig) => {
   if (!cfg.rvcEnabled || !cfg.rvcModel) return new IdentityProcessor();
-  const inner = new SmoothingProcessor(new RVCProcessor(cfg.rvcUrl));
-  return cfg.breathEnabled ? new BreathProcessor(inner) : inner;
+  const inner = new SmoothingProcessor(new RVCProcessor(cfg.rvcUrl), {}, cfg.rvcUrl);
+  return cfg.breathEnabled ? new BreathProcessor(inner, {}, cfg.rvcUrl) : inner;
 };
 import { pickModel }         from "./tui/model-picker.ts";
 import { openFoniPanel }     from "./tui/foni-panel.ts";

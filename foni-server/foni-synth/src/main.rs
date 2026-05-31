@@ -7,6 +7,7 @@ pub mod dsp;
 mod routes;
 pub mod ssml;
 mod state;
+pub mod wav;
 
 #[tokio::main]
 async fn main() {
@@ -22,6 +23,8 @@ async fn main() {
         .route("/params",         get(routes::params::get_params).post(routes::params::set_params))
         .route("/convert",        post(routes::convert::convert))
         .route("/analyse",        post(routes::analyse::analyse))
+        .route("/process",        post(routes::process::process))
+        .route("/breath",         post(routes::breath::breath))
         .with_state(state);
 
     let addr: SocketAddr = "0.0.0.0:5050".parse().unwrap();

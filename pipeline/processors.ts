@@ -1,54 +1,38 @@
-import { spawnSync }   from "node:child_process";
 import type { AudioProcessor } from "./interfaces.ts";
 import { getLogger }   from "../core/logger.ts";
 import { rms, peak, parseWav } from "./analysis/audio-utils.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-/** Maximum WAV payload ffmpeg will read/write via stdio pipe. */
-const FFMPEG_MAX_BUFFER_BYTES = 50 * 1024 * 1024;
-
 /** Default RVC HTTP request timeout. CPU inference can be slow. */
 export const DEFAULT_RVC_TIMEOUT_MS = 60_000;
 
-// ─── ffmpeg helper ────────────────────────────────────────────────────────────
+// ─── WAV pad helper (replaces ffmpeg adelay+apad) ────────────────────────────
 
-/**
- * Run an ffmpeg audio filter chain on a WAV buffer via stdio pipes.
- * Returns the original buffer unchanged if ffmpeg is unavailable or errors,
- * and emits a WARN log so silent fallbacks are never invisible.
- */
-function ffmpegFilter(input: Buffer, af: string): Buffer {
-  const log = getLogger();
-  log.debug("ffmpeg", "apply filter", { len: input.length, af: af.slice(0, 120) });
-
-  const result = spawnSync(
-    "ffmpeg",
-    ["-hide_banner", "-loglevel", "error",
-     "-i", "pipe:0",
-     "-af", af,
-     "-f", "wav", "pipe:1"],
-    { input, maxBuffer: FFMPEG_MAX_BUFFER_BYTES },
-  );
-
-  if (result.error || result.status !== 0 || !result.stdout?.length) {
-    const stderr = result.stderr?.toString().trim() ?? "";
-    log.warn("ffmpeg", "filter failed — returning identity", {
-      status: result.status,
-      error:  result.error?.message,
-      stderr: stderr.slice(0, 200),
-      af:     af.slice(0, 120),
-    });
-    return input;
+/** Encode f32 samples as 16-bit PCM WAV (mono). */
+function encodeWav(samples: Float32Array, sampleRate: number): Buffer {
+  const n   = samples.length;
+  const buf = Buffer.alloc(44 + n * 2);
+  buf.write("RIFF", 0); buf.writeUInt32LE(36 + n * 2, 4);
+  buf.write("WAVE", 8); buf.write("fmt ", 12);
+  buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(sampleRate, 24); buf.writeUInt32LE(sampleRate * 2, 28);
+  buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34);
+  buf.write("data", 36); buf.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) {
+    buf.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(samples[i] * 32767))), 44 + i * 2);
   }
-
-  log.debug("ffmpeg", "filter OK", { inLen: input.length, outLen: result.stdout.length });
-  return result.stdout as Buffer;
+  return buf;
 }
 
-/** Convert dB to the linear amplitude scale ffmpeg acompressor expects. */
-function dbToLinear(db: number): number {
-  return Math.pow(10, db / 20);
+/** Prepend and append padSecs of silence to a WAV buffer. */
+function padWavSilence(input: Buffer, padSecs: number): Buffer {
+  if (padSecs <= 0) return input;
+  const { samples, sampleRate } = parseWav(input);
+  const padN   = Math.round(sampleRate * padSecs);
+  const padded = new Float32Array(padN + samples.length + padN);
+  padded.set(samples, padN);
+  return encodeWav(padded, sampleRate);
 }
 
 // ─── SmoothingProcessor ───────────────────────────────────────────────────────
@@ -320,16 +304,13 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
 };
 
 /**
- * SmoothingProcessor — wraps any AudioProcessor with ffmpeg pre/post passes.
+ * SmoothingProcessor — full DSP chain via foni-synth Rust server.
  *
- * Signal chain (professional audio order):
- *   Pre:  pad silence → RVC has edge context
- *   Post: fade → highpass → corrective EQ → compression →
- *         warmth EQ → air EQ → harmonic saturation → phaser →
- *         reverb → loudnorm
- *
- * All parameters exposed as named SmoothingOptions — no raw filter strings.
- * Falls back transparently if ffmpeg is not installed.
+ * Signal chain:
+ *   Pre:  pad silence (pure WAV) → RVC voice conversion
+ *   Post: Rust DSP via POST /process (no ffmpeg)
+ *         silence trim → fade → highpass → tilt → de-ess → vibrato →
+ *         corrective EQ → compression → warmth → air → reverb → loudnorm → clip
  */
 // ─── Auto-label: describe a SmoothingOptions diff against DEFAULT_SMOOTHING ───────────
 //
@@ -438,202 +419,58 @@ export function describeSmoothingDiff(
 export class SmoothingProcessor implements AudioProcessor {
   private readonly opts: SmoothingOptions;
 
+  /**
+   * @param inner      Underlying processor (typically RVCProcessor).
+   * @param opts       DSP parameter overrides against DEFAULT_SMOOTHING.
+   * @param synthUrl   Base URL of foni-synth server — POST /process endpoint.
+   *                   Defaults to same host:port as the RVC server (5050).
+   */
   constructor(
     private readonly inner: AudioProcessor,
     opts: Partial<SmoothingOptions> = {},
+    private readonly synthUrl: string = "http://localhost:5050",
   ) {
     this.opts = { ...DEFAULT_SMOOTHING, ...opts };
   }
 
-  private buildPreFilter(): string {
-    const { padSecs } = this.opts;
-    if (padSecs <= 0) return "anull";  // identity — no padding
-    const ms = Math.round(padSecs * 1000);
-    return `adelay=${ms}|${ms},apad=pad_dur=${padSecs}`;
-  }
+  // buildPreFilter / buildPostFilter / ffmpegFilter removed — replaced by
+  // padWavSilence() + POST /process (Rust DSP chain in foni-synth).
 
-  private buildPostFilter(): string {
-    const {
-      fadeSecs,
-      highpassFreq,
-      deBoxFreq, deBoxDb, deBoxBandwidthOctaves,
-      deHarshFreq, deHarshDb, deHarshBandwidthOctaves,
-      compressionRatio, compressionAttackMs, compressionReleaseMs,
-      compressionThresholdDb, compressionMakeupDb,
-      warmthBoostDb, warmthFreq,
-      airBoostDb, airFreq,
-      saturationDrive, saturationAmount, saturationFreq,
-      phaserDepth,
-      reverbMs, reverbDecay, reverbInputGain, reverbOutputGain,
-      breathinessDb, tiltLowDb, tiltHighDb, presenceDb, deEssDb,
-      vibratoFreq, vibratoDepth,
-      normalize, rmsTargetLufs, limiterDb, silenceTrimDb,
-    } = this.opts;
-
-    const parts: string[] = [];
-
-    // 0. Edge-silence trim — strip espeak leading/trailing silence.
-    //    Two-pass reversal: trim leading silence forward, trim trailing silence
-    //    by reversing → trim → reverse. Interior pauses (commas, SSML breaks)
-    //    are preserved because silenceremove only sees the audio start each pass.
-    if (silenceTrimDb < 0) {
-      const th = dbToLinear(silenceTrimDb).toFixed(6);
-      const trim = `silenceremove=start_periods=1:start_duration=0.05:start_threshold=${th}:detection=rms`;
-      parts.push(trim);                          // leading edge
-      parts.push(`areverse,${trim},areverse`);   // trailing edge
-    }
-
-    // 1. Fade in / out — only if non-zero (afade=d:0 silences the signal)
-    if (fadeSecs > 0) {
-      parts.push(`afade=t=in:d=${fadeSecs}`);
-      parts.push(`areverse,afade=t=in:d=${fadeSecs},areverse`);
-    }
-
-    // 2. Mud removal — strip sub-bass before any boosting
-    if (highpassFreq > 0) {
-      parts.push(`highpass=f=${highpassFreq}`);
-    }
-
-    // 2b. Spectral tilt — restore natural −6dB/oct voice roll-off flattened by RVC
-    if (tiltLowDb !== 0) {
-      parts.push(`lowshelf=g=${tiltLowDb}:f=100:width_type=s:width=0.7`);
-    }
-    if (tiltHighDb !== 0) {
-      parts.push(`highshelf=g=${tiltHighDb}:f=8000:width_type=s:width=0.7`);
-    }
-
-    // 2c. De-esser — suppress metallic sibilant artifacts at 7kHz
-    if (deEssDb > 0) {
-      parts.push(`equalizer=f=7000:width_type=o:width=1.0:g=${-deEssDb}`);
-    }
-
-    // 2e. Vibrato — pitch micro-variation to break mechanical espeak pitch steps
-    if (vibratoFreq > 0 && vibratoDepth > 0) {
-      parts.push(`vibrato=f=${vibratoFreq}:d=${vibratoDepth}`);
-    }
-
-    // 2d. Breathiness — add noise floor to simulate human airflow
-    if (breathinessDb < 0) {
-      const ng = dbToLinear(breathinessDb);
-      parts.push(`aeval=val(0)+${ng.toFixed(6)}*(random(0)-0.5)*2:c=same`);
-    }
-
-    // 3. Corrective EQ — cut problems before adding character
-    if (deBoxDb !== 0) {
-      parts.push(
-        `equalizer=f=${deBoxFreq}:width_type=o:width=${deBoxBandwidthOctaves}:g=${deBoxDb}`,
-      );
-    }
-    if (deHarshDb !== 0) {
-      parts.push(
-        `equalizer=f=${deHarshFreq}:width_type=o:width=${deHarshBandwidthOctaves}:g=${deHarshDb}`,
-      );
-    }
-
-    // 4. Compression — even out dynamics before boosting anything
-    if (compressionRatio > 1) {
-      const threshold = dbToLinear(compressionThresholdDb);
-      const makeup    = dbToLinear(compressionMakeupDb);
-      parts.push(
-        `acompressor=threshold=${threshold.toFixed(5)}` +
-        `:ratio=${compressionRatio}` +
-        `:attack=${compressionAttackMs}` +
-        `:release=${compressionReleaseMs}` +
-        `:makeup=${makeup.toFixed(5)}`,
-      );
-    }
-
-    // 5. Warmth — low shelf boost for body and chest resonance
-    if (warmthBoostDb !== 0) {
-      parts.push(`lowshelf=g=${warmthBoostDb}:f=${warmthFreq}:width_type=s:width=0.5`);
-    }
-
-    // 5b. Presence — voice intelligibility sweet spot at 2.5kHz
-    if (presenceDb !== 0) {
-      parts.push(`equalizer=f=2500:width_type=o:width=1.5:g=${presenceDb}`);
-    }
-
-    // 6. Air — high shelf boost for sparkle and presence above 8kHz
-    if (airBoostDb !== 0) {
-      parts.push(`highshelf=g=${airBoostDb}:f=${airFreq}:width_type=s:width=0.5`);
-    }
-
-    // 7. Harmonic saturation — adds synthetic odd harmonics (tape/tube warmth)
-    //    This is the single biggest upgrade over plain EQ.
-    if (saturationDrive > 0 && saturationAmount > 0) {
-      parts.push(
-        `aexciter=freq=${saturationFreq}` +
-        `:drive=${saturationDrive}` +
-        `:amount=${saturationAmount}` +
-        `:level_in=1:level_out=1:blend=0`,
-      );
-    }
-
-    // 8. Phase depth — subtle movement makes voice feel less flat
-    if (phaserDepth > 0) {
-      parts.push(
-        `aphaser=in_gain=0.4:out_gain=0.74:delay=3:decay=${phaserDepth}:speed=0.5`,
-      );
-    }
-
-    // 9. Room reverb — spatial placement before normalize
-    if (reverbMs > 0 && reverbDecay > 0) {
-      parts.push(
-        `aecho=${reverbInputGain}:${reverbOutputGain}:${reverbMs}:${reverbDecay}`,
-      );
-    }
-
-    // 10. Loudnorm — linear=true required for single-pass pipe mode (ffmpeg 7.x).
-    //     Without linear=true the two-pass algorithm applies zero gain in a pipe.
-    if (normalize) {
-      const lufs = rmsTargetLufs !== 0 ? rmsTargetLufs : -24;
-      parts.push(`loudnorm=I=${lufs}:TP=-1:LRA=11:linear=true`);
-    }
-
-    // 11. Hard clip via volume ceiling — alimiter is broken in ffmpeg 7.1.4 (confirmed by tests):
-    //   it behaves as a normalizer not a limiter. Replaced with a simple hard clip.
-    //   loudnorm TP=-1:linear=true already handles most cases; this is belt-and-suspenders.
-    if (limiterDb < 0) {
-      // volume filter followed by hard clip via aeval
-      const ceiling = dbToLinear(limiterDb);
-      parts.push(`aeval=min(${ceiling.toFixed(6)}\\,max(-${ceiling.toFixed(6)}\\,val(0))):c=same`);
-    }
-
-    // Guard: ffmpeg rejects an empty -af string. Return identity filter instead.
-    return parts.length > 0 ? parts.join(",") : "anull";
-  }
+  // DEAD CODE MARKER — kept for grepping during migration review:
 
   async process(input: Buffer): Promise<Buffer> {
     const log = getLogger();
 
-    const stageInfo = (label: string, buf: Buffer): void => {
-      try {
-        const { samples } = parseWav(buf);
-        const r = rms(samples);
-        const p = peak(samples);
-        const rDb = r > 0 ? (20 * Math.log10(r)).toFixed(1) : "-∞";
-        const pDb = p > 0 ? (20 * Math.log10(p)).toFixed(1) : "-∞";
-        const crest = (isFinite(+rDb) && isFinite(+pDb))
-          ? (+pDb - +rDb).toFixed(1) : "?";
-        log.info("SmoothingProcessor", label,
-          { rms: `${rDb} dBFS`, peak: `${pDb} dBFS`, crest: `${crest} dB` });
-      } catch (e) {
-        log.warn("SmoothingProcessor", `${label} parse failed`, { error: String(e) });
-      }
-    };
+    // 1. Pad silence — gives RVC edge context (pure WAV manipulation, no ffmpeg)
+    const padded = padWavSilence(input, this.opts.padSecs);
+    log.debug("SmoothingProcessor", "padded", { inLen: input.length, outLen: padded.length });
 
-    stageInfo("input",    input);
-
-    const padded = ffmpegFilter(input, this.buildPreFilter());
-    stageInfo("post-pad", padded);
-
+    // 2. RVC voice conversion
     const rvcOut = await this.inner.process(padded);
-    stageInfo("post-RVC", rvcOut);
+    log.debug("SmoothingProcessor", "post-RVC", { len: rvcOut.length });
 
-    const final = ffmpegFilter(rvcOut, this.buildPostFilter());
-    stageInfo("post-filter", final);
-
-    return final;
+    // 3. DSP chain via foni-synth /process (Rust — no ffmpeg)
+    try {
+      const resp = await fetch(`${this.synthUrl}/process`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ audio_data: rvcOut.toString("base64") }),
+        signal:  AbortSignal.timeout(30_000),
+      });
+      if (!resp.ok) {
+        log.warn("SmoothingProcessor", "foni-synth /process failed — returning RVC output",
+          { status: resp.status });
+        return rvcOut;
+      }
+      const { audio_data } = await resp.json() as { audio_data: string };
+      const final = Buffer.from(audio_data, "base64");
+      log.debug("SmoothingProcessor", "post-DSP", { len: final.length });
+      return final;
+    } catch (e: any) {
+      log.warn("SmoothingProcessor", "/process unreachable — returning RVC output",
+        { error: e?.message });
+      return rvcOut;
+    }
   }
 }
 

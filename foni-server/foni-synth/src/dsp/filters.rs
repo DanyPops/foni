@@ -82,6 +82,22 @@ impl Biquad {
         )
     }
 
+    /// Low-pass filter (2nd order Butterworth).
+    pub fn lowpass(cutoff_hz: f32, sample_rate: u32) -> Self {
+        let w0     = 2. * std::f64::consts::PI * cutoff_hz as f64 / sample_rate as f64;
+        let cos_w0 = w0.cos();
+        let q      = std::f64::consts::FRAC_1_SQRT_2;
+        let alpha  = w0.sin() / (2. * q);
+        Self::new(
+            (1. - cos_w0) / 2.,
+             1. - cos_w0,
+            (1. - cos_w0) / 2.,
+            1. + alpha,
+            -2. * cos_w0,
+            1. - alpha,
+        )
+    }
+
     /// Peaking EQ (±dBgain centred at freq_hz, Q controls bandwidth).
     pub fn peaking(freq_hz: f32, gain_db: f32, q: f32, sample_rate: u32) -> Self {
         let w0    = 2. * std::f64::consts::PI * freq_hz as f64 / sample_rate as f64;
