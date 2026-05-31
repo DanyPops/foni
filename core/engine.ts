@@ -23,7 +23,8 @@ import {
 } from "./emotion.ts";
 import type { EmotionState } from "./emotion.ts";
 
-import { SpeakFacade } from "../pipeline/speak-facade.ts";
+import type { FacadePort } from "./interfaces.ts";
+import { SpeakFacade }    from "../pipeline/speak-facade.ts";
 import {
   PipelineTranslator,
   makeTranslateMiddleware,
@@ -65,8 +66,8 @@ export interface EngineStatus {
 // ─── Engine ───────────────────────────────────────────────────────────────────
 
 export class FoniEngine {
-  private facade: SpeakFacade | null = null;
-  private facadePromise: Promise<SpeakFacade | null> | null = null;
+  private facade: FacadePort | null = null;
+  private facadePromise: Promise<FacadePort | null> | null = null;
   private audioQueue: Promise<void>  = Promise.resolve();
   private streamState: StreamState   = freshState();
   private emotionState: EmotionState = neutralState();
@@ -106,7 +107,7 @@ export class FoniEngine {
     return stack;
   }
 
-  async buildFacade(): Promise<SpeakFacade | null> {
+  async buildFacade(): Promise<FacadePort | null> {
     // Concrete construction fully delegated to injected factories (DIP).
     const backend = await this.backendFactory(this.config);
     if (!backend) return null;
@@ -120,7 +121,7 @@ export class FoniEngine {
     });
   }
 
-  async ensureFacade(): Promise<SpeakFacade | null> {
+  async ensureFacade(): Promise<FacadePort | null> {
     if (this.facade) return this.facade;
     if (!this.facadePromise) this.facadePromise = this.buildFacade();
     const facade = await this.facadePromise;
