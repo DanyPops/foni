@@ -23,31 +23,12 @@ import {
 } from "./emotion.ts";
 import type { EmotionState } from "./emotion.ts";
 
-import type { FacadePort } from "./interfaces.ts";
-import { SpeakFacade }    from "../pipeline/speak-facade.ts";
-import {
-  PipelineTranslator,
-  makeTranslateMiddleware,
-  makeMatMiddleware,
-  makeInterjectMiddleware,
-  makeITGlossaryMiddleware,
-  type TextMiddleware,
-} from "../pipeline/translators.ts";
-import type { TTSBackend, AudioProcessor, Player } from "../pipeline/interfaces.ts";
+import type {
+  FacadePort, FacadeFactory, TranslatorFactory, ProcessorFactory, AudioProcessor,
+} from "./interfaces.ts";
 
-import { BIAS_WORDS } from "./emotion.ts";
-
-// ─── Dependency-injection types ───────────────────────────────────────────────
-//
-// FoniEngine receives factories from the adapter layer (index.ts).
-// This keeps core/ free of concrete backend/processor/player imports.
-// Dependency Inversion Principle: depend on abstractions, not implementations.
-
-/** Detects availability and constructs the appropriate TTSBackend. */
-export type BackendFactory = (config: FoniConfig) => Promise<TTSBackend | null>;
-
-/** Constructs the AudioProcessor chain (RVC, smoothing, breath injection). */
-export type ProcessorFactory = (config: FoniConfig) => AudioProcessor;
+// ─── Re-export factory types for the adapter layer (index.ts) ─────────────────
+export type { FacadeFactory, TranslatorFactory, ProcessorFactory, AudioProcessor };
 
 // ─── Status snapshot (read by extension for status bar) ──────────────────────
 
@@ -80,45 +61,17 @@ export class FoniEngine {
    * The adapter layer (index.ts) supplies concrete implementations.
    */
   constructor(
-    public readonly config:            FoniConfig,
-    private readonly backendFactory:   BackendFactory,
-    private readonly processorFactory: ProcessorFactory,
-    private readonly player:           Player,
+    public readonly config:              FoniConfig,
+    private readonly facadeFactory:      FacadeFactory,
+    private readonly translatorFactory:  TranslatorFactory,
+    private readonly processorFactory:   ProcessorFactory,
   ) {}
 
   // ── Pipeline assembly ───────────────────────────────────────────────────────
 
-  private buildPipeline(): TextMiddleware[] {
-    const stack: TextMiddleware[] = [];
-    stack.push(makeITGlossaryMiddleware());
-    if (this.config.inputLang !== this.config.outputLang) {
-      stack.push(makeTranslateMiddleware(this.config.inputLang, this.config.outputLang));
-    }
-    if (this.config.outputLang === "ru") {
-      // Apply emotion multipliers — decayed lazily at build time
-      const ew = effectiveWeights(this.emotionState);
-      const matProb       = Math.min(1, this.config.matProb       * ew.matMultiplier);
-      const interjectProb = Math.min(1, this.config.interjectProb * ew.interjectMultiplier);
-      const bias = ew.wordBias;
-      // BIAS_WORDS injected here — not imported in translators.ts (breaks pipeline→core cycle)
-      if (this.config.matEnabled)       stack.push(makeMatMiddleware(matProb, this.config.matStretch, bias, BIAS_WORDS));
-      if (this.config.interjectEnabled) stack.push(makeInterjectMiddleware(interjectProb, bias, BIAS_WORDS));
-    }
-    return stack;
-  }
-
   async buildFacade(): Promise<FacadePort | null> {
-    // Concrete construction fully delegated to injected factories (DIP).
-    const backend = await this.backendFactory(this.config);
-    if (!backend) return null;
-
-    const translator = new PipelineTranslator(this.buildPipeline(), this.config.outputLang);
-    const processor  = this.processorFactory(this.config);
-
-    return new SpeakFacade(translator, backend, processor, this.player, {
-      voice: this.config.voice,
-      speed: this.config.speed,
-    });
+    const translator = this.translatorFactory(this.config, this.emotionState);
+    return this.facadeFactory(this.config, translator);
   }
 
   async ensureFacade(): Promise<FacadePort | null> {
@@ -132,7 +85,7 @@ export class FoniEngine {
 
   rebuildTranslator(): void {
     this.facade?.swapTranslator(
-      new PipelineTranslator(this.buildPipeline(), this.config.outputLang),
+      this.translatorFactory(this.config, this.emotionState),
     );
   }
 

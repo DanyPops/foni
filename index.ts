@@ -12,10 +12,14 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { FoniEngine, type BackendFactory, type ProcessorFactory } from "./core/engine.ts";
+import { FoniEngine, type FacadeFactory, type TranslatorFactory, type ProcessorFactory } from "./core/engine.ts";
 import { DEFAULT_CONFIG }    from "./core/config.ts";
 import type { FoniConfig }   from "./core/config.ts";
-import { IdentityTranslator, MyMemoryTranslator } from "./pipeline/translators.ts";
+import {
+  IdentityTranslator, MyMemoryTranslator, PipelineTranslator,
+  makeTranslateMiddleware, makeMatMiddleware, makeInterjectMiddleware, makeITGlossaryMiddleware,
+} from "./pipeline/translators.ts";
+import { BIAS_WORDS, effectiveWeights } from "./core/emotion.ts";
 import { IdentityProcessor, RVCProcessor, SmoothingProcessor } from "./pipeline/processors.ts";
 import { ProsodyBackend }    from "./pipeline/prosody.ts";
 import { BreathProcessor }   from "./pipeline/breath-injector.ts";
@@ -31,30 +35,55 @@ import { EspeakBackend }     from "./backends/espeak.ts";
 // All concrete backend/processor construction lives here, not in core/engine.ts.
 // This is the Composition Root pattern: one place wires everything together.
 
-const backendFactory: BackendFactory = async (cfg: FoniConfig) => {
+// ─── Factory implementations (index.ts is the composition root) ───────────────
+//
+// All concrete construction lives here. FoniEngine receives only abstractions.
+// This is the full Composition Root pattern: one place wires everything together.
+
+const translatorFactory: TranslatorFactory = (cfg, emotion) => {
+  const ew = effectiveWeights(emotion);
+  const matProb       = Math.min(1, cfg.matProb       * ew.matMultiplier);
+  const interjectProb = Math.min(1, cfg.interjectProb * ew.interjectMultiplier);
+  const bias          = ew.wordBias;
+  const stack = [makeITGlossaryMiddleware()];
+  if (cfg.inputLang !== cfg.outputLang) {
+    stack.push(makeTranslateMiddleware(cfg.inputLang, cfg.outputLang));
+  }
+  if (cfg.outputLang === "ru") {
+    if (cfg.matEnabled)       stack.push(makeMatMiddleware(matProb, cfg.matStretch, bias, BIAS_WORDS));
+    if (cfg.interjectEnabled) stack.push(makeInterjectMiddleware(interjectProb, bias, BIAS_WORDS));
+  }
+  return new PipelineTranslator(stack, cfg.outputLang);
+};
+
+const facadeFactory: FacadeFactory = async (cfg, translator) => {
   const candidates = [
     new SileroBackend(cfg.sileroUrl),
     new KokoroBackend(cfg.kokoroUrl),
     new FakeYouBackend(cfg.fakeyouToken, cfg.fakeyouApiKey),
     new EspeakBackend(cfg.outputLang === "ru" ? "ru" : "en"),
   ];
+  let backend = null;
   if (cfg.backendPref !== "auto") {
     const preferred = candidates.find(b => b.name === cfg.backendPref);
     if (preferred && await preferred.isAvailable()) {
-      return cfg.prosodyEnabled && cfg.outputLang === "ru"
-        ? new ProsodyBackend(preferred)
-        : preferred;
+      backend = cfg.prosodyEnabled && cfg.outputLang === "ru"
+        ? new ProsodyBackend(preferred) : preferred;
     }
-    return null;
-  }
-  for (const b of candidates) {
-    if (await b.isAvailable()) {
-      return cfg.prosodyEnabled && cfg.outputLang === "ru"
-        ? new ProsodyBackend(b)
-        : b;
+  } else {
+    for (const b of candidates) {
+      if (await b.isAvailable()) {
+        backend = cfg.prosodyEnabled && cfg.outputLang === "ru"
+          ? new ProsodyBackend(b) : b;
+        break;
+      }
     }
   }
-  return null;
+  if (!backend) return null;
+  const processor = processorFactory(cfg);
+  return new SpeakFacade(translator, backend, processor, new SystemPlayer(), {
+    voice: cfg.voice, speed: cfg.speed,
+  });
 };
 
 const processorFactory: ProcessorFactory = (cfg: FoniConfig) => {
@@ -71,9 +100,9 @@ import type { FoniPanelState, FoniPanelActions } from "./tui/foni-panel.ts";
 export default async function (pi: ExtensionAPI) {
   const engine = new FoniEngine(
     { ...DEFAULT_CONFIG },
-    backendFactory,
+    facadeFactory,
+    translatorFactory,
     processorFactory,
-    new SystemPlayer(),
   );
   const config = engine.config;
 
