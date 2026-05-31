@@ -1,0 +1,15 @@
+[package]
+name    = "foni-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "foni-cli"
+path = "src/main.rs"
+
+[dependencies]
+foni-analyse = { path = "../foni-analyse" }
+hound        = { workspace = true }
+serde_json   = { workspace = true }
+thiserror    = { workspace = true }
