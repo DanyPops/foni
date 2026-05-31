@@ -411,6 +411,7 @@ dependencies = [
  "ort",
  "rand",
  "reqwest",
+ "rustfft",
  "serde",
  "serde_json",
  "serde_yaml",
