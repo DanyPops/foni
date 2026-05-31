@@ -1,14 +1,18 @@
-use rustfft::{FftPlanner, num_complex::Complex};
+use rustfft::{num_complex::Complex, FftPlanner};
 
-const N_MELS:  usize = 26;
+const N_MELS: usize = 26;
 const N_MFCCS: usize = 13;
-const F_MIN:   f32   = 80.0;
-const F_MAX:   f32   = 8000.0;
-const FRAME_MS: f32  = 25.0;
-const HOP_MS:   f32  = 10.0;
+const F_MIN: f32 = 80.0;
+const F_MAX: f32 = 8000.0;
+const FRAME_MS: f32 = 25.0;
+const HOP_MS: f32 = 10.0;
 
-fn hz_to_mel(hz: f32) -> f32 { 2595.0 * (1.0 + hz / 700.0).log10() }
-fn mel_to_hz(mel: f32) -> f32 { 700.0 * (10.0f32.powf(mel / 2595.0) - 1.0) }
+fn hz_to_mel(hz: f32) -> f32 {
+    2595.0 * (1.0 + hz / 700.0).log10()
+}
+fn mel_to_hz(mel: f32) -> f32 {
+    700.0 * (10.0f32.powf(mel / 2595.0) - 1.0)
+}
 
 fn mel_filterbank(n_fft: usize, sample_rate: u32) -> Vec<Vec<f32>> {
     let sr = sample_rate as f32;
@@ -47,7 +51,9 @@ pub fn compute_mfcc(samples: &[f32], sample_rate: u32) -> Vec<f32> {
     let frame_size = {
         let n = (sr * FRAME_MS / 1000.0) as usize;
         let mut p = 1;
-        while p < n { p <<= 1; }
+        while p < n {
+            p <<= 1;
+        }
         p
     };
     let hop_size = (sr * HOP_MS / 1000.0) as usize;
@@ -55,7 +61,9 @@ pub fn compute_mfcc(samples: &[f32], sample_rate: u32) -> Vec<f32> {
     let mut planner: FftPlanner<f32> = FftPlanner::new();
     let fft = planner.plan_fft_forward(frame_size);
     let hann: Vec<f32> = (0..frame_size)
-        .map(|i| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (frame_size - 1) as f32).cos()))
+        .map(|i| {
+            0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (frame_size - 1) as f32).cos())
+        })
         .collect();
     let filterbank = mel_filterbank(frame_size, sample_rate);
 
@@ -86,7 +94,8 @@ pub fn compute_mfcc(samples: &[f32], sample_rate: u32) -> Vec<f32> {
                 .iter()
                 .enumerate()
                 .map(|(m, &e)| {
-                    e * (std::f32::consts::PI * n as f32 * (2 * m + 1) as f32 / (2 * N_MELS) as f32).cos()
+                    e * (std::f32::consts::PI * n as f32 * (2 * m + 1) as f32 / (2 * N_MELS) as f32)
+                        .cos()
                 })
                 .sum();
             sum[n] += c as f64;
@@ -98,7 +107,9 @@ pub fn compute_mfcc(samples: &[f32], sample_rate: u32) -> Vec<f32> {
     if frame_count == 0 {
         return vec![0.0; N_MFCCS];
     }
-    sum.iter().map(|&s| (s / frame_count as f64) as f32).collect()
+    sum.iter()
+        .map(|&s| (s / frame_count as f64) as f32)
+        .collect()
 }
 
 /// Mean absolute difference between two MFCC vectors — timbre distance.
@@ -115,7 +126,9 @@ mod tests {
 
     fn sine(freq: f32, secs: f32, sr: u32) -> Vec<f32> {
         let n = (sr as f32 * secs) as usize;
-        (0..n).map(|i| (2.0 * PI * freq * i as f32 / sr as f32).sin() * 0.5).collect()
+        (0..n)
+            .map(|i| (2.0 * PI * freq * i as f32 / sr as f32).sin() * 0.5)
+            .collect()
     }
 
     #[test]
@@ -132,7 +145,11 @@ mod tests {
         let s2 = sine(2000.0, 1.0, 22050);
         let a = compute_mfcc(&s1, 22050);
         let b = compute_mfcc(&s2, 22050);
-        assert!(mfcc_distance(&a, &b) > 1.0, "distance={}", mfcc_distance(&a, &b));
+        assert!(
+            mfcc_distance(&a, &b) > 1.0,
+            "distance={}",
+            mfcc_distance(&a, &b)
+        );
     }
 
     #[test]

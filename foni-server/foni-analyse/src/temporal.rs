@@ -9,15 +9,15 @@ const PAUSE_MIN_SECS: f32 = 0.1;
 #[derive(Debug, Clone, Serialize)]
 pub struct TemporalMetrics {
     /// Total duration in seconds.
-    pub duration_secs:      f32,
+    pub duration_secs: f32,
     /// Voiced (non-silent) frames per second — syllable tempo proxy.
-    pub speech_rate:        f32,
+    pub speech_rate: f32,
     /// Number of silent segments longer than PAUSE_MIN_SECS.
-    pub pause_count:        u32,
+    pub pause_count: u32,
     /// Average duration of each pause in seconds. 0.0 if no pauses.
     pub mean_pause_duration: f32,
     /// Fraction of total duration spent in silence.
-    pub pause_ratio:        f32,
+    pub pause_ratio: f32,
 }
 
 pub fn compute(samples: &[f32], sample_rate: u32) -> TemporalMetrics {
@@ -25,7 +25,7 @@ pub fn compute(samples: &[f32], sample_rate: u32) -> TemporalMetrics {
     let duration_secs = samples.len() as f32 / sr;
 
     let frame_size = (sr * 0.025) as usize; // 25ms frames
-    let hop_size   = (sr * 0.010) as usize; // 10ms hop
+    let hop_size = (sr * 0.010) as usize; // 10ms hop
 
     let mut voiced_frames = 0usize;
     let mut silent_frames = 0usize;

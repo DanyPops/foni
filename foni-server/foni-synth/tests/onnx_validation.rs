@@ -3,14 +3,12 @@
 /// Requires: rvc/models/bandit/onnx/generator.onnx (built by rvc/export_onnx.py)
 ///
 /// cargo test -p foni-synth --test onnx_validation -- --nocapture
-
 use std::path::Path;
 
 #[test]
 fn generator_onnx_loads_and_produces_audio() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let generator_path = manifest
-        .join("../../rvc/models/bandit/onnx/generator.onnx");
+    let generator_path = manifest.join("../../rvc/models/bandit/onnx/generator.onnx");
 
     if !generator_path.exists() {
         println!(
@@ -20,7 +18,10 @@ fn generator_onnx_loads_and_produces_audio() {
         return; // soft skip — don't fail CI without the model
     }
 
-    println!("Loading generator ONNX from {}...", generator_path.display());
+    println!(
+        "Loading generator ONNX from {}...",
+        generator_path.display()
+    );
 
     let shape = foni_synth::routes::convert::validate_generator_onnx(&generator_path)
         .expect("ONNX validation failed");
@@ -31,7 +32,11 @@ fn generator_onnx_loads_and_produces_audio() {
     assert_eq!(shape.len(), 3, "expected 3-dim audio output");
     assert_eq!(shape[0], 1, "batch dim should be 1");
     assert_eq!(shape[1], 1, "channel dim should be 1");
-    assert!(shape[2] > 1000, "should produce > 1000 audio samples, got {}", shape[2]);
+    assert!(
+        shape[2] > 1000,
+        "should produce > 1000 audio samples, got {}",
+        shape[2]
+    );
 
     println!("✅ TSK-9 complete: RVC ONNX generator validated in Rust via ort");
 }
@@ -53,7 +58,11 @@ fn rmvpe_onnx_loads() {
         .expect("load rmvpe.onnx");
 
     let inputs: Vec<_> = sess.inputs().iter().map(|i| i.name().to_string()).collect();
-    let outputs: Vec<_> = sess.outputs().iter().map(|o| o.name().to_string()).collect();
+    let outputs: Vec<_> = sess
+        .outputs()
+        .iter()
+        .map(|o| o.name().to_string())
+        .collect();
     println!("RMVPE inputs:  {:?}", inputs);
     println!("RMVPE outputs: {:?}", outputs);
     println!("✅ RMVPE ONNX loads successfully");

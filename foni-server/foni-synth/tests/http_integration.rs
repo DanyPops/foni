@@ -7,7 +7,6 @@
 /// end-to-end without relying on a separately-launched process.
 ///
 /// cargo test -p foni-synth --test http_integration -- --nocapture
-
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
@@ -41,7 +40,7 @@ fn wav_rms(bytes: &[u8]) -> f32 {
 async fn start_server() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app  = foni_synth::build_router().await;
+    let app = foni_synth::build_router().await;
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
@@ -57,11 +56,18 @@ async fn process_changes_audio() {
     let rms_in = wav_rms(&input);
 
     let client = reqwest::Client::new();
-    let resp = client.post(format!("{base}/process"))
+    let resp = client
+        .post(format!("{base}/process"))
         .json(&json!({ "audio_data": B64.encode(&input) }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
-    assert!(resp.status().is_success(), "POST /process failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "POST /process failed: {}",
+        resp.status()
+    );
 
     let body: Value = resp.json().await.unwrap();
     let audio_b64 = body["audio_data"].as_str().expect("missing audio_data");
@@ -80,11 +86,18 @@ async fn breath_returns_non_silent_audio() {
     let base = start_server().await;
 
     let client = reqwest::Client::new();
-    let resp = client.post(format!("{base}/breath"))
+    let resp = client
+        .post(format!("{base}/breath"))
         .json(&json!({ "duration_ms": 120, "sample_rate": 22050 }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
-    assert!(resp.status().is_success(), "POST /breath failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "POST /breath failed: {}",
+        resp.status()
+    );
 
     let body: Value = resp.json().await.unwrap();
     let audio_b64 = body["audio_data"].as_str().expect("missing audio_data");
@@ -101,22 +114,33 @@ async fn analyse_returns_valid_metrics() {
     let input = sine_wav(22050, 500);
 
     let client = reqwest::Client::new();
-    let resp = client.post(format!("{base}/analyse"))
+    let resp = client
+        .post(format!("{base}/analyse"))
         .json(&json!({ "audio_data": B64.encode(&input) }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
-    assert!(resp.status().is_success(), "POST /analyse failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "POST /analyse failed: {}",
+        resp.status()
+    );
 
     let body: Value = resp.json().await.unwrap();
     let analysis = &body["analysis"];
 
-    let rms_db = analysis["loudness"]["rms_db"].as_f64().expect("missing rms_db");
-    let dur    = analysis["temporal"]["duration_secs"].as_f64().expect("missing duration_secs");
+    let rms_db = analysis["loudness"]["rms_db"]
+        .as_f64()
+        .expect("missing rms_db");
+    let dur = analysis["temporal"]["duration_secs"]
+        .as_f64()
+        .expect("missing duration_secs");
 
     println!("Analysis: rms={rms_db:.1}dBFS  dur={dur:.3}s");
 
-    assert!(rms_db > -60.0,  "RMS should not be silence: {rms_db}");
-    assert!(rms_db < 0.0,    "RMS must be negative dBFS: {rms_db}");
+    assert!(rms_db > -60.0, "RMS should not be silence: {rms_db}");
+    assert!(rms_db < 0.0, "RMS must be negative dBFS: {rms_db}");
     assert!((dur - 0.5).abs() < 0.05, "Duration should be ~0.5s: {dur}");
 }
 
@@ -142,9 +166,12 @@ async fn params_roundtrip() {
 
     // Patch
     let new_key = orig_key + 1;
-    let resp = client.post(format!("{base}/params"))
+    let resp = client
+        .post(format!("{base}/params"))
         .json(&json!({ "f0up_key": new_key }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert!(resp.status().is_success());
     let patched: Value = resp.json().await.unwrap();
     assert_eq!(patched["f0up_key"].as_i64(), Some(new_key));

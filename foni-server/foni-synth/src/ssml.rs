@@ -4,14 +4,14 @@
 /// produces identical pause structure to the TypeScript path.
 /// Output is a full <speak>...</speak> document for `espeak-ng -m`.
 
-const BREAK_COMMA_MS:      u32 = 150;
-const BREAK_SEMICOLON_MS:  u32 = 220;
-const BREAK_COLON_MS:      u32 = 200;
-const BREAK_DASH_MS:       u32 = 180;
-const BREAK_ELLIPSIS_MS:   u32 = 420;
-const BREAK_PERIOD_MS:     u32 = 320;
-const BREAK_EXCLAIM_MS:    u32 = 280;
-const BREAK_QUESTION_MS:   u32 = 300;
+const BREAK_COMMA_MS: u32 = 150;
+const BREAK_SEMICOLON_MS: u32 = 220;
+const BREAK_COLON_MS: u32 = 200;
+const BREAK_DASH_MS: u32 = 180;
+const BREAK_ELLIPSIS_MS: u32 = 420;
+const BREAK_PERIOD_MS: u32 = 320;
+const BREAK_EXCLAIM_MS: u32 = 280;
+const BREAK_QUESTION_MS: u32 = 300;
 
 fn brk(ms: u32) -> String {
     format!(r#"<break time="{}ms"/>"#, ms)
@@ -51,7 +51,10 @@ pub fn annotate_punctuation(text: &str) -> String {
         if c == '.' {
             // Don't break mid-number (3.14) — check neighbours
             let prev_digit = i > 0 && chars[i - 1].is_ascii_digit();
-            let next_digit = chars.get(i + 1).map(|c| c.is_ascii_digit()).unwrap_or(false);
+            let next_digit = chars
+                .get(i + 1)
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(false);
             out.push(c);
             if !prev_digit && !next_digit {
                 out.push_str(&brk(BREAK_PERIOD_MS));
@@ -78,7 +81,9 @@ pub fn annotate_punctuation(text: &str) -> String {
             out.push(' ');
             out.push_str(&brk(BREAK_COMMA_MS));
             // Consume trailing space already added
-            if chars.get(i + 1) == Some(&' ') { i += 1; }
+            if chars.get(i + 1) == Some(&' ') {
+                i += 1;
+            }
             i += 1;
             continue;
         }
@@ -86,20 +91,27 @@ pub fn annotate_punctuation(text: &str) -> String {
             out.push(c);
             out.push(' ');
             out.push_str(&brk(BREAK_SEMICOLON_MS));
-            if chars.get(i + 1) == Some(&' ') { i += 1; }
+            if chars.get(i + 1) == Some(&' ') {
+                i += 1;
+            }
             i += 1;
             continue;
         }
         if c == ':' {
             // Skip colons in numbers (12:30)
             let prev_digit = i > 0 && chars[i - 1].is_ascii_digit();
-            let next_digit = chars.get(i + 1).map(|c| c.is_ascii_digit()).unwrap_or(false);
+            let next_digit = chars
+                .get(i + 1)
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(false);
             out.push(c);
             if !prev_digit && !next_digit {
                 out.push(' ');
                 out.push_str(&brk(BREAK_COLON_MS));
             }
-            if !prev_digit && !next_digit && chars.get(i + 1) == Some(&' ') { i += 1; }
+            if !prev_digit && !next_digit && chars.get(i + 1) == Some(&' ') {
+                i += 1;
+            }
             i += 1;
             continue;
         }
@@ -109,7 +121,9 @@ pub fn annotate_punctuation(text: &str) -> String {
             out.push_str(&brk(BREAK_DASH_MS));
             out.push(' ');
             // Consume surrounding spaces
-            if chars.get(i + 1) == Some(&' ') { i += 1; }
+            if chars.get(i + 1) == Some(&' ') {
+                i += 1;
+            }
             i += 1;
             continue;
         }
@@ -153,7 +167,13 @@ mod tests {
     #[test]
     fn full_phrase_has_comma_and_period_breaks() {
         let out = annotate_punctuation("Подойди-ка, надо тебе ситуацию прояснить.");
-        assert!(out.contains(r#"<break time="150ms"/>"#), "missing comma break");
-        assert!(out.contains(r#"<break time="320ms"/>"#), "missing period break");
+        assert!(
+            out.contains(r#"<break time="150ms"/>"#),
+            "missing comma break"
+        );
+        assert!(
+            out.contains(r#"<break time="320ms"/>"#),
+            "missing period break"
+        );
     }
 }

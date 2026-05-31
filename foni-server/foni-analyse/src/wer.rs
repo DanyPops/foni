@@ -1,3 +1,4 @@
+use std::io::Write;
 /// Word Error Rate via Whisper CLI transcription.
 ///
 /// WER = (S + D + I) / N  where S=substitutions, D=deletions, I=insertions, N=ref words.
@@ -5,17 +6,15 @@
 ///
 /// Invokes the `whisper` binary (openai-whisper CLI) — no inline Python.
 /// Results are returned as `None` when Whisper is unavailable (test gating).
-
 use std::process::Command;
-use std::io::Write;
 use tempfile::{NamedTempFile, TempDir};
 
 #[derive(Debug, Clone)]
 pub struct WerResult {
     pub transcript: String,
-    pub wer_pct:    f32,
-    pub edits:      u32,
-    pub ref_words:  u32,
+    pub wer_pct: f32,
+    pub edits: u32,
+    pub ref_words: u32,
 }
 
 /// Transcribe a WAV file using Whisper and compute WER against `reference`.
@@ -32,29 +31,49 @@ pub fn compute_wer(wav_bytes: &[u8], reference: &str, language: &str) -> Option<
     let out = Command::new("whisper")
         .args([
             tmp_path.as_str(),
-            "--model",         "base",
-            "--language",      language,
-            "--output_format", "txt",
-            "--output_dir",    out_dir.path().to_str()?,
+            "--model",
+            "base",
+            "--language",
+            language,
+            "--output_format",
+            "txt",
+            "--output_dir",
+            out_dir.path().to_str()?,
         ])
         .output()
         .ok()?;
-    if !out.status.success() { return None; }
+    if !out.status.success() {
+        return None;
+    }
 
     // Read the generated .txt file
-    let txt_file = out_dir.path().join(
-        std::path::Path::new(&tmp_path)
-            .file_stem()?
-            .to_string_lossy()
-            .as_ref()
-    ).with_extension("txt");
+    let txt_file = out_dir
+        .path()
+        .join(
+            std::path::Path::new(&tmp_path)
+                .file_stem()?
+                .to_string_lossy()
+                .as_ref(),
+        )
+        .with_extension("txt");
     let transcript = std::fs::read_to_string(&txt_file).ok()?.trim().to_string();
-    if transcript.is_empty() { return None; }
+    if transcript.is_empty() {
+        return None;
+    }
 
     let (edits, ref_words) = edit_distance_words(reference, &transcript);
-    let wer_pct = if ref_words == 0 { 0.0 } else { edits as f32 / ref_words as f32 * 100.0 };
+    let wer_pct = if ref_words == 0 {
+        0.0
+    } else {
+        edits as f32 / ref_words as f32 * 100.0
+    };
 
-    Some(WerResult { transcript, wer_pct, edits, ref_words })
+    Some(WerResult {
+        transcript,
+        wer_pct,
+        edits,
+        ref_words,
+    })
 }
 
 /// Wagner-Fischer edit distance on whitespace-tokenised words.
@@ -76,18 +95,24 @@ pub fn edit_distance_words(reference: &str, hypothesis: &str) -> (u32, u32) {
     let n = r.len();
     let m = h.len();
 
-    if n == 0 { return (m as u32, 0); }
+    if n == 0 {
+        return (m as u32, 0);
+    }
 
     // DP table
     let mut dp = vec![vec![0u32; m + 1]; n + 1];
-    for i in 0..=n { dp[i][0] = i as u32; }
-    for j in 0..=m { dp[0][j] = j as u32; }
+    for i in 0..=n {
+        dp[i][0] = i as u32;
+    }
+    for j in 0..=m {
+        dp[0][j] = j as u32;
+    }
     for i in 1..=n {
         for j in 1..=m {
-            dp[i][j] = if r[i-1] == h[j-1] {
-                dp[i-1][j-1]
+            dp[i][j] = if r[i - 1] == h[j - 1] {
+                dp[i - 1][j - 1]
             } else {
-                1 + dp[i-1][j-1].min(dp[i-1][j]).min(dp[i][j-1])
+                1 + dp[i - 1][j - 1].min(dp[i - 1][j]).min(dp[i][j - 1])
             };
         }
     }

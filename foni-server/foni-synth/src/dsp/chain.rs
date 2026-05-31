@@ -4,7 +4,6 @@
 ///   silence_trim → fade → highpass → tilt → de-ess → vibrato →
 ///   corrective EQ → compression → warmth → presence → air →
 ///   reverb → loudnorm → hard clip
-
 use super::{
     dynamics::{hard_clip, loudnorm, Compressor},
     effects::{echo, fade_in, fade_out, silence_trim, vibrato},
@@ -15,15 +14,19 @@ use super::{
 #[derive(Debug, Clone)]
 pub struct SmoothingOptions {
     // Edge
-    pub pad_secs:  f32,
+    pub pad_secs: f32,
     pub fade_secs: f32,
 
     // Mud
     pub highpass_freq: f32,
 
     // Corrective EQ
-    pub de_box_freq: f32, pub de_box_db: f32, pub de_box_q: f32,
-    pub de_harsh_freq: f32, pub de_harsh_db: f32, pub de_harsh_q: f32,
+    pub de_box_freq: f32,
+    pub de_box_db: f32,
+    pub de_box_q: f32,
+    pub de_harsh_freq: f32,
+    pub de_harsh_db: f32,
+    pub de_harsh_q: f32,
 
     // Dynamics
     pub compression_ratio: f32,
@@ -33,9 +36,11 @@ pub struct SmoothingOptions {
     pub compression_makeup_db: f32,
 
     // Creative EQ
-    pub warmth_boost_db: f32, pub warmth_freq: f32,
+    pub warmth_boost_db: f32,
+    pub warmth_freq: f32,
     pub presence_db: f32,
-    pub air_boost_db: f32, pub air_freq: f32,
+    pub air_boost_db: f32,
+    pub air_freq: f32,
 
     // De-robotisation
     pub tilt_low_db: f32,
@@ -60,21 +65,27 @@ pub struct SmoothingOptions {
 impl Default for SmoothingOptions {
     fn default() -> Self {
         SmoothingOptions {
-            pad_secs:  0.3,
+            pad_secs: 0.3,
             fade_secs: 0.04,
             highpass_freq: 80.,
-            de_box_freq: 900., de_box_db: 0., de_box_q: 0.9,
-            de_harsh_freq: 3500., de_harsh_db: -2., de_harsh_q: 0.7,
-            compression_ratio: 4.,          // was 3 — reduce crest factor gap
+            de_box_freq: 900.,
+            de_box_db: 0.,
+            de_box_q: 0.9,
+            de_harsh_freq: 3500.,
+            de_harsh_db: -2.,
+            de_harsh_q: 0.7,
+            compression_ratio: 4., // was 3 — reduce crest factor gap
             compression_attack_ms: 10.,
             compression_release_ms: 80.,
             compression_threshold_db: -12.,
-            compression_makeup_db: 5.,       // was 4 — compensate louder compression
-            warmth_boost_db: 0., warmth_freq: 200.,
+            compression_makeup_db: 5., // was 4 — compensate louder compression
+            warmth_boost_db: 0.,
+            warmth_freq: 200.,
             presence_db: 0.,
-            air_boost_db: 0., air_freq: 8000.,
-            tilt_low_db: 10.,               // was 8 — more low-freq body
-            tilt_high_db: -8.,              // was -6 — cut treble, reduce centroid
+            air_boost_db: 0.,
+            air_freq: 8000.,
+            tilt_low_db: 10.,  // was 8 — more low-freq body
+            tilt_high_db: -8., // was -6 — cut treble, reduce centroid
             de_ess_db: 4.,
             vibrato_freq: 6.,
             vibrato_depth: 0.003,
@@ -82,7 +93,7 @@ impl Default for SmoothingOptions {
             reverb_decay: 0.04,
             reverb_in_gain: 0.8,
             reverb_out_gain: 0.88,
-            rms_target_lufs: -8.,           // was -11 — studio is ~-13.5 dBFS
+            rms_target_lufs: -8., // was -11 — studio is ~-13.5 dBFS
             limiter_db: -1.,
             silence_trim_db: -40.,
             normalize: true,
@@ -92,7 +103,6 @@ impl Default for SmoothingOptions {
 
 /// Apply the full DSP chain to mono f32 samples. Returns processed samples.
 pub fn apply(mut samples: Vec<f32>, sr: u32, opts: &SmoothingOptions) -> Vec<f32> {
-
     // 0. Silence trim (two-pass, preserves interior pauses)
     samples = silence_trim(samples, opts.silence_trim_db, sr);
 
@@ -130,16 +140,21 @@ pub fn apply(mut samples: Vec<f32>, sr: u32, opts: &SmoothingOptions) -> Vec<f32
         Biquad::peaking(opts.de_box_freq, opts.de_box_db, opts.de_box_q, sr).process(&mut samples);
     }
     if opts.de_harsh_db != 0. {
-        Biquad::peaking(opts.de_harsh_freq, opts.de_harsh_db, opts.de_harsh_q, sr).process(&mut samples);
+        Biquad::peaking(opts.de_harsh_freq, opts.de_harsh_db, opts.de_harsh_q, sr)
+            .process(&mut samples);
     }
 
     // 7. Compression
     if opts.compression_ratio > 1. {
         Compressor::new(
-            opts.compression_threshold_db, opts.compression_ratio,
-            opts.compression_attack_ms, opts.compression_release_ms,
-            opts.compression_makeup_db, sr,
-        ).process(&mut samples);
+            opts.compression_threshold_db,
+            opts.compression_ratio,
+            opts.compression_attack_ms,
+            opts.compression_release_ms,
+            opts.compression_makeup_db,
+            sr,
+        )
+        .process(&mut samples);
     }
 
     // 8. Warmth
@@ -159,8 +174,14 @@ pub fn apply(mut samples: Vec<f32>, sr: u32, opts: &SmoothingOptions) -> Vec<f32
 
     // 11. Reverb
     if opts.reverb_ms > 0. && opts.reverb_decay > 0. {
-        echo(&mut samples, opts.reverb_ms, opts.reverb_decay,
-             opts.reverb_in_gain, opts.reverb_out_gain, sr);
+        echo(
+            &mut samples,
+            opts.reverb_ms,
+            opts.reverb_decay,
+            opts.reverb_in_gain,
+            opts.reverb_out_gain,
+            sr,
+        );
     }
 
     // 12. Loudnorm
@@ -182,12 +203,20 @@ mod tests {
 
     fn sine(freq: f32, secs: f32, sr: u32) -> Vec<f32> {
         let n = (sr as f32 * secs) as usize;
-        (0..n).map(|i| (2. * std::f32::consts::PI * freq * i as f32 / sr as f32).sin() * 0.5).collect()
+        (0..n)
+            .map(|i| (2. * std::f32::consts::PI * freq * i as f32 / sr as f32).sin() * 0.5)
+            .collect()
     }
 
-    fn peak(s: &[f32]) -> f32 { s.iter().map(|&x| x.abs()).fold(0f32, f32::max) }
-    fn rms(s: &[f32])  -> f32 { (s.iter().map(|&x| x*x).sum::<f32>() / s.len() as f32).sqrt() }
-    fn db(r: f32)       -> f32 { 20. * r.log10() }
+    fn peak(s: &[f32]) -> f32 {
+        s.iter().map(|&x| x.abs()).fold(0f32, f32::max)
+    }
+    fn rms(s: &[f32]) -> f32 {
+        (s.iter().map(|&x| x * x).sum::<f32>() / s.len() as f32).sqrt()
+    }
+    fn db(r: f32) -> f32 {
+        20. * r.log10()
+    }
 
     #[test]
     fn default_chain_does_not_clip() {
@@ -200,7 +229,9 @@ mod tests {
     #[test]
     fn default_chain_raises_quiet_signal() {
         let mut sig = sine(200., 1., 22050);
-        for s in sig.iter_mut() { *s *= 0.05; } // quiet but above silence threshold
+        for s in sig.iter_mut() {
+            *s *= 0.05;
+        } // quiet but above silence threshold
         let rms_in = rms(&sig);
         let out = apply(sig, 22050, &SmoothingOptions::default());
         assert!(rms(&out) > rms_in, "loudnorm didn't raise level");
@@ -218,19 +249,24 @@ mod tests {
             vibrato_freq: 0.,
             de_harsh_db: -6.,
             compression_ratio: 1.,
-            tilt_low_db: 0., tilt_high_db: 0.,
+            tilt_low_db: 0.,
+            tilt_high_db: 0.,
             de_ess_db: 0.,
             de_box_db: 0.,
             pad_secs: 0.,
             ..SmoothingOptions::default()
         };
         let sig_3500 = sine(3500., 0.3, sr);
-        let sig_200  = sine(200.,  0.3, sr);
+        let sig_200 = sine(200., 0.3, sr);
         let out_3500 = apply(sig_3500.clone(), sr, &opts);
-        let out_200  = apply(sig_200.clone(),  sr, &opts);
+        let out_200 = apply(sig_200.clone(), sr, &opts);
         // 3500 Hz should be attenuated relative to 200 Hz
-        let delta = db(rms(&out_3500)) - db(rms(&out_200))
-                  - (db(rms(&sig_3500)) - db(rms(&sig_200)));
-        assert!(delta < -3., "de-harsh not cutting 3500Hz: delta={:.1}dB", delta);
+        let delta =
+            db(rms(&out_3500)) - db(rms(&out_200)) - (db(rms(&sig_3500)) - db(rms(&sig_200)));
+        assert!(
+            delta < -3.,
+            "de-harsh not cutting 3500Hz: delta={:.1}dB",
+            delta
+        );
     }
 }

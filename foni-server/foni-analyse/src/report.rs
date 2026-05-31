@@ -1,12 +1,16 @@
 use crate::gap::{GapResult, GapRow};
 
 const WIDTH: usize = 66;
-const SEP:   &str  = "──────────────────────────────────────────────────────────────────";
+const SEP: &str = "──────────────────────────────────────────────────────────────────";
 
 fn row_line(r: &GapRow) -> String {
     format!(
         "{:<18} {:<14} {:<14} {:>4}%  {}",
-        r.metric, r.target, r.actual, r.gap_pct, r.verdict.label()
+        r.metric,
+        r.target,
+        r.actual,
+        r.gap_pct,
+        r.verdict.label()
     )
 }
 
