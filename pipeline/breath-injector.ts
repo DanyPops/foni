@@ -9,7 +9,7 @@
  *   2. At each gap, splice in a synthetic breath WAV (120ms)
  *   3. The breath fills the gap with realistic air intake texture
  *
- * The synthetic breath is generated once via ffmpeg (bandpass noise) and
+ * The synthetic breath is generated once via foni-synth POST /breath (Rust bandpass noise) and
  * cached in memory — no file I/O on the hot path.
  *
  * Research basis:
@@ -18,7 +18,6 @@
  *   - KTH 2020: breathing events at long-phrase / clause-initial positions
  */
 
-import { spawnSync } from "node:child_process";
 import { parseWav, rms } from "./analysis/audio-utils.ts";
 import { getLogger }     from "../core/logger.ts";
 import type { AudioProcessor } from "./interfaces.ts";
@@ -34,53 +33,41 @@ const SILENCE_THRESHOLD  = 0.005;   // ≈ −46 dBFS
 /** Duration of the synthesised breath sound (ms). */
 const BREATH_DURATION_MS = 120;
 
-/** ffmpeg max buffer for breath generation (small — 120ms WAV). */
-const FFMPEG_BUFFER      = 1024 * 64;
-
-// ─── Breath WAV generation ────────────────────────────────────────────────────
+// ─── Breath WAV generation via foni-synth /breath (Rust, no ffmpeg) ─────────
 
 /**
- * Synthesise a single breath-intake WAV using ffmpeg's noise + bandpass.
- *
- * Acoustic model: inhalation = broadband turbulence filtered 100–5000 Hz,
- * shaped with a fast attack (5ms) and moderate decay (60ms) envelope.
- * Amplitude is kept low (−32 dBFS) so it blends under speech.
+ * Synthesise a breath-intake WAV via POST /breath on foni-synth.
+ * Falls back to silence if the server is unreachable.
  */
-function synthesiseBreath(sampleRate: number, durationMs: number): Buffer {
-  const dur = durationMs / 1000;
-  // aevalsrc: white noise at -32 dBFS
-  // bandpass centred at 2kHz (air rush peak), Q=0.5 (wide)
-  // afade in 5ms, fade out 40ms — asymmetric (fast intake, gradual release)
-  const filter = [
-    `aevalsrc=random(0)*0.025:s=${sampleRate}:d=${dur}`,
-    `bandpass=f=2000:width_type=q:width=0.5`,
-    `afade=t=in:st=0:d=0.005`,
-    `afade=t=out:st=${(dur - 0.04).toFixed(3)}:d=0.04`,
-  ].join(",");
-
-  const result = spawnSync("ffmpeg", [
-    "-hide_banner", "-loglevel", "error",
-    "-f", "lavfi", "-i", filter,
-    "-f", "wav", "pipe:1",
-  ], { maxBuffer: FFMPEG_BUFFER });
-
-  if (result.error || result.status !== 0 || !result.stdout?.length) {
-    getLogger().warn("BreathInjector", "breath synthesis failed — returning silence", {
-      status: result.status,
-      stderr: result.stderr?.toString().slice(0, 100),
+async function synthesiseBreath(
+  sampleRate: number,
+  durationMs: number,
+  synthUrl:   string,
+): Promise<Buffer> {
+  try {
+    const resp = await fetch(`${synthUrl}/breath`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ duration_ms: durationMs, sample_rate: sampleRate }),
+      signal:  AbortSignal.timeout(5_000),
     });
-    // Return silence of the right length as fallback
-    const numSamples = Math.floor(sampleRate * dur);
-    const buf        = Buffer.alloc(44 + numSamples * 2);
-    buf.write("RIFF", 0);  buf.writeUInt32LE(36 + numSamples * 2, 4);
-    buf.write("WAVE", 8);  buf.write("fmt ", 12);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const { audio_data } = await resp.json() as { audio_data: string };
+    return Buffer.from(audio_data, "base64");
+  } catch (e: any) {
+    getLogger().warn("BreathInjector", "foni-synth /breath unreachable — using silence",
+      { error: e?.message });
+    // Silence fallback: minimal valid WAV
+    const n   = Math.floor(sampleRate * durationMs / 1000);
+    const buf = Buffer.alloc(44 + n * 2);
+    buf.write("RIFF", 0); buf.writeUInt32LE(36 + n * 2, 4);
+    buf.write("WAVE", 8); buf.write("fmt ", 12);
     buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(1, 22);
     buf.writeUInt32LE(sampleRate, 24); buf.writeUInt32LE(sampleRate * 2, 28);
     buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34);
-    buf.write("data", 36); buf.writeUInt32LE(numSamples * 2, 40);
+    buf.write("data", 36); buf.writeUInt32LE(n * 2, 40);
     return buf;
   }
-  return result.stdout as Buffer;
 }
 
 // ─── Silence detection ────────────────────────────────────────────────────────
@@ -152,9 +139,9 @@ function writeWavHeader(buf: Buffer, sampleRate: number, numSamples: number): vo
 /** Cached breath sample per sample rate. */
 const breathCache = new Map<number, Float32Array>();
 
-function getBreathSamples(sampleRate: number): Float32Array {
+async function getBreathSamples(sampleRate: number, synthUrl: string): Promise<Float32Array> {
   if (breathCache.has(sampleRate)) return breathCache.get(sampleRate)!;
-  const wav     = synthesiseBreath(sampleRate, BREATH_DURATION_MS);
+  const wav = await synthesiseBreath(sampleRate, BREATH_DURATION_MS, synthUrl);
   const { samples } = parseWav(wav);
   breathCache.set(sampleRate, samples);
   return samples;
@@ -180,11 +167,12 @@ export interface BreathInjectorOptions {
  * @param opts       Injection options
  * @returns          New WAV buffer with breaths spliced in
  */
-export function injectBreaths(
+export async function injectBreaths(
   wav:        Buffer,
   sampleRate: number,
   opts:       BreathInjectorOptions = {},
-): Buffer {
+  synthUrl:   string = "http://localhost:5050",
+): Promise<Buffer> {
   const log = getLogger();
   const {
     silenceGateMs   = SILENCE_GATE_MS,
@@ -193,7 +181,7 @@ export function injectBreaths(
   } = opts;
 
   const { samples } = parseWav(wav);
-  const breath      = getBreathSamples(sampleRate);
+  const breath      = await getBreathSamples(sampleRate, synthUrl);
   const gaps        = findSilenceGaps(samples, sampleRate, silenceGateMs);
 
   // Filter: skip leading silence (first gap if at start) unless injectAtStart
@@ -267,13 +255,14 @@ export function injectBreaths(
  */
 export class BreathProcessor implements AudioProcessor {
   constructor(
-    private readonly inner: AudioProcessor,
-    private readonly opts:  BreathInjectorOptions = {},
+    private readonly inner:    AudioProcessor,
+    private readonly opts:     BreathInjectorOptions = {},
+    private readonly synthUrl: string = "http://localhost:5050",
   ) {}
 
   async process(wav: Buffer): Promise<Buffer> {
     const { sampleRate } = parseWav(wav);
-    const enriched       = injectBreaths(wav, sampleRate, this.opts);
+    const enriched       = await injectBreaths(wav, sampleRate, this.opts, this.synthUrl);
     return this.inner.process(enriched);
   }
 }
