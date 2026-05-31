@@ -1,5 +1,5 @@
 // fonictl — foni-synth command-line factory.
-// Commands: synth | knobs | samples | status | play | analyse
+// Commands: synth | studio | samples | status | play | analyse
 
 use std::{path::PathBuf, process::Command};
 
@@ -62,13 +62,16 @@ enum Cmd {
         de_ess_db: Option<f32>,
     },
 
-    /// Interactive knob tuning loop
-    Knobs {
-        /// Phrase to synthesize during tuning
+    /// Maquette studio — produce N named variants, render all, listen, pick
+    Studio {
+        /// Phrase to synthesize for all maquettes
         #[arg(default_value = "Подойди-ка, надо тебе ситуацию прояснить.")]
         text: String,
         #[arg(short, long, default_value = "bandit")]
         model: String,
+        /// Load maquettes from a JSON file instead of starting with defaults
+        #[arg(long)]
+        from: Option<PathBuf>,
     },
 
     /// Batch-generate comparison set (espeak / RVC / RVC+DSP)
@@ -259,112 +262,125 @@ fn cmd_synth(
     }
 }
 
-fn cmd_knobs(server: &str, text: &str, model: &str) {
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct Maquette {
+    name: String,
+    opts: serde_json::Value,
+}
+
+impl Maquette {
+    fn describe(&self) -> String {
+        let o = &self.opts;
+        let mut parts = vec![];
+        if let Some(v) = o.get("rmsTargetLufs") {
+            parts.push(format!("rms={:.0}", v.as_f64().unwrap_or(0.0)));
+        }
+        if let Some(v) = o.get("compressionRatio") {
+            parts.push(format!("comp={:.1}", v.as_f64().unwrap_or(0.0)));
+        }
+        if let Some(v) = o.get("tiltLowDb") {
+            parts.push(format!("lo={:.0}", v.as_f64().unwrap_or(0.0)));
+        }
+        if let Some(v) = o.get("tiltHighDb") {
+            parts.push(format!("hi={:.0}", v.as_f64().unwrap_or(0.0)));
+        }
+        if let Some(v) = o.get("presenceDb") {
+            parts.push(format!("pres={:.1}", v.as_f64().unwrap_or(0.0)));
+        }
+        if let Some(v) = o.get("deEssDb") {
+            parts.push(format!("deess={:.0}", v.as_f64().unwrap_or(0.0)));
+        }
+        if parts.is_empty() {
+            "defaults".into()
+        } else {
+            parts.join("  ")
+        }
+    }
+}
+
+fn default_maquettes() -> Vec<Maquette> {
+    vec![
+        Maquette {
+            name: "baseline".into(),
+            opts: serde_json::json!({
+            "rmsTargetLufs": -8, "compressionRatio": 4, "compressionMakeupDb": 5,
+            "tiltLowDb": 10, "tiltHighDb": -8, "vibratoFreq": 6, "vibratoDepth": 0.003 }),
+        },
+        Maquette {
+            name: "warm".into(),
+            opts: serde_json::json!({
+            "rmsTargetLufs": -8, "compressionRatio": 3, "compressionMakeupDb": 4,
+            "tiltLowDb": 14, "tiltHighDb": -10, "vibratoFreq": 6, "vibratoDepth": 0.003 }),
+        },
+        Maquette {
+            name: "punchy".into(),
+            opts: serde_json::json!({
+            "rmsTargetLufs": -6, "compressionRatio": 6, "compressionMakeupDb": 6,
+            "tiltLowDb": 8,  "tiltHighDb": -6,  "vibratoFreq": 5, "vibratoDepth": 0.002 }),
+        },
+        Maquette {
+            name: "bright".into(),
+            opts: serde_json::json!({
+            "rmsTargetLufs": -9, "compressionRatio": 3, "compressionMakeupDb": 3,
+            "tiltLowDb": 6,  "tiltHighDb": -4,  "presenceDb": 2.0, "deEssDb": 3.0,
+            "vibratoFreq": 6, "vibratoDepth": 0.003 }),
+        },
+    ]
+}
+
+/// Render one maquette → WAV bytes, save to tmp, return path.
+fn render_maquette(server: &str, text: &str, model: &str, m: &Maquette) -> Result<PathBuf, String> {
+    let bytes = synth_request(server, text, model, "ru", 150, true, m.opts.clone())?;
+    let path =
+        std::env::temp_dir().join(format!("fonictl_maquette_{}.wav", m.name.replace(' ', "_")));
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+fn cmd_studio(server: &str, text: &str, model: &str, from: Option<&std::path::Path>) {
     let theme = ColorfulTheme::default();
 
-    // Knob definitions: (display name, json key, default, step)
-    struct Knob {
-        name: &'static str,
-        key: &'static str,
-        val: f32,
-        step: f32,
-        min: f32,
-        max: f32,
-    }
-    let mut knobs = vec![
-        Knob {
-            name: "rmsTargetLufs     (loudness)",
-            key: "rmsTargetLufs",
-            val: -8.0,
-            step: 1.0,
-            min: -30.0,
-            max: 0.0,
-        },
-        Knob {
-            name: "compressionRatio  (dynamics)",
-            key: "compressionRatio",
-            val: 4.0,
-            step: 0.5,
-            min: 1.0,
-            max: 20.0,
-        },
-        Knob {
-            name: "compressionMakeupDb (gain)",
-            key: "compressionMakeupDb",
-            val: 5.0,
-            step: 0.5,
-            min: 0.0,
-            max: 20.0,
-        },
-        Knob {
-            name: "tiltLowDb         (warmth)",
-            key: "tiltLowDb",
-            val: 10.0,
-            step: 1.0,
-            min: -20.0,
-            max: 20.0,
-        },
-        Knob {
-            name: "tiltHighDb        (air cut)",
-            key: "tiltHighDb",
-            val: -8.0,
-            step: 1.0,
-            min: -20.0,
-            max: 20.0,
-        },
-        Knob {
-            name: "presenceDb        (clarity)",
-            key: "presenceDb",
-            val: 0.0,
-            step: 0.5,
-            min: -10.0,
-            max: 10.0,
-        },
-        Knob {
-            name: "deEssDb           (de-ess)",
-            key: "deEssDb",
-            val: 4.0,
-            step: 0.5,
-            min: 0.0,
-            max: 15.0,
-        },
-        Knob {
-            name: "vibratoFreq       (Hz)",
-            key: "vibratoFreq",
-            val: 6.0,
-            step: 0.5,
-            min: 0.0,
-            max: 15.0,
-        },
-        Knob {
-            name: "vibratoDepth      (amount)",
-            key: "vibratoDepth",
-            val: 0.003,
-            step: 0.001,
-            min: 0.0,
-            max: 0.02,
-        },
-    ];
+    let mut maquettes: Vec<Maquette> = if let Some(path) = from {
+        let raw = std::fs::read_to_string(path).expect("cannot read maquette file");
+        serde_json::from_str(&raw).expect("invalid maquette JSON")
+    } else {
+        default_maquettes()
+    };
 
-    println!("🎛  Knob tuning mode");
-    println!("    Phrase: «{}»", text);
-    println!("    Model:  {model}");
-    println!("    Commands: [s]ynth  [+/-] adjust  [q]uit  [p]rint opts\n");
+    // Rendered WAVs: index → path
+    let mut rendered: Vec<Option<PathBuf>> = vec![None; maquettes.len()];
+
+    println!("\n🎛  Maquette Studio");
+    println!("    Phrase: «{text}»");
+    println!("    Model:  {model}\n");
 
     loop {
-        // Print current values
-        println!("  Current knobs:");
-        for (i, k) in knobs.iter().enumerate() {
-            println!("  {:2}. {:40}  {:>8.3}", i + 1, k.name, k.val);
+        // Print table
+        println!("  {:>3}  {:<18}  Config", "#", "Name");
+        println!("  {}", "─".repeat(70));
+        for (i, m) in maquettes.iter().enumerate() {
+            let rendered_mark = if rendered.get(i).and_then(|r| r.as_ref()).is_some() {
+                "✓"
+            } else {
+                " "
+            };
+            println!(
+                "  {rendered_mark}{:>2}  {:<18}  {}",
+                i + 1,
+                m.name,
+                m.describe()
+            );
         }
         println!();
 
         let actions = vec![
-            "▶  Synthesize and play",
-            "✏  Adjust a knob",
-            "↺  Reset to defaults",
-            "💾 Save opts to JSON",
-            "🖨  Print curl command",
+            "▶  Render all maquettes",
+            "🔊 Play a maquette",
+            "✚  Add new maquette (fork existing + tweak)",
+            "✎  Rename a maquette",
+            "🗑  Delete a maquette",
+            "💾 Save maquettes to JSON",
+            "🏆 Pick winner → print opts",
             "✗  Quit",
         ];
 
@@ -373,117 +389,217 @@ fn cmd_knobs(server: &str, text: &str, model: &str) {
             .items(&actions)
             .default(0)
             .interact()
-            .unwrap_or(5);
+            .unwrap_or(7);
 
         match choice {
             0 => {
-                // Synthesize and play
-                let mut opts = serde_json::json!({});
-                for k in &knobs {
-                    opts[k.key] = k.val.into();
-                }
-
-                let pb = ProgressBar::new_spinner();
+                // Render all
+                rendered.resize(maquettes.len(), None);
+                let pb = ProgressBar::new(maquettes.len() as u64);
                 pb.set_style(
-                    ProgressStyle::default_spinner()
-                        .template("{spinner} {msg}")
+                    ProgressStyle::default_bar()
+                        .template("[{bar:30}] {pos}/{len}  {msg}")
                         .unwrap(),
                 );
-                pb.set_message("Synthesizing...");
-                pb.enable_steady_tick(std::time::Duration::from_millis(80));
-
-                match synth_request(server, text, model, "ru", 150, true, opts) {
-                    Ok(bytes) => {
-                        pb.finish_and_clear();
-                        let path = save_and_maybe_play(&bytes, None, true);
-                        println!("  ✅  {} ({} kB)\n", path.display(), bytes.len() / 1024);
-                    }
-                    Err(e) => {
-                        pb.finish_and_clear();
-                        println!("  ❌  {e}\n");
+                for (i, m) in maquettes.iter().enumerate() {
+                    pb.set_message(m.name.clone());
+                    match render_maquette(server, text, model, m) {
+                        Ok(path) => {
+                            rendered[i] = Some(path);
+                            pb.inc(1);
+                        }
+                        Err(e) => {
+                            pb.println(format!("  ❌ {}: {e}", m.name));
+                            pb.inc(1);
+                        }
                     }
                 }
+                pb.finish_and_clear();
+                println!("  ✅ All rendered\n");
             }
             1 => {
-                // Adjust a knob
-                let names: Vec<_> = knobs.iter().map(|k| k.name).collect();
-                let idx = Select::with_theme(&theme)
-                    .with_prompt("Which knob")
+                // Play one
+                let playable: Vec<(usize, &Maquette)> = maquettes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| rendered.get(*i).and_then(|r| r.as_ref()).is_some())
+                    .collect();
+                if playable.is_empty() {
+                    println!("  ⚠  No maquettes rendered yet — render first\n");
+                    continue;
+                }
+                let labels: Vec<String> = playable
+                    .iter()
+                    .map(|(i, m)| format!("{:>2}. {:<18} {}", i + 1, m.name, m.describe()))
+                    .collect();
+                let sel = Select::with_theme(&theme)
+                    .with_prompt("Play which maquette")
+                    .items(&labels)
+                    .interact()
+                    .unwrap_or(0);
+                let (idx, _) = playable[sel];
+                if let Some(path) = &rendered[idx] {
+                    println!("  ▶  Playing {}…", maquettes[idx].name);
+                    play_wav(path);
+                }
+                println!();
+            }
+            2 => {
+                // Add maquette (fork + tweak)
+                let names: Vec<String> = maquettes.iter().map(|m| m.name.clone()).collect();
+                let base_sel = Select::with_theme(&theme)
+                    .with_prompt("Fork from")
                     .items(&names)
                     .interact()
                     .unwrap_or(0);
 
-                let k = &mut knobs[idx];
-                let ops = vec![
-                    format!(
-                        "+ {:.3} (→ {:.3})",
-                        k.step,
-                        (k.val + k.step).clamp(k.min, k.max)
-                    ),
-                    format!(
-                        "- {:.3} (→ {:.3})",
-                        k.step,
-                        (k.val - k.step).clamp(k.min, k.max)
-                    ),
-                    format!("Enter value (current: {:.3})", k.val),
+                let new_name: String = Input::with_theme(&theme)
+                    .with_prompt("New maquette name")
+                    .interact_text()
+                    .unwrap_or_default();
+
+                if new_name.is_empty() {
+                    continue;
+                }
+
+                let mut new_opts = maquettes[base_sel].opts.clone();
+
+                // Knob list to tweak
+                let knob_defs = [
+                    ("rmsTargetLufs", "Loudness target (dBLUFS)"),
+                    ("compressionRatio", "Compression ratio (N:1)"),
+                    ("compressionMakeupDb", "Makeup gain (dB)"),
+                    ("tiltLowDb", "Low-shelf boost (dB)"),
+                    ("tiltHighDb", "High-shelf cut (dB)"),
+                    ("presenceDb", "Presence boost (dB)"),
+                    ("deEssDb", "De-esser cut (dB)"),
+                    ("vibratoFreq", "Vibrato rate (Hz)"),
+                    ("vibratoDepth", "Vibrato depth"),
                 ];
 
-                let op = Select::with_theme(&theme)
-                    .with_prompt("Adjust")
-                    .items(&ops)
-                    .interact()
-                    .unwrap_or(0);
-
-                match op {
-                    0 => k.val = (k.val + k.step).clamp(k.min, k.max),
-                    1 => k.val = (k.val - k.step).clamp(k.min, k.max),
-                    _ => {
-                        let v: f32 = Input::with_theme(&theme)
-                            .with_prompt(format!("{} value", k.name))
-                            .default(k.val)
+                loop {
+                    println!("\n  Knobs (press Enter to keep, type new value to change):");
+                    let mut done = false;
+                    for (key, label) in &knob_defs {
+                        let cur = new_opts.get(*key).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let val: String = Input::with_theme(&theme)
+                            .with_prompt(format!("  {label} [{cur:.3}]"))
+                            .allow_empty(true)
                             .interact_text()
-                            .unwrap_or(k.val);
-                        k.val = v.clamp(k.min, k.max);
+                            .unwrap_or_default();
+                        if val == "done" || val == "q" {
+                            done = true;
+                            break;
+                        }
+                        if !val.is_empty() {
+                            if let Ok(f) = val.parse::<f64>() {
+                                new_opts[*key] = f.into();
+                            }
+                        }
+                    }
+                    if done {
+                        break;
+                    }
+
+                    // Offer to tweak again or confirm
+                    let confirm = Select::with_theme(&theme)
+                        .with_prompt("Confirm?")
+                        .items(&["✓  Add this maquette", "✎  Tweak more", "✗  Cancel"])
+                        .interact()
+                        .unwrap_or(2);
+                    match confirm {
+                        0 => {
+                            maquettes.push(Maquette {
+                                name: new_name.clone(),
+                                opts: new_opts.clone(),
+                            });
+                            rendered.push(None);
+                            println!("  ✅ Added «{new_name}»\n");
+                            break;
+                        }
+                        2 => break,
+                        _ => {}
                     }
                 }
-                println!("  → {} = {:.3}\n", k.name, k.val);
-            }
-            2 => {
-                // Reset defaults
-                for k in &mut knobs {
-                    k.val = match k.key {
-                        "rmsTargetLufs" => -8.0,
-                        "compressionRatio" => 4.0,
-                        "compressionMakeupDb" => 5.0,
-                        "tiltLowDb" => 10.0,
-                        "tiltHighDb" => -8.0,
-                        "vibratoFreq" => 6.0,
-                        "vibratoDepth" => 0.003,
-                        _ => 0.0,
-                    };
-                }
-                println!("  ↺  Reset to defaults\n");
             }
             3 => {
-                // Print JSON
-                let mut opts = serde_json::json!({});
-                for k in &knobs {
-                    opts[k.key] = k.val.into();
+                // Rename
+                let names: Vec<String> = maquettes.iter().map(|m| m.name.clone()).collect();
+                let sel = Select::with_theme(&theme)
+                    .with_prompt("Rename which")
+                    .items(&names)
+                    .interact()
+                    .unwrap_or(0);
+                let new_name: String = Input::with_theme(&theme)
+                    .with_prompt("New name")
+                    .interact_text()
+                    .unwrap_or_default();
+                if !new_name.is_empty() {
+                    maquettes[sel].name = new_name;
                 }
-                println!("{}\n", serde_json::to_string_pretty(&opts).unwrap());
             }
             4 => {
-                // Print curl command
-                let mut opts = serde_json::json!({});
-                for k in &knobs {
-                    opts[k.key] = k.val.into();
+                // Delete
+                if maquettes.len() <= 1 {
+                    println!("  ⚠  Cannot delete last maquette\n");
+                    continue;
                 }
-                let body = serde_json::json!({
-                    "text": text, "model": model, "voice": "ru",
-                    "speed": 150, "dsp": true, "opts": opts
-                });
-                println!("curl -s -X POST {server}/synthesize \\\n  -H 'Content-Type: application/json' \\\n  -d '{}' \\\n  -o out.wav\n",
-                    serde_json::to_string(&body).unwrap());
+                let names: Vec<String> = maquettes.iter().map(|m| m.name.clone()).collect();
+                let sel = Select::with_theme(&theme)
+                    .with_prompt("Delete which")
+                    .items(&names)
+                    .interact()
+                    .unwrap_or(0);
+                maquettes.remove(sel);
+                rendered.remove(sel);
+                println!("  ✅ Deleted\n");
+            }
+            5 => {
+                // Save to JSON
+                let path: String = Input::with_theme(&theme)
+                    .with_prompt("Save to file")
+                    .default("maquettes.json".into())
+                    .interact_text()
+                    .unwrap_or_default();
+                if !path.is_empty() {
+                    let json = serde_json::to_string_pretty(&maquettes).unwrap();
+                    std::fs::write(&path, &json).unwrap();
+                    println!("  ✅ Saved to {path}\n");
+                }
+            }
+            6 => {
+                // Pick winner
+                let names: Vec<String> = maquettes.iter().map(|m| m.name.clone()).collect();
+                let sel = Select::with_theme(&theme)
+                    .with_prompt("Winner")
+                    .items(&names)
+                    .interact()
+                    .unwrap_or(0);
+                let winner = &maquettes[sel];
+                println!("\n🏆  Winner: «{}»", winner.name);
+                println!("{}", serde_json::to_string_pretty(&winner.opts).unwrap());
+                println!("\n  Use with:");
+                let args: Vec<String> = winner
+                    .opts
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| {
+                        let flag = k
+                            .chars()
+                            .flat_map(|c| {
+                                if c.is_uppercase() {
+                                    vec!['-', c.to_lowercase().next().unwrap()]
+                                } else {
+                                    vec![c]
+                                }
+                            })
+                            .collect::<String>();
+                        format!("--{flag} {v}")
+                    })
+                    .collect();
+                println!("  fonictl synth \"{}\" {}", text, args.join(" \\\n    "));
+                println!();
             }
             _ => break,
         }
@@ -656,8 +772,8 @@ fn main() {
                 de_ess_db,
             );
         }
-        Cmd::Knobs { text, model } => {
-            cmd_knobs(server, &text, &model);
+        Cmd::Studio { text, model, from } => {
+            cmd_studio(server, &text, &model, from.as_deref());
         }
         Cmd::Samples { out_dir, model } => {
             cmd_samples(server, &out_dir, &model);
