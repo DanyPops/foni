@@ -1,18 +1,17 @@
 /// WAV encode/decode utilities for foni-synth.
 /// Decode is thin wrapper over foni-analyse; encode uses hound.
-
 use foni_analyse::wav::WavData;
-use hound::{WavSpec, WavWriter, SampleFormat};
+use hound::{SampleFormat, WavSpec, WavWriter};
 
 pub use foni_analyse::decode_wav;
 
 /// Encode f32 mono samples to a 16-bit PCM WAV buffer.
 pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, hound::Error> {
     let spec = WavSpec {
-        channels:        1,
+        channels: 1,
         sample_rate,
         bits_per_sample: 16,
-        sample_format:   SampleFormat::Int,
+        sample_format: SampleFormat::Int,
     };
     let mut buf = Vec::new();
     let mut writer = WavWriter::new(std::io::Cursor::new(&mut buf), spec)?;
@@ -26,7 +25,9 @@ pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, hound::E
 
 /// Prepend and append `pad_secs` of silence to mono f32 samples.
 pub fn pad_silence(samples: &[f32], pad_secs: f32, sample_rate: u32) -> Vec<f32> {
-    if pad_secs <= 0.0 { return samples.to_vec(); }
+    if pad_secs <= 0.0 {
+        return samples.to_vec();
+    }
     let pad_n = (sample_rate as f32 * pad_secs) as usize;
     let mut out = vec![0f32; pad_n];
     out.extend_from_slice(samples);
@@ -37,10 +38,14 @@ pub fn pad_silence(samples: &[f32], pad_secs: f32, sample_rate: u32) -> Vec<f32>
 /// Round-trip: WAV bytes → f32 samples → DSP → WAV bytes.
 /// Convenience used by /process and /breath routes.
 pub fn roundtrip<F>(wav_bytes: &[u8], f: F) -> Result<Vec<u8>, String>
-where F: FnOnce(&mut Vec<f32>, u32),
+where
+    F: FnOnce(&mut Vec<f32>, u32),
 {
-    let WavData { mut samples, sample_rate, .. } =
-        decode_wav(wav_bytes).map_err(|e| e.to_string())?;
+    let WavData {
+        mut samples,
+        sample_rate,
+        ..
+    } = decode_wav(wav_bytes).map_err(|e| e.to_string())?;
     f(&mut samples, sample_rate);
     encode_wav(&samples, sample_rate).map_err(|e| e.to_string())
 }

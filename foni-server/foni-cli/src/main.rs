@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use foni_analyse::{analyse, compute_gap, decode_wav, format_gap_table, TargetTensor};
+use std::path::PathBuf;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -27,7 +27,7 @@ fn main() {
     if let Some(ref_pos) = args.iter().position(|a| a == "--vs") {
         if let Some(ref_path) = args.get(ref_pos + 1) {
             let ref_bytes = std::fs::read(ref_path).expect("cannot read reference WAV");
-            let ref_wav   = decode_wav(&ref_bytes).expect("cannot decode reference WAV");
+            let ref_wav = decode_wav(&ref_bytes).expect("cannot decode reference WAV");
             let ref_analysis = analyse(&ref_wav.samples, ref_wav.sample_rate);
             let tensor = TargetTensor::from_analysis(&ref_analysis, ref_path);
             let gap = compute_gap(path.to_str().unwrap_or("?"), &analysis, &tensor);
@@ -45,7 +45,11 @@ fn main() {
     } else {
         println!("Duration:  {:.2}s", analysis.temporal.duration_secs);
         println!("Speech rt: {:.1} frames/s", analysis.temporal.speech_rate);
-        println!("Pauses:    {} × {:.0}ms avg", analysis.temporal.pause_count, analysis.temporal.mean_pause_duration * 1000.0);
+        println!(
+            "Pauses:    {} × {:.0}ms avg",
+            analysis.temporal.pause_count,
+            analysis.temporal.mean_pause_duration * 1000.0
+        );
         println!("RMS:       {:.1} dBFS", analysis.loudness.rms_db);
         println!("Crest:     {:.1} dB", analysis.loudness.crest_factor);
         println!("Centroid:  {:.0} Hz", analysis.spectral.centroid_hz);

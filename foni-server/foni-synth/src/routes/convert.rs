@@ -12,14 +12,13 @@
 ///
 /// Request:  { "audio_data": "<base64 WAV>", "model": "<name>" }
 /// Response: { "audio_data": "<base64 WAV>" }
-
 use axum::{extract::State, http::StatusCode, Json};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use foni_analyse::decode_wav;
 use crate::{state::AppState, wav::encode_wav};
+use foni_analyse::decode_wav;
 
 // ─── Timing constants ──────────────────────────────────────────────────────────
 
@@ -67,18 +66,27 @@ fn find_pretrained(filename: &str) -> Option<PathBuf> {
     // 1. FONI_MODELS_DIR env var
     if let Ok(dir) = std::env::var("FONI_MODELS_DIR") {
         let p = PathBuf::from(dir).join("pretrained").join(filename);
-        if p.exists() { return Some(p); }
+        if p.exists() {
+            return Some(p);
+        }
     }
     // 2. Workspace-relative path (works when running from foni-server/ or foni/)
     for base in &["../../rvc/models/pretrained", "../rvc/models/pretrained"] {
         let p = PathBuf::from(base).join(filename);
-        if p.exists() { return Some(p); }
+        if p.exists() {
+            return Some(p);
+        }
     }
     None
 }
 
 fn generator_path(state: &AppState, model_name: &str) -> PathBuf {
-    state.0.models_dir.join(model_name).join("onnx").join("generator.onnx")
+    state
+        .0
+        .models_dir
+        .join(model_name)
+        .join("onnx")
+        .join("generator.onnx")
 }
 
 // ─── ONNX helpers ──────────────────────────────────────────────────────────────
@@ -92,16 +100,18 @@ fn load_session(path: &Path) -> Result<ort::session::Session, String> {
 
 // ─── Stage 1: ContentVec — audio@16k → phone features [1, T', 768] ────────────
 
-fn run_contentvec(audio_16k: &[f32], session: &mut ort::session::Session)
-    -> Result<Vec<f32>, String>
-{
+fn run_contentvec(
+    audio_16k: &[f32],
+    session: &mut ort::session::Session,
+) -> Result<Vec<f32>, String> {
     use ort::value::Tensor;
 
     let t = audio_16k.len();
     let input = Tensor::<f32>::from_array(([1usize, 1, t], audio_16k.to_vec()))
         .map_err(|e| e.to_string())?;
 
-    let outputs = session.run(ort::inputs!["source" => input])
+    let outputs = session
+        .run(ort::inputs!["source" => input])
         .map_err(|e| e.to_string())?;
 
     let (shape, data) = outputs["embed"]
@@ -119,7 +129,7 @@ fn run_contentvec(audio_16k: &[f32], session: &mut ort::session::Session)
     for ti in 0..t_prime {
         for di in 0..768 {
             let v = data[ti * 768 + di];
-            repeated[(ti * 2)     * 768 + di] = v;
+            repeated[(ti * 2) * 768 + di] = v;
             repeated[(ti * 2 + 1) * 768 + di] = v;
         }
     }
@@ -128,17 +138,20 @@ fn run_contentvec(audio_16k: &[f32], session: &mut ort::session::Session)
 
 // ─── Stage 2: RMVPE — audio@16k → F0 Hz [T'] ──────────────────────────────────
 
-fn run_rmvpe(audio_16k: &[f32], t_phone: usize, f0_up_key: i32,
-             session: &mut ort::session::Session)
-    -> Result<(Vec<i64>, Vec<f32>), String>
-{
+fn run_rmvpe(
+    audio_16k: &[f32],
+    t_phone: usize,
+    f0_up_key: i32,
+    session: &mut ort::session::Session,
+) -> Result<(Vec<i64>, Vec<f32>), String> {
     use ort::value::Tensor;
 
     let t = audio_16k.len();
-    let input = Tensor::<f32>::from_array(([1usize, t], audio_16k.to_vec()))
-        .map_err(|e| e.to_string())?;
+    let input =
+        Tensor::<f32>::from_array(([1usize, t], audio_16k.to_vec())).map_err(|e| e.to_string())?;
 
-    let outputs = session.run(ort::inputs!["input" => input])
+    let outputs = session
+        .run(ort::inputs!["input" => input])
         .map_err(|e| e.to_string())?;
 
     let (shape, data) = outputs["output"]
@@ -161,14 +174,19 @@ fn run_rmvpe(audio_16k: &[f32], t_phone: usize, f0_up_key: i32,
     // Convert Hz → RVC mel-scale pitch index [1..255]
     let f0_mel_min = 1127.0 * (1.0 + F0_MIN / 700.0).ln();
     let f0_mel_max = 1127.0 * (1.0 + F0_MAX / 700.0).ln();
-    let pitch: Vec<i64> = pitchf.iter().map(|&hz| {
-        if hz <= 0.0 { return 1i64; }
-        let mel = 1127.0 * (1.0 + hz / 700.0).ln();
-        let idx = ((mel - f0_mel_min) * 254.0 / (f0_mel_max - f0_mel_min) + 1.0)
-            .round()
-            .clamp(1.0, 255.0) as i64;
-        idx
-    }).collect();
+    let pitch: Vec<i64> = pitchf
+        .iter()
+        .map(|&hz| {
+            if hz <= 0.0 {
+                return 1i64;
+            }
+            let mel = 1127.0 * (1.0 + hz / 700.0).ln();
+            let idx = ((mel - f0_mel_min) * 254.0 / (f0_mel_max - f0_mel_min) + 1.0)
+                .round()
+                .clamp(1.0, 255.0) as i64;
+            idx
+        })
+        .collect();
 
     let _ = shape; // used for shape info only
     Ok((pitch, pitchf))
@@ -177,7 +195,7 @@ fn run_rmvpe(audio_16k: &[f32], t_phone: usize, f0_up_key: i32,
 // ─── Stage 3: Generator — phone + F0 + noise → audio [1, 1, N] ───────────────
 
 fn run_generator(
-    phone: Vec<f32>,    // [T_phone * 768], row-major
+    phone: Vec<f32>, // [T_phone * 768], row-major
     t_phone: usize,
     pitch: Vec<i64>,
     pitchf: Vec<f32>,
@@ -192,27 +210,28 @@ fn run_generator(
         .map(|_| rng.gen::<f32>() * 0.1)
         .collect();
 
-    let phone_t  = Tensor::<f32>::from_array(([1usize, t_phone, 768], phone))
-        .map_err(|e| e.to_string())?;
-    let lengths  = Tensor::<i64>::from_array(([1usize], vec![t_phone as i64]))
-        .map_err(|e| e.to_string())?;
-    let pitch_t  = Tensor::<i64>::from_array(([1usize, t_phone], pitch))
-        .map_err(|e| e.to_string())?;
-    let pitchf_t = Tensor::<f32>::from_array(([1usize, t_phone], pitchf))
-        .map_err(|e| e.to_string())?;
-    let ds       = Tensor::<i64>::from_array(([1usize], vec![speaker_id]))
-        .map_err(|e| e.to_string())?;
-    let rnd      = Tensor::<f32>::from_array(([1usize, NOISE_CHANNELS, t_phone], noise))
+    let phone_t =
+        Tensor::<f32>::from_array(([1usize, t_phone, 768], phone)).map_err(|e| e.to_string())?;
+    let lengths =
+        Tensor::<i64>::from_array(([1usize], vec![t_phone as i64])).map_err(|e| e.to_string())?;
+    let pitch_t =
+        Tensor::<i64>::from_array(([1usize, t_phone], pitch)).map_err(|e| e.to_string())?;
+    let pitchf_t =
+        Tensor::<f32>::from_array(([1usize, t_phone], pitchf)).map_err(|e| e.to_string())?;
+    let ds = Tensor::<i64>::from_array(([1usize], vec![speaker_id])).map_err(|e| e.to_string())?;
+    let rnd = Tensor::<f32>::from_array(([1usize, NOISE_CHANNELS, t_phone], noise))
         .map_err(|e| e.to_string())?;
 
-    let outputs = session.run(ort::inputs![
-        "phone"         => phone_t,
-        "phone_lengths" => lengths,
-        "pitch"         => pitch_t,
-        "pitchf"        => pitchf_t,
-        "ds"            => ds,
-        "rnd"           => rnd,
-    ]).map_err(|e| e.to_string())?;
+    let outputs = session
+        .run(ort::inputs![
+            "phone"         => phone_t,
+            "phone_lengths" => lengths,
+            "pitch"         => pitch_t,
+            "pitchf"        => pitchf_t,
+            "ds"            => ds,
+            "rnd"           => rnd,
+        ])
+        .map_err(|e| e.to_string())?;
 
     let (_shape, data) = outputs["audio"]
         .try_extract_tensor::<f32>()
@@ -224,48 +243,66 @@ fn run_generator(
 // ─── Resample 40kHz → 16kHz (simple linear interp, for ContentVec/RMVPE input) ─
 
 fn resample_to_16k(samples: &[f32], src_sr: u32) -> Vec<f32> {
-    if src_sr == 16_000 { return samples.to_vec(); }
+    if src_sr == 16_000 {
+        return samples.to_vec();
+    }
     let ratio = src_sr as f64 / 16_000.0;
     let out_len = (samples.len() as f64 / ratio) as usize;
-    (0..out_len).map(|i| {
-        let src = i as f64 * ratio;
-        let lo = src.floor() as usize;
-        let hi = (lo + 1).min(samples.len() - 1);
-        let frac = src - lo as f64;
-        samples[lo] * (1.0 - frac as f32) + samples[hi] * frac as f32
-    }).collect()
+    (0..out_len)
+        .map(|i| {
+            let src = i as f64 * ratio;
+            let lo = src.floor() as usize;
+            let hi = (lo + 1).min(samples.len() - 1);
+            let frac = src - lo as f64;
+            samples[lo] * (1.0 - frac as f32) + samples[hi] * frac as f32
+        })
+        .collect()
 }
 
 // ─── HTTP handler ──────────────────────────────────────────────────────────────
 
 pub async fn convert(
     State(state): State<AppState>,
-    Json(req):    Json<ConvertRequest>,
+    Json(req): Json<ConvertRequest>,
 ) -> Result<Json<ConvertResponse>, (StatusCode, String)> {
     let model_name = {
         let guard = state.0.current_model.read().await;
-        req.model.clone().unwrap_or_else(|| guard.as_deref().unwrap_or("bandit").to_string())
+        req.model
+            .clone()
+            .unwrap_or_else(|| guard.as_deref().unwrap_or("bandit").to_string())
     };
 
     // Resolve model paths
-    let cv_path  = find_pretrained("contentvec-768-l12.onnx")
-        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE,
-            "ContentVec ONNX not found. Run: python3 rvc/export_contentvec_onnx.py".to_string()))?;
-    let rmvpe_path = find_pretrained("rmvpe.onnx")
-        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE,
-            "RMVPE ONNX not found in pretrained/".to_string()))?;
+    let cv_path = find_pretrained("contentvec-768-l12.onnx").ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "ContentVec ONNX not found. Run: python3 rvc/export_contentvec_onnx.py".to_string(),
+        )
+    })?;
+    let rmvpe_path = find_pretrained("rmvpe.onnx").ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "RMVPE ONNX not found in pretrained/".to_string(),
+        )
+    })?;
     let gen_path = generator_path(&state, &model_name);
     if !gen_path.exists() {
-        return Err((StatusCode::SERVICE_UNAVAILABLE,
-            format!("Generator ONNX not found at {}. Run: python3 rvc/export_onnx.py {}",
-                gen_path.display(), model_name)));
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!(
+                "Generator ONNX not found at {}. Run: python3 rvc/export_onnx.py {}",
+                gen_path.display(),
+                model_name
+            ),
+        ));
     }
 
     // Decode input WAV
-    let bytes = B64.decode(&req.audio_data)
+    let bytes = B64
+        .decode(&req.audio_data)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("base64: {e}")))?;
-    let wav = decode_wav(&bytes)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("WAV decode: {e}")))?;
+    let wav =
+        decode_wav(&bytes).map_err(|e| (StatusCode::BAD_REQUEST, format!("WAV decode: {e}")))?;
 
     // Resample to 16 kHz for ContentVec + RMVPE
     let audio_16k = resample_to_16k(&wav.samples, wav.sample_rate);
@@ -279,21 +316,36 @@ pub async fn convert(
     // Run the three-stage pipeline
     macro_rules! wrap {
         ($stage:expr, $e:expr) => {
-            $e.map_err(|msg: String| (StatusCode::INTERNAL_SERVER_ERROR, format!("{}: {}", $stage, msg)))?
+            $e.map_err(|msg: String| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{}: {}", $stage, msg),
+                )
+            })?
         };
     }
 
-    let mut cv_sess    = wrap!("ContentVec load", load_session(&cv_path));
-    let mut rmvpe_sess = wrap!("RMVPE load",      load_session(&rmvpe_path));
-    let mut gen_sess   = wrap!("Generator load",  load_session(&gen_path));
+    let mut cv_sess = wrap!("ContentVec load", load_session(&cv_path));
+    let mut rmvpe_sess = wrap!("RMVPE load", load_session(&rmvpe_path));
+    let mut gen_sess = wrap!("Generator load", load_session(&gen_path));
 
-    let phone           = wrap!("ContentVec", run_contentvec(&audio_16k, &mut cv_sess));
-    let (pitch, pitchf) = wrap!("RMVPE",      run_rmvpe(&audio_16k, t_phone, req.f0_up_key, &mut rmvpe_sess));
-    let audio_out       = wrap!("Generator",  run_generator(phone, t_phone, pitch, pitchf, req.speaker_id, &mut gen_sess));
+    let phone = wrap!("ContentVec", run_contentvec(&audio_16k, &mut cv_sess));
+    let (pitch, pitchf) = wrap!(
+        "RMVPE",
+        run_rmvpe(&audio_16k, t_phone, req.f0_up_key, &mut rmvpe_sess)
+    );
+    let audio_out = wrap!(
+        "Generator",
+        run_generator(phone, t_phone, pitch, pitchf, req.speaker_id, &mut gen_sess)
+    );
 
     let num_samples = audio_out.len();
-    let wav_bytes   = encode_wav(&audio_out, GENERATOR_SR)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("WAV encode: {e}")))?;
+    let wav_bytes = encode_wav(&audio_out, GENERATOR_SR).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("WAV encode: {e}"),
+        )
+    })?;
 
     Ok(Json(ConvertResponse {
         audio_data: B64.encode(&wav_bytes),
@@ -312,27 +364,31 @@ pub fn validate_generator_onnx(path: &Path) -> Result<Vec<usize>, String> {
 
     // T=200 matches the export trace size
     let t: usize = 200;
-    let phone   = Tensor::<f32>::from_array(([1usize, t, 768], vec![0.0f32; t * 768]))
-                    .map_err(|e| e.to_string())?;
-    let lengths = Tensor::<i64>::from_array(([1usize], vec![t as i64]))
-                    .map_err(|e| e.to_string())?;
-    let pitch   = Tensor::<i64>::from_array(([1usize, t], vec![100i64; t]))
-                    .map_err(|e| e.to_string())?;
-    let pitchf  = Tensor::<f32>::from_array(([1usize, t], vec![220.0f32; t]))
-                    .map_err(|e| e.to_string())?;
-    let ds      = Tensor::<i64>::from_array(([1usize], vec![0i64]))
-                    .map_err(|e| e.to_string())?;
-    let rnd     = Tensor::<f32>::from_array(([1usize, NOISE_CHANNELS, t], vec![0.0f32; NOISE_CHANNELS * t]))
-                    .map_err(|e| e.to_string())?;
+    let phone = Tensor::<f32>::from_array(([1usize, t, 768], vec![0.0f32; t * 768]))
+        .map_err(|e| e.to_string())?;
+    let lengths =
+        Tensor::<i64>::from_array(([1usize], vec![t as i64])).map_err(|e| e.to_string())?;
+    let pitch =
+        Tensor::<i64>::from_array(([1usize, t], vec![100i64; t])).map_err(|e| e.to_string())?;
+    let pitchf =
+        Tensor::<f32>::from_array(([1usize, t], vec![220.0f32; t])).map_err(|e| e.to_string())?;
+    let ds = Tensor::<i64>::from_array(([1usize], vec![0i64])).map_err(|e| e.to_string())?;
+    let rnd = Tensor::<f32>::from_array((
+        [1usize, NOISE_CHANNELS, t],
+        vec![0.0f32; NOISE_CHANNELS * t],
+    ))
+    .map_err(|e| e.to_string())?;
 
-    let outputs = session.run(ort::inputs![
-        "phone"         => phone,
-        "phone_lengths" => lengths,
-        "pitch"         => pitch,
-        "pitchf"        => pitchf,
-        "ds"            => ds,
-        "rnd"           => rnd,
-    ]).map_err(|e| e.to_string())?;
+    let outputs = session
+        .run(ort::inputs![
+            "phone"         => phone,
+            "phone_lengths" => lengths,
+            "pitch"         => pitch,
+            "pitchf"        => pitchf,
+            "ds"            => ds,
+            "rnd"           => rnd,
+        ])
+        .map_err(|e| e.to_string())?;
 
     let (shape, _data) = outputs["audio"]
         .try_extract_tensor::<f32>()

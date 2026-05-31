@@ -6,18 +6,32 @@ pub mod ssml;
 pub mod state;
 pub mod wav;
 
-use axum::{Router, routing::{get, post}};
+use axum::{
+    routing::{get, post},
+    Router,
+};
 
-/// Build the production router. Shared by main() and integration tests.
+/// Build the production router with explicit config. Used by main().
+pub async fn build_router_with(cfg: config::ServerConfig) -> Router {
+    build_router_from_state(state::AppState::from_config(cfg))
+}
+
+/// Build the production router with auto-loaded config. Used by integration tests.
 pub async fn build_router() -> Router {
-    let state = state::AppState::load().await.expect("failed to load state");
+    build_router_with(config::ServerConfig::load()).await
+}
+
+fn build_router_from_state(state: state::AppState) -> Router {
     Router::new()
-        .route("/models",       get(routes::models::list))
+        .route("/models", get(routes::models::list))
         .route("/models/:name", post(routes::models::load))
-        .route("/params",       get(routes::params::get_params).post(routes::params::set_params))
-        .route("/convert",      post(routes::convert::convert))
-        .route("/analyse",      post(routes::analyse::analyse))
-        .route("/process",      post(routes::process::process))
-        .route("/breath",       post(routes::breath::breath))
+        .route(
+            "/params",
+            get(routes::params::get_params).post(routes::params::set_params),
+        )
+        .route("/convert", post(routes::convert::convert))
+        .route("/analyse", post(routes::analyse::analyse))
+        .route("/process", post(routes::process::process))
+        .route("/breath", post(routes::breath::breath))
         .with_state(state)
 }

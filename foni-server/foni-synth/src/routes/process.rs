@@ -3,7 +3,6 @@
 /// Replaces the ffmpeg post-filter in pipeline/processors.ts SmoothingProcessor.
 /// Input:  { audio_data: base64_wav }
 /// Output: { audio_data: base64_wav }
-
 use axum::{extract::State, http::StatusCode, Json};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
@@ -29,7 +28,8 @@ pub async fn process(
     State(_state): State<AppState>,
     Json(req): Json<ProcessRequest>,
 ) -> Result<Json<ProcessResponse>, (StatusCode, String)> {
-    let bytes = B64.decode(&req.audio_data)
+    let bytes = B64
+        .decode(&req.audio_data)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("base64: {e}")))?;
 
     let pad = req.pad_secs;
@@ -49,5 +49,7 @@ pub async fn process(
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("task: {e}")))?
     .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e))?;
 
-    Ok(Json(ProcessResponse { audio_data: B64.encode(&out) }))
+    Ok(Json(ProcessResponse {
+        audio_data: B64.encode(&out),
+    }))
 }

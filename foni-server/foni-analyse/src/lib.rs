@@ -14,23 +14,27 @@ pub mod voice;
 pub mod wav;
 pub mod wer;
 
-pub use alignment::{align, format_alignment_table, AlignedPair, TimelineComparison, TimelineFixture};
+pub use alignment::{
+    align, format_alignment_table, AlignedPair, TimelineComparison, TimelineFixture,
+};
 pub use contour::compute_contour_correlations;
-pub use speaker_sim::{embed as speaker_embed, speaker_similarity, cosine_similarity, SpeakerEmbedding};
-pub use wer::{compute_wer, edit_distance_words, WerResult};
-pub use loudness::energy_envelope;
-pub use mcd::compute_mcd;
-pub use pitch::compute_with_contour;
 pub use gap::{compute_gap, GapResult, GapRow, TargetTensor, Verdict};
+pub use loudness::energy_envelope;
 pub use loudness::LoudnessMetrics;
+pub use mcd::compute_mcd;
 pub use mfcc::mfcc_distance;
+pub use pitch::compute_with_contour;
 pub use pitch::PitchMetrics;
 pub use report::{format_gap_summary, format_gap_table};
+pub use speaker_sim::{
+    cosine_similarity, embed as speaker_embed, speaker_similarity, SpeakerEmbedding,
+};
 pub use spectral::SpectralMetrics;
 pub use temporal::TemporalMetrics;
 pub use timeline::{pauses, segment, voiced_segments, Segment, SegmentKind, Timeline};
 pub use voice::VoiceMetrics;
 pub use wav::decode_wav;
+pub use wer::{compute_wer, edit_distance_words, WerResult};
 
 use serde::Serialize;
 
@@ -38,13 +42,13 @@ use serde::Serialize;
 /// Serialised to JSON by the /analyse HTTP endpoint.
 #[derive(Debug, Clone, Serialize)]
 pub struct AnalysisResult {
-    pub temporal:        TemporalMetrics,
-    pub spectral:        SpectralMetrics,
-    pub loudness:        LoudnessMetrics,
-    pub pitch:           PitchMetrics,
-    pub voice:           VoiceMetrics,
+    pub temporal: TemporalMetrics,
+    pub spectral: SpectralMetrics,
+    pub loudness: LoudnessMetrics,
+    pub pitch: PitchMetrics,
+    pub voice: VoiceMetrics,
     /// F0 per 10ms frame in Hz. 0.0 = unvoiced. Used for contour correlation.
-    pub f0_contour:      Vec<f32>,
+    pub f0_contour: Vec<f32>,
     /// RMS per 10ms frame (linear amplitude). Used for energy envelope correlation.
     pub energy_envelope: Vec<f32>,
 }
@@ -53,15 +57,15 @@ pub struct AnalysisResult {
 #[derive(Debug, Clone, Serialize)]
 pub struct ComparisonResult {
     /// 9-metric aggregate gap scorer.
-    pub gap:         GapResult,
+    pub gap: GapResult,
     /// Mel-Cepstral Distortion in dB. < 6dB = good, < 4dB = excellent.
-    pub mcd_db:      f32,
+    pub mcd_db: f32,
     /// F0 contour Pearson correlation after DTW alignment. 1.0 = perfect match.
-    pub f0_corr:     f32,
+    pub f0_corr: f32,
     /// Energy envelope Pearson correlation after DTW alignment.
     pub energy_corr: f32,
     /// Word Error Rate (%) via Whisper round-trip. None if not available.
-    pub wer_pct:     Option<f32>,
+    pub wer_pct: Option<f32>,
     /// Speaker similarity score 0–1. None if not computed.
     pub speaker_sim: Option<f32>,
 }
@@ -70,42 +74,53 @@ pub struct ComparisonResult {
 /// Both must be analysed with `analyse()` first.
 /// `syn_wav_bytes` is the raw WAV for Whisper WER (pass &[] to skip WER).
 pub fn compare(
-    phrase:        &str,
-    synthesis:     &AnalysisResult,
-    reference:     &AnalysisResult,
-    ref_samples:   &[f32],
-    syn_samples:   &[f32],
-    sample_rate:   u32,
+    phrase: &str,
+    synthesis: &AnalysisResult,
+    reference: &AnalysisResult,
+    ref_samples: &[f32],
+    syn_samples: &[f32],
+    sample_rate: u32,
     syn_wav_bytes: &[u8],
 ) -> ComparisonResult {
     let tensor = gap::TargetTensor::from_analysis(reference, phrase);
-    let gap    = gap::compute_gap(phrase, synthesis, &tensor);
+    let gap = gap::compute_gap(phrase, synthesis, &tensor);
     let mcd_db = mcd::compute_mcd(ref_samples, syn_samples, sample_rate);
     let (f0_corr, energy_corr) = contour::compute_contour_correlations(
-        &reference.f0_contour, &reference.energy_envelope,
-        &synthesis.f0_contour, &synthesis.energy_envelope,
+        &reference.f0_contour,
+        &reference.energy_envelope,
+        &synthesis.f0_contour,
+        &synthesis.energy_envelope,
     );
-    let wer_pct = if syn_wav_bytes.is_empty() { None } else {
+    let wer_pct = if syn_wav_bytes.is_empty() {
+        None
+    } else {
         wer::compute_wer(syn_wav_bytes, phrase, "ru").map(|r| r.wer_pct)
     };
     let speaker_sim = {
-        let ref_embed = speaker_sim::embed(ref_samples,  sample_rate, "reference");
-        let syn_embed = speaker_sim::embed(syn_samples,  sample_rate, "synthesis");
+        let ref_embed = speaker_sim::embed(ref_samples, sample_rate, "reference");
+        let syn_embed = speaker_sim::embed(syn_samples, sample_rate, "synthesis");
         Some(speaker_sim::speaker_similarity(&ref_embed, &syn_embed))
     };
 
-    ComparisonResult { gap, mcd_db, f0_corr, energy_corr, wer_pct, speaker_sim }
+    ComparisonResult {
+        gap,
+        mcd_db,
+        f0_corr,
+        energy_corr,
+        wer_pct,
+        speaker_sim,
+    }
 }
 
 /// Run the full analysis pipeline on raw f32 samples.
 pub fn analyse(samples: &[f32], sample_rate: u32) -> AnalysisResult {
     let (pitch_metrics, f0_contour) = pitch::compute_with_contour(samples, sample_rate);
     AnalysisResult {
-        temporal:        temporal::compute(samples, sample_rate),
-        spectral:        spectral::compute(samples, sample_rate),
-        loudness:        loudness::compute(samples, sample_rate),
-        pitch:           pitch_metrics,
-        voice:           voice::compute(samples, sample_rate),
+        temporal: temporal::compute(samples, sample_rate),
+        spectral: spectral::compute(samples, sample_rate),
+        loudness: loudness::compute(samples, sample_rate),
+        pitch: pitch_metrics,
+        voice: voice::compute(samples, sample_rate),
         f0_contour,
         energy_envelope: loudness::energy_envelope(samples, sample_rate),
     }

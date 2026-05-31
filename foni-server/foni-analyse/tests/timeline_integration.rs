@@ -19,15 +19,18 @@ use foni_analyse::{
 };
 // SSML annotator lives in foni-synth; access via path import in tests
 mod ssml {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../foni-synth/src/ssml.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../foni-synth/src/ssml.rs"
+    ));
 }
 
 use std::path::Path;
 use std::process::Command;
 
-const PHRASE:       &str = "Подойди-ка, надо тебе ситуацию прояснить.";
+const PHRASE: &str = "Подойди-ка, надо тебе ситуацию прояснить.";
 const FIXTURE_PATH: &str = "../../baseline/stalker/timeline/trader1a.json";
-const ESPEAK_WPM:   u32  = 150;
+const ESPEAK_WPM: u32 = 150;
 
 /// Synthetic silence_ratio must be >= this fraction of the reference ratio.
 /// Reference: ~0.43. Floor: we must have at least 40% as much silence.
@@ -35,7 +38,7 @@ const SILENCE_RATIO_FLOOR: f32 = 0.40;
 
 /// Any reference pause > this duration must produce a synthetic pause > MIN_SYNTHETIC_PAUSE.
 const REF_PAUSE_SIGNIFICANT_S: f32 = 0.15;
-const MIN_SYNTHETIC_PAUSE_S:   f32 = 0.05;
+const MIN_SYNTHETIC_PAUSE_S: f32 = 0.05;
 
 fn synthesise_espeak(phrase: &str) -> Vec<u8> {
     let dir = std::env::temp_dir().join(format!("foni-tl-{}", std::process::id()));
@@ -46,11 +49,22 @@ fn synthesise_espeak(phrase: &str) -> Vec<u8> {
     let ssml_text = ssml::annotate(phrase);
 
     let status = Command::new("espeak-ng")
-        .args(["-v", "ru", "-s", &ESPEAK_WPM.to_string(), "-p", "50", "-a", "200",
-               "-m",  // enable SSML/markup mode
-               "-w"])
-        .arg(&out).arg(&ssml_text)
-        .status().expect("espeak-ng not found");
+        .args([
+            "-v",
+            "ru",
+            "-s",
+            &ESPEAK_WPM.to_string(),
+            "-p",
+            "50",
+            "-a",
+            "200",
+            "-m", // enable SSML/markup mode
+            "-w",
+        ])
+        .arg(&out)
+        .arg(&ssml_text)
+        .status()
+        .expect("espeak-ng not found");
     assert!(status.success(), "espeak-ng failed");
     let b = std::fs::read(&out).expect("espeak output missing");
     std::fs::remove_file(&out).ok();
@@ -59,10 +73,13 @@ fn synthesise_espeak(phrase: &str) -> Vec<u8> {
 
 fn load_fixture() -> TimelineFixture {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_PATH);
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!(
-        "Fixture missing: {}\nRun: python3 scripts/extract-timeline.py \
-         baseline/stalker/wav/sidorovich/trader1a.wav", path.display()
-    ));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+        panic!(
+            "Fixture missing: {}\nRun: python3 scripts/extract-timeline.py \
+         baseline/stalker/wav/sidorovich/trader1a.wav",
+            path.display()
+        )
+    });
     serde_json::from_str(&text).expect("invalid fixture JSON")
 }
 
@@ -75,44 +92,61 @@ fn pause_structure_matches_reference() {
 
     // VAD with 80ms hangover — suppress inter-phoneme gaps, preserve inter-word pauses
     let raw = segment(&wav.samples, wav.sample_rate);
-    let tl  = merge_short_silences(&raw, 0.08);
-    let ps  = pauses(&tl);
-    let vs  = voiced_segments(&tl);
+    let tl = merge_short_silences(&raw, 0.08);
+    let ps = pauses(&tl);
+    let vs = voiced_segments(&tl);
 
     println!("\n── Synthetic timeline ────────────────────────────────");
-    println!("Total duration:  {:.3}s  (ref {:.3}s)", tl.total_duration_s, fixture.total_duration_s);
+    println!(
+        "Total duration:  {:.3}s  (ref {:.3}s)",
+        tl.total_duration_s, fixture.total_duration_s
+    );
     println!("Silence ratio:   {:.3}   (ref ~0.43)", tl.silence_ratio);
     println!("Voiced segments: {}", vs.len());
     println!("Pause segments:  {}", ps.len());
     for p in &ps {
-        println!("  pause {:.3}–{:.3}s  ({:.0}ms)", p.start_s, p.end_s, p.duration_s * 1000.0);
+        println!(
+            "  pause {:.3}–{:.3}s  ({:.0}ms)",
+            p.start_s,
+            p.end_s,
+            p.duration_s * 1000.0
+        );
     }
     println!("\n── Reference pauses (from fixture) ───────────────────");
     for p in &fixture.pauses {
-        println!("  [pause after '{}'] {:.0}ms", p.after_word, p.duration_s * 1000.0);
+        println!(
+            "  [pause after '{}'] {:.0}ms",
+            p.after_word,
+            p.duration_s * 1000.0
+        );
     }
 
     // ── Assertion 1: silence ratio floor ─────────────────────────────────────
     // Reference silence_ratio ≈ 0.43 (Sidorovich natural speech rhythm)
     // We must have at least SILENCE_RATIO_FLOOR × 0.43 silence
-    let ref_silence_ratio: f32 = fixture.pauses.iter().map(|p| p.duration_s).sum::<f32>()
-        / fixture.total_duration_s;
+    let ref_silence_ratio: f32 =
+        fixture.pauses.iter().map(|p| p.duration_s).sum::<f32>() / fixture.total_duration_s;
     let min_required = ref_silence_ratio * SILENCE_RATIO_FLOOR;
     assert!(
         tl.silence_ratio >= min_required,
         "silence_ratio {:.3} < required {:.3} ({:.0}% of reference {:.3})\n\
          Fix: add SSML <break> tags in ProsodyAnnotator (TSK-81)",
-        tl.silence_ratio, min_required,
-        SILENCE_RATIO_FLOOR * 100.0, ref_silence_ratio,
+        tl.silence_ratio,
+        min_required,
+        SILENCE_RATIO_FLOOR * 100.0,
+        ref_silence_ratio,
     );
 
     // ── Assertion 2: significant reference pauses have a synthetic counterpart ──
-    let significant_ref_pauses: Vec<_> = fixture.pauses.iter()
+    let significant_ref_pauses: Vec<_> = fixture
+        .pauses
+        .iter()
         .filter(|p| p.duration_s >= REF_PAUSE_SIGNIFICANT_S)
         .collect();
 
     if !significant_ref_pauses.is_empty() {
-        let long_syn_pauses: Vec<_> = ps.iter()
+        let long_syn_pauses: Vec<_> = ps
+            .iter()
             .filter(|p| p.duration_s >= MIN_SYNTHETIC_PAUSE_S)
             .collect();
         assert!(
@@ -132,6 +166,10 @@ fn pause_structure_matches_reference() {
         tl.total_duration_s / fixture.total_duration_s,
     );
 
-    println!("\n✅ silence_ratio={:.3}  pauses={}  duration={:.2}s",
-        tl.silence_ratio, ps.len(), tl.total_duration_s);
+    println!(
+        "\n✅ silence_ratio={:.3}  pauses={}  duration={:.2}s",
+        tl.silence_ratio,
+        ps.len(),
+        tl.total_duration_s
+    );
 }

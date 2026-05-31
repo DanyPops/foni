@@ -11,9 +11,9 @@ pub enum WavError {
 }
 
 pub struct WavData {
-    pub samples:     Vec<f32>,
+    pub samples: Vec<f32>,
     pub sample_rate: u32,
-    pub channels:    u16,
+    pub channels: u16,
 }
 
 /// Decode a WAV buffer into normalised f32 mono samples.
@@ -44,7 +44,11 @@ pub fn decode_wav(bytes: &[u8]) -> Result<WavData, WavError> {
             .collect()
     };
 
-    Ok(WavData { samples, sample_rate: spec.sample_rate, channels: spec.channels })
+    Ok(WavData {
+        samples,
+        sample_rate: spec.sample_rate,
+        channels: spec.channels,
+    })
 }
 
 #[cfg(test)]
@@ -60,7 +64,9 @@ mod tests {
         };
         let mut buf = Vec::new();
         let mut w = hound::WavWriter::new(std::io::Cursor::new(&mut buf), spec).unwrap();
-        for &s in samples { w.write_sample(s).unwrap(); }
+        for &s in samples {
+            w.write_sample(s).unwrap();
+        }
         w.finalize().unwrap();
         buf
     }

@@ -1,29 +1,34 @@
 /// Dynamics processing: compressor, hard limiter, EBU R128 loudnorm.
-
 use ebur128::{EbuR128, Mode};
 
 // ─── Compressor ───────────────────────────────────────────────────────────────
 
 pub struct Compressor {
-    threshold: f32,  // linear
-    ratio:     f32,
-    attack:    f32,  // coefficient (α) per sample
-    release:   f32,
-    makeup:    f32,  // linear gain
-    env:       f32,  // envelope follower state
+    threshold: f32, // linear
+    ratio: f32,
+    attack: f32, // coefficient (α) per sample
+    release: f32,
+    makeup: f32, // linear gain
+    env: f32,    // envelope follower state
 }
 
 impl Compressor {
-    pub fn new(threshold_db: f32, ratio: f32, attack_ms: f32, release_ms: f32,
-               makeup_db: f32, sample_rate: u32) -> Self {
+    pub fn new(
+        threshold_db: f32,
+        ratio: f32,
+        attack_ms: f32,
+        release_ms: f32,
+        makeup_db: f32,
+        sample_rate: u32,
+    ) -> Self {
         let sr = sample_rate as f32;
         Compressor {
             threshold: 10f32.powf(threshold_db / 20.),
             ratio,
-            attack:  (-1. / (sr * attack_ms  / 1000.)).exp(),
+            attack: (-1. / (sr * attack_ms / 1000.)).exp(),
             release: (-1. / (sr * release_ms / 1000.)).exp(),
-            makeup:  10f32.powf(makeup_db / 20.),
-            env:     0.,
+            makeup: 10f32.powf(makeup_db / 20.),
+            env: 0.,
         }
     }
 
@@ -31,7 +36,11 @@ impl Compressor {
         for s in samples.iter_mut() {
             let abs = s.abs();
             // Envelope follower
-            let coeff = if abs > self.env { self.attack } else { self.release };
+            let coeff = if abs > self.env {
+                self.attack
+            } else {
+                self.release
+            };
             self.env = abs + coeff * (self.env - abs);
 
             // Gain computation
@@ -65,7 +74,9 @@ pub fn loudnorm(samples: &mut [f32], sample_rate: u32, target_lufs: f32) {
         Ok(m) => m,
         Err(_) => return,
     };
-    if meter.add_frames_f32(samples).is_err() { return; }
+    if meter.add_frames_f32(samples).is_err() {
+        return;
+    }
     let measured = match meter.loudness_global() {
         Ok(l) if l.is_finite() => l as f32,
         _ => return,
@@ -73,7 +84,9 @@ pub fn loudnorm(samples: &mut [f32], sample_rate: u32, target_lufs: f32) {
     let gain = 10f32.powf((target_lufs - measured) / 20.);
     // Cap gain to avoid blowing up near-silence
     let gain = gain.min(40.); // +32 dB max boost
-    for s in samples.iter_mut() { *s *= gain; }
+    for s in samples.iter_mut() {
+        *s *= gain;
+    }
 }
 
 #[cfg(test)]
@@ -83,14 +96,22 @@ mod tests {
 
     fn sine(freq: f32, secs: f32, sr: u32) -> Vec<f32> {
         let n = (sr as f32 * secs) as usize;
-        (0..n).map(|i| (2. * PI * freq * i as f32 / sr as f32).sin() * 0.8).collect()
+        (0..n)
+            .map(|i| (2. * PI * freq * i as f32 / sr as f32).sin() * 0.8)
+            .collect()
     }
 
     fn rms(s: &[f32]) -> f32 {
         (s.iter().map(|&x| x * x).sum::<f32>() / s.len() as f32).sqrt()
     }
 
-    fn db(r: f32) -> f32 { if r > 0. { 20. * r.log10() } else { f32::NEG_INFINITY } }
+    fn db(r: f32) -> f32 {
+        if r > 0. {
+            20. * r.log10()
+        } else {
+            f32::NEG_INFINITY
+        }
+    }
 
     #[test]
     fn compressor_reduces_loud_signal() {
@@ -105,13 +126,17 @@ mod tests {
     fn hard_clip_limits_peaks() {
         let mut sig = vec![0.99f32, -0.99, 1.5, -1.5];
         hard_clip(&mut sig, -1.); // ≈ 0.891
-        for s in &sig { assert!(s.abs() <= 0.892, "peak not clipped: {s}"); }
+        for s in &sig {
+            assert!(s.abs() <= 0.892, "peak not clipped: {s}");
+        }
     }
 
     #[test]
     fn loudnorm_raises_quiet_signal() {
         let mut sig = sine(200., 2., 22050);
-        for s in sig.iter_mut() { *s *= 0.05; } // very quiet
+        for s in sig.iter_mut() {
+            *s *= 0.05;
+        } // very quiet
         let rms_before = rms(&sig);
         loudnorm(&mut sig, 22050, -14.);
         assert!(rms(&sig) > rms_before, "loudnorm didn't raise level");

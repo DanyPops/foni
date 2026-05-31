@@ -28,8 +28,10 @@ fn trim_leading(samples: &[f32], frame_ms: f32, sr: u32) -> usize {
     let mut start = 0usize;
     let mut i = 0usize;
     while i + frame <= samples.len() {
-        let rms = (samples[i..i+frame].iter().map(|&s| s*s).sum::<f32>() / frame as f32).sqrt();
-        if rms >= SILENCE_THR { break; }
+        let rms = (samples[i..i + frame].iter().map(|&s| s * s).sum::<f32>() / frame as f32).sqrt();
+        if rms >= SILENCE_THR {
+            break;
+        }
         start = i + frame;
         i += frame;
     }
@@ -38,7 +40,9 @@ fn trim_leading(samples: &[f32], frame_ms: f32, sr: u32) -> usize {
 
 /// Trim leading and trailing silence. Interior pauses are preserved.
 pub fn silence_trim(samples: Vec<f32>, threshold_db: f32, sample_rate: u32) -> Vec<f32> {
-    if threshold_db >= 0. { return samples; }  // disabled
+    if threshold_db >= 0. {
+        return samples;
+    } // disabled
     let frame_ms = 10.;
     // Leading trim
     let lead = trim_leading(&samples, frame_ms, sample_rate);
@@ -52,9 +56,17 @@ pub fn silence_trim(samples: Vec<f32>, threshold_db: f32, sample_rate: u32) -> V
 // ─── Simple echo/reverb (aecho equivalent) ───────────────────────────────────
 
 /// Single-tap delay echo (approximates ffmpeg aecho).
-pub fn echo(samples: &mut [f32], delay_ms: f32, decay: f32,
-            in_gain: f32, out_gain: f32, sample_rate: u32) {
-    if delay_ms <= 0. || decay <= 0. { return; }
+pub fn echo(
+    samples: &mut [f32],
+    delay_ms: f32,
+    decay: f32,
+    in_gain: f32,
+    out_gain: f32,
+    sample_rate: u32,
+) {
+    if delay_ms <= 0. || decay <= 0. {
+        return;
+    }
     let delay = (sample_rate as f32 * delay_ms / 1000.) as usize;
     let mut buf = vec![0f32; delay];
     let mut head = 0usize;
@@ -70,7 +82,9 @@ pub fn echo(samples: &mut [f32], delay_ms: f32, decay: f32,
 
 /// Vibrato via LFO-modulated delay line. Depth in fractional samples.
 pub fn vibrato(samples: &mut [f32], freq_hz: f32, depth: f32, sample_rate: u32) {
-    if freq_hz <= 0. || depth <= 0. { return; }
+    if freq_hz <= 0. || depth <= 0. {
+        return;
+    }
     let sr = sample_rate as f32;
     let max_delay = (depth * sr).ceil() as usize + 2;
     let mut buf = vec![0f32; max_delay];
@@ -81,8 +95,8 @@ pub fn vibrato(samples: &mut [f32], freq_hz: f32, depth: f32, sample_rate: u32) 
         let lfo = (2. * std::f32::consts::PI * freq_hz * i as f32 / sr).sin();
         let delay_f = depth * sr * (1. + lfo) / 2.; // 0..depth*sr
         let delay_i = delay_f as usize;
-        let frac    = delay_f - delay_i as f32;
-        let idx0 = (head + max_delay - delay_i    ) % max_delay;
+        let frac = delay_f - delay_i as f32;
+        let idx0 = (head + max_delay - delay_i) % max_delay;
         let idx1 = (head + max_delay - delay_i - 1) % max_delay;
         *s = buf[idx0] * (1. - frac) + buf[idx1] * frac;
         head = (head + 1) % max_delay;
@@ -93,15 +107,19 @@ pub fn vibrato(samples: &mut [f32], freq_hz: f32, depth: f32, sample_rate: u32) 
 mod tests {
     use super::*;
 
-    fn silence(secs: f32, sr: u32) -> Vec<f32> { vec![0f32; (sr as f32 * secs) as usize] }
+    fn silence(secs: f32, sr: u32) -> Vec<f32> {
+        vec![0f32; (sr as f32 * secs) as usize]
+    }
 
     fn tone(freq: f32, secs: f32, sr: u32) -> Vec<f32> {
         let n = (sr as f32 * secs) as usize;
-        (0..n).map(|i| (2. * std::f32::consts::PI * freq * i as f32 / sr as f32).sin() * 0.5).collect()
+        (0..n)
+            .map(|i| (2. * std::f32::consts::PI * freq * i as f32 / sr as f32).sin() * 0.5)
+            .collect()
     }
 
     fn rms(s: &[f32]) -> f32 {
-        (s.iter().map(|&x| x*x).sum::<f32>() / s.len() as f32).sqrt()
+        (s.iter().map(|&x| x * x).sum::<f32>() / s.len() as f32).sqrt()
     }
 
     #[test]
@@ -109,7 +127,11 @@ mod tests {
         let mut sig = tone(440., 0.5, 22050);
         fade_in(&mut sig, 0.04, 22050);
         let first_5ms = &sig[..((22050. * 0.005) as usize)];
-        assert!(rms(first_5ms) < 0.05, "fade-in not applied: rms={}", rms(first_5ms));
+        assert!(
+            rms(first_5ms) < 0.05,
+            "fade-in not applied: rms={}",
+            rms(first_5ms)
+        );
     }
 
     #[test]
@@ -119,7 +141,10 @@ mod tests {
         s.extend(silence(0.3, 22050));
         let trimmed = silence_trim(s, -40., 22050);
         // Trimmed should be shorter (leading + trailing silence gone)
-        assert!(trimmed.len() < (22050. * 1.1) as usize, "silence not trimmed");
+        assert!(
+            trimmed.len() < (22050. * 1.1) as usize,
+            "silence not trimmed"
+        );
         assert!(trimmed.len() > (22050. * 0.4) as usize, "too much trimmed");
     }
 
@@ -130,6 +155,9 @@ mod tests {
         vibrato(&mut sig, 6., 0.003, 22050);
         let rms_after = rms(&sig);
         // Level should not change drastically
-        assert!((rms_after - rms_before).abs() < 0.05, "vibrato changed level too much");
+        assert!(
+            (rms_after - rms_before).abs() < 0.05,
+            "vibrato changed level too much"
+        );
     }
 }
