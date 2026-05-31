@@ -258,12 +258,12 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   deHarshDb:               -2,
   deHarshBandwidthOctaves: 2,
 
-  // Dynamics
-  compressionRatio:       3,
+  // Dynamics — tighter compression to reduce crest factor gap
+  compressionRatio:       4,
   compressionAttackMs:    10,
   compressionReleaseMs:   80,
   compressionThresholdDb: -12,
-  compressionMakeupDb:    4,
+  compressionMakeupDb:    5,
 
   // Creative EQ
   warmthBoostDb: 0,
@@ -284,10 +284,10 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   reverbInputGain:  0.8,
   reverbOutputGain: 0.88,
 
-  // De-robotisation
+  // De-robotisation — tuned to close centroid and RMS gap
   breathinessDb: 0,
-  tiltLowDb:     8,
-  tiltHighDb:    -6,
+  tiltLowDb:     10,
+  tiltHighDb:    -8,
   presenceDb:    0,
   deEssDb:       4,
 
@@ -296,7 +296,7 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   vibratoDepth: 0.003,
 
   // Output normalisation
-  rmsTargetLufs: -11,
+  rmsTargetLufs: -8,
   limiterDb:     -1,
   silenceTrimDb: -40,
 

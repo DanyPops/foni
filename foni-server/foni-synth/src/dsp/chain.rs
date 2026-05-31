@@ -65,16 +65,16 @@ impl Default for SmoothingOptions {
             highpass_freq: 80.,
             de_box_freq: 900., de_box_db: 0., de_box_q: 0.9,
             de_harsh_freq: 3500., de_harsh_db: -2., de_harsh_q: 0.7,
-            compression_ratio: 3.,
+            compression_ratio: 4.,          // was 3 — reduce crest factor gap
             compression_attack_ms: 10.,
             compression_release_ms: 80.,
             compression_threshold_db: -12.,
-            compression_makeup_db: 4.,
+            compression_makeup_db: 5.,       // was 4 — compensate louder compression
             warmth_boost_db: 0., warmth_freq: 200.,
             presence_db: 0.,
             air_boost_db: 0., air_freq: 8000.,
-            tilt_low_db: 8.,
-            tilt_high_db: -6.,
+            tilt_low_db: 10.,               // was 8 — more low-freq body
+            tilt_high_db: -8.,              // was -6 — cut treble, reduce centroid
             de_ess_db: 4.,
             vibrato_freq: 6.,
             vibrato_depth: 0.003,
@@ -82,7 +82,7 @@ impl Default for SmoothingOptions {
             reverb_decay: 0.04,
             reverb_in_gain: 0.8,
             reverb_out_gain: 0.88,
-            rms_target_lufs: -11.,
+            rms_target_lufs: -8.,           // was -11 — studio is ~-13.5 dBFS
             limiter_db: -1.,
             silence_trim_db: -40.,
             normalize: true,

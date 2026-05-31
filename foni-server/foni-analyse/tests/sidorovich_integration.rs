@@ -26,7 +26,6 @@ fn synthesise_espeak(phrase: &str) -> Vec<u8> {
     let dir = std::env::temp_dir().join(format!("foni-sid-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("out.wav");
-    // Plain text (no SSML) — keeps WER test clean and avoids Whisper confusion
     Command::new("espeak-ng")
         .args(["-v", "ru", "-s", &ESPEAK_WPM.to_string(), "-p", "50", "-a", "200", "-w"])
         .arg(&out)
