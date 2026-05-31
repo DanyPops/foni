@@ -13,7 +13,7 @@
 /// Run: cargo test -p foni-analyse --test timeline_integration
 /// Requires: espeak-ng on PATH, ../../baseline/stalker/timeline/trader1a.json
 use foni_analyse::{
-    alignment::{format_alignment_table, TimelineFixture},
+    alignment::TimelineFixture,
     decode_wav,
     timeline::{merge_short_silences, pauses, segment, voiced_segments},
 };

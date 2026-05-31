@@ -17,11 +17,8 @@ const F_MIN: f32 = 80.0;
 const F_MAX: f32 = 7600.0;
 const FRAME_MS: f32 = 25.0;
 const HOP_MS: f32 = 10.0;
-/// No 10/ln10 scaling — our MFCC coefficients are not in the standard dB-normalized
-/// scale used in speech synthesis papers. We report raw RMSE of coefficient differences
-/// so the metric is consistent and comparable within this codebase.
-/// Typical values: < 2 = very close, 2–6 = similar, > 10 = very different.
-
+/// No 10/ln10 scaling — raw RMSE of coefficient differences, consistent within this codebase.
+/// Typical values: <2 very close, 2–6 similar, >10 very different.
 fn hz_to_mel(hz: f32) -> f32 {
     2595.0 * (1.0 + hz / 700.0).log10()
 }

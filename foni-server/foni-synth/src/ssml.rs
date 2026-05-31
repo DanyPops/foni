@@ -1,9 +1,5 @@
 /// Rule-based plain-text → SSML annotator for Russian espeak-ng.
-///
-/// Mirrors pipeline/prosody.ts break values exactly so Rust synthesis
-/// produces identical pause structure to the TypeScript path.
-/// Output is a full <speak>...</speak> document for `espeak-ng -m`.
-
+/// Break values mirror pipeline/prosody.ts — keep in sync when tuning pauses.
 const BREAK_COMMA_MS: u32 = 150;
 const BREAK_SEMICOLON_MS: u32 = 220;
 const BREAK_COLON_MS: u32 = 200;

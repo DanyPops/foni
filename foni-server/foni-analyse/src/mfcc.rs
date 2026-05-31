@@ -67,7 +67,7 @@ pub fn compute_mfcc(samples: &[f32], sample_rate: u32) -> Vec<f32> {
         .collect();
     let filterbank = mel_filterbank(frame_size, sample_rate);
 
-    let mut sum = vec![0.0f64; N_MFCCS];
+    let mut sum = [0.0f64; N_MFCCS];
     let mut frame_count = 0usize;
 
     let mut i = 0;
@@ -88,7 +88,7 @@ pub fn compute_mfcc(samples: &[f32], sample_rate: u32) -> Vec<f32> {
             })
             .collect();
 
-        // DCT-II: N_MFCCS coefficients
+        #[allow(clippy::needless_range_loop)]
         for n in 0..N_MFCCS {
             let c: f32 = log_energies
                 .iter()

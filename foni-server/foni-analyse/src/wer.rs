@@ -1,4 +1,5 @@
 use std::io::Write;
+
 /// Word Error Rate via Whisper CLI transcription.
 ///
 /// WER = (S + D + I) / N  where S=substitutions, D=deletions, I=insertions, N=ref words.
@@ -99,13 +100,15 @@ pub fn edit_distance_words(reference: &str, hypothesis: &str) -> (u32, u32) {
         return (m as u32, 0);
     }
 
-    // DP table
     let mut dp = vec![vec![0u32; m + 1]; n + 1];
-    for i in 0..=n {
-        dp[i][0] = i as u32;
-    }
-    for j in 0..=m {
-        dp[0][j] = j as u32;
+    #[allow(clippy::needless_range_loop)]
+    {
+        for i in 0..=n {
+            dp[i][0] = i as u32;
+        }
+        for j in 0..=m {
+            dp[0][j] = j as u32;
+        }
     }
     for i in 1..=n {
         for j in 1..=m {

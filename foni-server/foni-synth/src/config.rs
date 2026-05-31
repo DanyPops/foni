@@ -10,8 +10,6 @@ use serde::Deserialize;
 
 use crate::state::RvcParams;
 
-// ─── YAML schema ──────────────────────────────────────────────────────────────
-
 #[derive(Debug, Deserialize, Default)]
 struct YamlConfig {
     model: Option<String>,
@@ -29,8 +27,6 @@ struct YamlParams {
     rms_mix_rate: Option<f32>,
     protect: Option<f32>,
 }
-
-// ─── Resolved config ──────────────────────────────────────────────────────────
 
 pub struct ServerConfig {
     pub models_dir: PathBuf,
@@ -102,8 +98,6 @@ impl ServerConfig {
         PathBuf::from("/app/rvc_models")
     }
 }
-
-// ─── YAML loading ─────────────────────────────────────────────────────────────
 
 fn load_yaml() -> YamlConfig {
     for candidate in yaml_search_paths() {

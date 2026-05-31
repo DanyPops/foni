@@ -5,7 +5,7 @@
 ///   gap scorer, MCD, F0 contour, energy contour, WER.
 ///
 /// cargo test -p foni-analyse --test sidorovich_integration -- --nocapture
-use foni_analyse::{analyse, compare, compute_wer, decode_wav, edit_distance_words};
+use foni_analyse::{analyse, compare, compute_wer, decode_wav};
 use std::{path::Path, process::Command};
 
 const PHRASE: &str = "Подойди-ка, надо тебе ситуацию прояснить.";

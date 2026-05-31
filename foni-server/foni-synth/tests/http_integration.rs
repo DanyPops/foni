@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Minimal 16-bit mono WAV with silence.
+#[allow(dead_code)]
 fn silence_wav(sample_rate: u32, duration_ms: u32) -> Vec<u8> {
     let n = (sample_rate as f32 * duration_ms as f32 / 1000.0) as usize;
     foni_synth::wav::encode_wav(&vec![0.0f32; n], sample_rate).unwrap()

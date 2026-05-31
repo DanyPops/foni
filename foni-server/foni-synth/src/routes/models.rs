@@ -7,26 +7,24 @@ use serde::Serialize;
 
 use crate::state::AppState;
 
-#[derive(Serialize)]
-pub struct ModelInfo {
-    pub name: String,
-    /// True when onnx/generator.onnx exists alongside the .pth checkpoint.
-    pub onnx_ready: bool,
-}
-
+/// Wire-compatible with the TS client which expects `{ models: string[] }`.
+/// `onnx_ready` is an additive field — old clients ignore it.
 #[derive(Serialize)]
 pub struct ModelsResponse {
-    pub models: Vec<ModelInfo>,
+    /// All model names that have a `.pth` checkpoint.
+    pub models: Vec<String>,
+    /// Subset of `models` with `onnx/generator.onnx` present (ready for `/convert`).
+    pub onnx_ready: Vec<String>,
 }
 
 pub async fn list(State(state): State<AppState>) -> Json<ModelsResponse> {
     let dir = &state.0.models_dir;
-    let models = std::fs::read_dir(dir)
+
+    let names: Vec<String> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .filter(|e| e.path().is_dir())
-        // Only directories that contain a .pth checkpoint (skip pretrained/, etc.)
         .filter(|e| {
             e.path()
                 .read_dir()
@@ -39,20 +37,25 @@ pub async fn list(State(state): State<AppState>) -> Json<ModelsResponse> {
                 .unwrap_or(false)
         })
         .filter_map(|e| e.file_name().into_string().ok())
-        .map(|name| {
-            let onnx_ready = dir.join(&name).join("onnx").join("generator.onnx").exists();
-            ModelInfo { name, onnx_ready }
-        })
         .collect();
 
-    Json(ModelsResponse { models })
+    let onnx_ready = names
+        .iter()
+        .filter(|n| dir.join(n).join("onnx").join("generator.onnx").exists())
+        .cloned()
+        .collect();
+
+    Json(ModelsResponse {
+        models: names,
+        onnx_ready,
+    })
 }
 
 /// Select the active model by name.
 ///
 /// ONNX sessions are loaded on-demand per `/convert` request — no pre-loading
-/// needed here. This endpoint simply records the selection in shared state so
-/// that `/convert` and `/params` know which model directory to use.
+/// needed here. This endpoint records the selection so `/convert` knows which
+/// model directory to use.
 pub async fn load(
     State(state): State<AppState>,
     Path(name): Path<String>,

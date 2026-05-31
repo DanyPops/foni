@@ -52,7 +52,7 @@ fn rmvpe_onnx_loads() {
     }
 
     use ort::session::Session;
-    let mut sess = Session::builder()
+    let sess = Session::builder()
         .expect("ort builder")
         .commit_from_file(&rmvpe_path)
         .expect("load rmvpe.onnx");
