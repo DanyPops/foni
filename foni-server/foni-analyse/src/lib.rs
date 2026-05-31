@@ -6,14 +6,18 @@ pub mod mcd;
 pub mod mfcc;
 pub mod pitch;
 pub mod report;
+pub mod speaker_sim;
 pub mod spectral;
 pub mod temporal;
 pub mod timeline;
 pub mod voice;
 pub mod wav;
+pub mod wer;
 
 pub use alignment::{align, format_alignment_table, AlignedPair, TimelineComparison, TimelineFixture};
 pub use contour::compute_contour_correlations;
+pub use speaker_sim::{embed as speaker_embed, speaker_similarity, cosine_similarity, SpeakerEmbedding};
+pub use wer::{compute_wer, edit_distance_words, WerResult};
 pub use loudness::energy_envelope;
 pub use mcd::compute_mcd;
 pub use pitch::compute_with_contour;
@@ -64,13 +68,15 @@ pub struct ComparisonResult {
 
 /// Compare a synthesis against a reference recording.
 /// Both must be analysed with `analyse()` first.
+/// `syn_wav_bytes` is the raw WAV for Whisper WER (pass &[] to skip WER).
 pub fn compare(
-    phrase:    &str,
-    synthesis: &AnalysisResult,
-    reference: &AnalysisResult,
-    ref_samples: &[f32],
-    syn_samples: &[f32],
-    sample_rate: u32,
+    phrase:        &str,
+    synthesis:     &AnalysisResult,
+    reference:     &AnalysisResult,
+    ref_samples:   &[f32],
+    syn_samples:   &[f32],
+    sample_rate:   u32,
+    syn_wav_bytes: &[u8],
 ) -> ComparisonResult {
     let tensor = gap::TargetTensor::from_analysis(reference, phrase);
     let gap    = gap::compute_gap(phrase, synthesis, &tensor);
@@ -79,7 +85,16 @@ pub fn compare(
         &reference.f0_contour, &reference.energy_envelope,
         &synthesis.f0_contour, &synthesis.energy_envelope,
     );
-    ComparisonResult { gap, mcd_db, f0_corr, energy_corr, wer_pct: None, speaker_sim: None }
+    let wer_pct = if syn_wav_bytes.is_empty() { None } else {
+        wer::compute_wer(syn_wav_bytes, phrase, "ru").map(|r| r.wer_pct)
+    };
+    let speaker_sim = {
+        let ref_embed = speaker_sim::embed(ref_samples,  sample_rate, "reference");
+        let syn_embed = speaker_sim::embed(syn_samples,  sample_rate, "synthesis");
+        Some(speaker_sim::speaker_similarity(&ref_embed, &syn_embed))
+    };
+
+    ComparisonResult { gap, mcd_db, f0_corr, energy_corr, wer_pct, speaker_sim }
 }
 
 /// Run the full analysis pipeline on raw f32 samples.

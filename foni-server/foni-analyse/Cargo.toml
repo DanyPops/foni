@@ -11,8 +11,10 @@ ebur128  = { workspace = true }
 pyin     = { workspace = true }
 ndarray  = { workspace = true }
 serde    = { workspace = true }
+tempfile  = { workspace = true }
 thiserror = { workspace = true }
 serde_json.workspace = true
 
 [dev-dependencies]
 # no extra deps — unit tests use synthetic signals only
+tempfile = "3"
