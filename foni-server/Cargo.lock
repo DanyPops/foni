@@ -336,9 +336,11 @@ version = "0.1.0"
 dependencies = [
  "ebur128",
  "hound",
+ "ndarray 0.15.6",
  "pyin",
  "rustfft",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 

@@ -13,8 +13,8 @@ import { describe, it, beforeAll } from "vitest";
 
 import { EspeakBackend }      from "./backends/espeak.ts";
 import { RVCProcessor, SmoothingProcessor } from "./pipeline/processors.ts";
-import { validateVoiceBuffer } from "./pipeline/audio-test-utils.ts";
-import type { ValidationResult } from "./pipeline/audio-test-utils.ts";
+import { validateVoiceBuffer } from "./pipeline/analysis/audio-test-utils.ts";
+import type { ValidationResult } from "./pipeline/analysis/audio-test-utils.ts";
 import { CONFIGS }            from "./tuning.e2e.test.ts";
 
 const RVC_URL     = process.env.RVC_URL ?? "http://127.0.0.1:5050";

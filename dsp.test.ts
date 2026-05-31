@@ -21,7 +21,7 @@ import { SystemPlayer }              from "./pipeline/player.ts";
 import {
   generateSineWav, generateNoiseWav, generateHarmonicWav, parseWav,
   rms, peak, goertzel, dbChange, bandEnergy, spectralCentroid,
-} from "./pipeline/audio-test-utils.ts";
+} from "./pipeline/analysis/audio-test-utils.ts";
 
 const PLAY = process.env.FONI_PLAY === "1";
 const RATE = 22050;

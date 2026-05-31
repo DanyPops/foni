@@ -7,10 +7,10 @@ import { readFileSync, mkdtempSync, existsSync } from "node:fs";
 import { spawnSync }                             from "node:child_process";
 import { join }                                  from "node:path";
 import { tmpdir }                                from "node:os";
-import { extractF0, f0ContourStats }             from "../pipeline/voice-quality.ts";
+import { extractF0, f0ContourStats }             from "../pipeline/analysis/voice-quality.ts";
 import { SmoothingProcessor, RVCProcessor, DEFAULT_SMOOTHING } from "../pipeline/processors.ts";
 import { DEFAULT_CONFIG }                                       from "../core/config.ts";
-import { parseWav }                              from "../pipeline/audio-utils.ts";
+import { parseWav }                              from "../pipeline/analysis/audio-utils.ts";
 
 const PHRASE      = "Ну что брат как дела";
 const SAMPLE_RATE = 22050;

@@ -9,7 +9,7 @@ import type { TTSBackend, SynthOptions } from "../pipeline/interfaces.ts";
  * The actual rate passed to espeak is `BASE_WPM * opts.speed`.
  * Increasing this makes the baseline voice faster; decreasing slows it down.
  */
-export const ESPEAK_BASE_WPM = 160;
+export const ESPEAK_BASE_WPM = 130;
 
 export class EspeakBackend implements TTSBackend {
   readonly name = "espeak";

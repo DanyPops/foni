@@ -1,7 +1,7 @@
 import { spawnSync }   from "node:child_process";
 import type { AudioProcessor } from "./interfaces.ts";
 import { getLogger }   from "../core/logger.ts";
-import { rms, peak, parseWav } from "./audio-utils.ts";
+import { rms, peak, parseWav } from "./analysis/audio-utils.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -312,7 +312,7 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
   vibratoDepth: 0.003,
 
   // Output normalisation
-  rmsTargetLufs: -14,
+  rmsTargetLufs: -11,
   limiterDb:     -1,
   silenceTrimDb: -40,
 

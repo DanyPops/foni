@@ -4,21 +4,21 @@ exports[`gap summary snapshot 1`] = `
 "══════════════════════════════════════════════════════════════════
   BASELINE GAP SUMMARY
 ──────────────────────────────────────────────────────────────────
-  "Давай, шевелись."  →  31.8%
-  "Ну что, брат, как дела?"  →  27%
-  "Слушай, тут такое дело."  →  29.3%
+  "Давай, шевелись."  →  25.6%
+  "Ну что, брат, как дела?"  →  35.1%
+  "Слушай, тут такое дело."  →  27.6%
 ──────────────────────────────────────────────────────────────────
   Mean gap: 29.4%
 
   Worst dimensions:
-    RMS level          █████████░░░░░░░░░░░ 43.5%
-    Spectral tilt      ████████░░░░░░░░░░░░ 37.7%
-    Crest factor       ████████░░░░░░░░░░░░ 37.6%
+    Spectral tilt      ███████████░░░░░░░░░ 53%
+    RMS level          ████████░░░░░░░░░░░░ 37.9%
     Noise floor        ███████░░░░░░░░░░░░░ 34.8%
-    Spectral slope     ██████░░░░░░░░░░░░░░ 27.5%
-    Voiced ratio       █████░░░░░░░░░░░░░░░ 25.5%
-    Presence ratio     ███░░░░░░░░░░░░░░░░░ 16.9%
-    F0 stdDev          ██░░░░░░░░░░░░░░░░░░ 11.3%
+    Crest factor       ██████░░░░░░░░░░░░░░ 32%
+    Voiced ratio       ██████░░░░░░░░░░░░░░ 29%
+    Spectral slope     █████░░░░░░░░░░░░░░░ 27.3%
+    Presence ratio     ██░░░░░░░░░░░░░░░░░░ 10.8%
+    F0 stdDev          ██░░░░░░░░░░░░░░░░░░ 10.6%
 ══════════════════════════════════════════════════════════════════"
 `;
 
@@ -26,46 +26,46 @@ exports[`gap table per phrase > snapshot — "Давай, шевелись." 1`]
 "Phrase: "Давай, шевелись."
 Metric             Target         Actual         Gap%   Verdict
 ──────────────────────────────────────────────────────────────────
-RMS level          -12.63 dBFS    -16.95 dBFS    43.1%  🟠 far
-Crest factor       12.21 dB       15.95 dB       37.3%  🟠 far
-Spectral slope     -7.26 dB/oct   -13.37 dB/oct  61.2%  🔴 very far
-Spectral tilt      39.94 dB       53.65 dB       34.3%  🟡 near
-Noise floor        0.03           0.00           34.9%  🟡 near
-Presence ratio     0.06           0.00             19%  🟡 near
-Voiced ratio       0.60           0.71           22.7%  🟡 near
-F0 stdDev          151.76 Hz      154.34 Hz       1.7%  ✅ close
+RMS level          -12.63 dBFS    -15.96 dBFS    33.3%  🟡 near
+Crest factor       12.21 dB       14.96 dB       27.4%  🟡 near
+Spectral slope     -7.26 dB/oct   -9.61 dB/oct   23.6%  🟡 near
+Spectral tilt      39.94 dB       45.34 dB       13.5%  ✅ close
+Noise floor        0.03           0.00           34.6%  🟡 near
+Presence ratio     0.06           0.01           17.3%  🟡 near
+Voiced ratio       0.60           0.79           38.6%  🟠 far
+F0 stdDev          151.76 Hz      126.88 Hz      16.6%  🟡 near
 ──────────────────────────────────────────────────────────────────
-Mean gap: 31.8%"
+Mean gap: 25.6%"
 `;
 
 exports[`gap table per phrase > snapshot — "Ну что, брат, как дела?" 1`] = `
 "Phrase: "Ну что, брат, как дела?"
 Metric             Target         Actual         Gap%   Verdict
 ──────────────────────────────────────────────────────────────────
-RMS level          -12.63 dBFS    -16.72 dBFS    40.9%  🟠 far
-Crest factor       12.21 dB       15.72 dB         35%  🟠 far
-Spectral slope     -7.26 dB/oct   -9.36 dB/oct   21.1%  🟡 near
-Spectral tilt      39.94 dB       30.10 dB       24.6%  🟡 near
-Noise floor        0.03           0.00           34.8%  🟡 near
-Presence ratio     0.06           0.01           16.6%  🟡 near
-Voiced ratio       0.60           0.73           26.1%  🟡 near
-F0 stdDev          151.76 Hz      126.71 Hz      16.7%  🟡 near
+RMS level          -12.63 dBFS    -17.70 dBFS    50.7%  🟠 far
+Crest factor       12.21 dB       16.70 dB       44.8%  🟠 far
+Spectral slope     -7.26 dB/oct   -3.55 dB/oct   37.1%  🟠 far
+Spectral tilt      39.94 dB       8.04 dB        79.8%  🔴 very far
+Noise floor        0.03           0.00           34.9%  🟡 near
+Presence ratio     0.06           0.10           12.3%  ✅ close
+Voiced ratio       0.60           0.49           20.5%  🟡 near
+F0 stdDev          151.76 Hz      153.00 Hz       0.8%  ✅ close
 ──────────────────────────────────────────────────────────────────
-Mean gap: 27%"
+Mean gap: 35.1%"
 `;
 
 exports[`gap table per phrase > snapshot — "Слушай, тут такое дело." 1`] = `
 "Phrase: "Слушай, тут такое дело."
 Metric             Target         Actual         Gap%   Verdict
 ──────────────────────────────────────────────────────────────────
-RMS level          -12.63 dBFS    -17.28 dBFS    46.4%  🟠 far
-Crest factor       12.21 dB       16.28 dB       40.6%  🟠 far
-Spectral slope     -7.26 dB/oct   -7.29 dB/oct    0.3%  ✅ close
-Spectral tilt      39.94 dB       18.21 dB       54.3%  🟠 far
+RMS level          -12.63 dBFS    -15.61 dBFS    29.8%  🟡 near
+Crest factor       12.21 dB       14.61 dB       23.9%  🟡 near
+Spectral slope     -7.26 dB/oct   -5.14 dB/oct   21.2%  🟡 near
+Spectral tilt      39.94 dB       13.65 dB       65.7%  🔴 very far
 Noise floor        0.03           0.00           34.8%  🟡 near
-Presence ratio     0.06           0.02           15.1%  🟡 near
-Voiced ratio       0.60           0.73           27.7%  🟡 near
-F0 stdDev          151.76 Hz      128.38 Hz      15.6%  🟡 near
+Presence ratio     0.06           0.05            2.7%  ✅ close
+Voiced ratio       0.60           0.73           27.9%  🟡 near
+F0 stdDev          151.76 Hz      130.10 Hz      14.4%  ✅ close
 ──────────────────────────────────────────────────────────────────
-Mean gap: 29.3%"
+Mean gap: 27.6%"
 `;

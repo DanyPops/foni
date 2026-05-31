@@ -1,3 +1,4 @@
+pub mod alignment;
 pub mod gap;
 pub mod loudness;
 pub mod mfcc;
@@ -5,9 +6,11 @@ pub mod pitch;
 pub mod report;
 pub mod spectral;
 pub mod temporal;
+pub mod timeline;
 pub mod voice;
 pub mod wav;
 
+pub use alignment::{align, format_alignment_table, AlignedPair, TimelineComparison, TimelineFixture};
 pub use gap::{compute_gap, GapResult, GapRow, TargetTensor, Verdict};
 pub use loudness::LoudnessMetrics;
 pub use mfcc::mfcc_distance;
@@ -15,6 +18,7 @@ pub use pitch::PitchMetrics;
 pub use report::{format_gap_summary, format_gap_table};
 pub use spectral::SpectralMetrics;
 pub use temporal::TemporalMetrics;
+pub use timeline::{pauses, segment, voiced_segments, Segment, SegmentKind, Timeline};
 pub use voice::VoiceMetrics;
 pub use wav::decode_wav;
 

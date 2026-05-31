@@ -19,7 +19,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { parseWav, rms } from "./audio-utils.ts";
+import { parseWav, rms } from "./analysis/audio-utils.ts";
 import { getLogger }     from "../core/logger.ts";
 import type { AudioProcessor } from "./interfaces.ts";
 
