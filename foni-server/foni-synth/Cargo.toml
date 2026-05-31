@@ -19,5 +19,7 @@ base64       = { workspace = true }
 thiserror    = { workspace = true }
 tracing      = { workspace = true }
 tracing-subscriber = { workspace = true }
-
 foni-analyse = { path = "../foni-analyse" }
+
+[dev-dependencies]
+reqwest      = { workspace = true }

@@ -458,8 +458,9 @@ export class SmoothingProcessor implements AudioProcessor {
         signal:  AbortSignal.timeout(30_000),
       });
       if (!resp.ok) {
-        log.warn("SmoothingProcessor", "foni-synth /process failed — returning RVC output",
-          { status: resp.status });
+        const msg = `foni-synth /process failed (HTTP ${resp.status})`;
+        if (process.env.FONI_REQUIRE_DSP === "1") throw new Error(msg);
+        log.warn("SmoothingProcessor", `${msg} — returning RVC output`);
         return rvcOut;
       }
       const { audio_data } = await resp.json() as { audio_data: string };
@@ -467,8 +468,9 @@ export class SmoothingProcessor implements AudioProcessor {
       log.debug("SmoothingProcessor", "post-DSP", { len: final.length });
       return final;
     } catch (e: any) {
-      log.warn("SmoothingProcessor", "/process unreachable — returning RVC output",
-        { error: e?.message });
+      const msg = `/process unreachable: ${e?.message}`;
+      if (process.env.FONI_REQUIRE_DSP === "1") throw new Error(msg);
+      log.warn("SmoothingProcessor", `${msg} — returning RVC output`);
       return rvcOut;
     }
   }

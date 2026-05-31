@@ -55,8 +55,9 @@ async function synthesiseBreath(
     const { audio_data } = await resp.json() as { audio_data: string };
     return Buffer.from(audio_data, "base64");
   } catch (e: any) {
-    getLogger().warn("BreathInjector", "foni-synth /breath unreachable — using silence",
-      { error: e?.message });
+    const msg = `foni-synth /breath unreachable: ${e?.message}`;
+    if (process.env.FONI_REQUIRE_DSP === "1") throw new Error(msg);
+    getLogger().warn("BreathInjector", `${msg} — using silence`);
     // Silence fallback: minimal valid WAV
     const n   = Math.floor(sampleRate * durationMs / 1000);
     const buf = Buffer.alloc(44 + n * 2);
