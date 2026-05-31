@@ -68,6 +68,13 @@ pub async fn load(
     let onnx_ready = model_path.join("onnx").join("generator.onnx").exists();
     *state.0.current_model.write().await = Some(name.clone());
 
+    if onnx_ready {
+        // Pre-warm sessions so the first /convert is instant.
+        if let Err(e) = crate::sessions::ensure(&state, &name).await {
+            tracing::warn!("session pre-load failed: {e}");
+        }
+    }
+
     Ok(Json(serde_json::json!({
         "model":      name,
         "onnx_ready": onnx_ready,

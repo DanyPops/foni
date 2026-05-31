@@ -48,6 +48,8 @@ ebur128      = "0.1"
 pyin         = "1.2"
 ndarray      = "0.15"
 rand         = "0.8"
+lru          = "0.12"
+sha2         = "0.10"
 
 # ONNX runtime — RVC model inference
 ort          = { version = "2.0.0-rc.12", features = ["copy-dylibs"] }

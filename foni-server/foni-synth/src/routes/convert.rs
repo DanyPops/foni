@@ -8,18 +8,18 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::{state::AppState, wav::encode_wav};
 use foni_analyse::decode_wav;
 
 // HuBERT stride at 16 kHz. Repeat-by-2 brings 50 Hz → 100 Hz to match the generator.
-const CONTENTVEC_HOP: usize = 320;
-const GENERATOR_SR: u32 = 40_000;
+pub(crate) const CONTENTVEC_HOP: usize = 320;
+pub(crate) const GENERATOR_SR: u32 = 40_000;
 // Mel-scale F0 bounds from the bandit training config.
-const F0_MIN: f32 = 50.0;
-const F0_MAX: f32 = 1100.0;
-const NOISE_CHANNELS: usize = 192;
+pub(crate) const F0_MIN: f32 = 50.0;
+pub(crate) const F0_MAX: f32 = 1100.0;
+pub(crate) const NOISE_CHANNELS: usize = 192;
 
 #[derive(Deserialize)]
 pub struct ConvertRequest {
@@ -31,39 +31,14 @@ pub struct ConvertRequest {
     pub f0_up_key: i32,
 }
 
-fn find_pretrained(state: &AppState, filename: &str) -> Option<PathBuf> {
-    // models_dir is e.g. rvc/models — pretrained lives alongside the named models
-    let p = state.0.models_dir.join("pretrained").join(filename);
-    if p.exists() {
-        return Some(p);
-    }
-    // Workspace-relative fallback for dev runs from arbitrary CWD
-    for base in &["../../rvc/models/pretrained", "../rvc/models/pretrained"] {
-        let q = PathBuf::from(base).join(filename);
-        if q.exists() {
-            return Some(q);
-        }
-    }
-    None
-}
-
-fn generator_path(state: &AppState, model_name: &str) -> PathBuf {
-    state
-        .0
-        .models_dir
-        .join(model_name)
-        .join("onnx")
-        .join("generator.onnx")
-}
-
-fn load_session(path: &Path) -> Result<ort::session::Session, String> {
+pub(crate) fn load_session(path: &Path) -> Result<ort::session::Session, String> {
     ort::session::Session::builder()
         .map_err(|e| e.to_string())?
         .commit_from_file(path)
         .map_err(|e| e.to_string())
 }
 
-fn run_contentvec(
+pub(crate) fn run_contentvec(
     audio_16k: &[f32],
     session: &mut ort::session::Session,
 ) -> Result<Vec<f32>, String> {
@@ -107,7 +82,7 @@ const RMVPE_CENTS_OFFSET: f32 = 1_997.379_4;
 const RMVPE_CENTS_STEP: f32 = 20.0;
 
 /// Center-padded mel spectrogram → `[1, 128, T_frames]` flat row-major buffer.
-fn audio_to_mel(audio: &[f32]) -> (Vec<f32>, usize) {
+pub(crate) fn audio_to_mel(audio: &[f32]) -> (Vec<f32>, usize) {
     use rustfft::{num_complex::Complex, FftPlanner};
     use std::f32::consts::PI;
 
@@ -191,7 +166,7 @@ fn audio_to_mel(audio: &[f32]) -> (Vec<f32>, usize) {
 }
 
 /// RMVPE local-average-cents decoder: salience `[T, 360]` → F0 Hz per frame.
-fn salience_to_hz(salience: &[f32], n_frames: usize, threshold: f32) -> Vec<f32> {
+pub(crate) fn salience_to_hz(salience: &[f32], n_frames: usize, threshold: f32) -> Vec<f32> {
     // cents_mapping with 4-element padding on each side (as in Python)
     let cents: Vec<f32> = (0..RMVPE_BINS + 8)
         .map(|i| {
@@ -230,7 +205,7 @@ fn salience_to_hz(salience: &[f32], n_frames: usize, threshold: f32) -> Vec<f32>
         .collect()
 }
 
-fn run_rmvpe(
+pub(crate) fn run_rmvpe(
     audio_16k: &[f32],
     t_phone: usize,
     f0_up_key: i32,
@@ -299,9 +274,9 @@ fn run_rmvpe(
 // The generator was exported with T=200 as the trace size. The TorchScript exporter
 // bakes the attention K-length from the trace, so only T=200 works without shape errors.
 // Process in 200-frame chunks and concatenate audio output.
-const GENERATOR_CHUNK: usize = 200;
+pub(crate) const GENERATOR_CHUNK: usize = 200;
 
-fn run_generator_chunk(
+pub(crate) fn run_generator_chunk(
     phone: &[f32],
     pitch: &[i64],
     pitchf: &[f32],
@@ -345,7 +320,7 @@ fn run_generator_chunk(
     Ok(data.to_vec())
 }
 
-fn run_generator(
+pub(crate) fn run_generator(
     phone: Vec<f32>,
     t_phone: usize,
     pitch: Vec<i64>,
@@ -401,7 +376,7 @@ fn run_generator(
     Ok(audio_out)
 }
 
-fn resample_to_16k(samples: &[f32], src_sr: u32) -> Vec<f32> {
+pub(crate) fn resample_to_16k(samples: &[f32], src_sr: u32) -> Vec<f32> {
     if src_sr == 16_000 {
         return samples.to_vec();
     }
@@ -429,25 +404,10 @@ pub async fn convert(
             .unwrap_or_else(|| guard.as_deref().unwrap_or("bandit").to_string())
     };
 
-    let cv_path = find_pretrained(&state, "contentvec-768-l12.onnx").ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "ContentVec ONNX not found. Run: python3 rvc/export_contentvec_onnx.py".to_string(),
-    ))?;
-    let rmvpe_path = find_pretrained(&state, "rmvpe.onnx").ok_or((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "RMVPE ONNX not found. Download from HuggingFace lj1995/VoiceConversionWebUI".to_string(),
-    ))?;
-    let gen_path = generator_path(&state, &model_name);
-    if !gen_path.exists() {
-        return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            format!(
-                "Generator ONNX not found at {}. Run: python3 rvc/export_onnx.py {}",
-                gen_path.display(),
-                model_name
-            ),
-        ));
-    }
+    // Ensure sessions are loaded for this model (no-op if already in pool).
+    crate::sessions::ensure(&state, &model_name)
+        .await
+        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e))?;
 
     let bytes = B64
         .decode(&req.audio_data)
@@ -462,6 +422,10 @@ pub async fn convert(
         return Err((StatusCode::BAD_REQUEST, "Audio too short".to_string()));
     }
 
+    // Hold the session pool lock for the duration of inference.
+    let mut pool_guard = state.0.sessions.lock().await;
+    let pool = pool_guard.as_mut().expect("sessions loaded above");
+
     macro_rules! stage {
         ($label:expr, $expr:expr) => {
             $expr.map_err(|e: String| {
@@ -473,18 +437,24 @@ pub async fn convert(
         };
     }
 
-    let mut cv_sess = stage!("ContentVec load", load_session(&cv_path));
-    let mut rmvpe_sess = stage!("RMVPE load", load_session(&rmvpe_path));
-    let mut gen_sess = stage!("Generator load", load_session(&gen_path));
-
-    let phone = stage!("ContentVec", run_contentvec(&audio_16k, &mut cv_sess));
+    let phone = stage!(
+        "ContentVec",
+        run_contentvec(&audio_16k, &mut pool.contentvec)
+    );
     let (pitch, pitchf) = stage!(
         "RMVPE",
-        run_rmvpe(&audio_16k, t_phone, req.f0_up_key, &mut rmvpe_sess)
+        run_rmvpe(&audio_16k, t_phone, req.f0_up_key, &mut pool.rmvpe)
     );
     let audio_out = stage!(
         "Generator",
-        run_generator(phone, t_phone, pitch, pitchf, req.speaker_id, &mut gen_sess)
+        run_generator(
+            phone,
+            t_phone,
+            pitch,
+            pitchf,
+            req.speaker_id,
+            &mut pool.generator
+        )
     );
 
     let wav_bytes = encode_wav(&audio_out, GENERATOR_SR).map_err(|e| {
