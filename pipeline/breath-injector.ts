@@ -18,7 +18,7 @@
  *   - KTH 2020: breathing events at long-phrase / clause-initial positions
  */
 
-import { parseWav, rms } from "./analysis/audio-utils.ts";
+import { parseWav, rms } from "./wav-utils.ts";
 import { getLogger }     from "../core/logger.ts";
 import type { AudioProcessor } from "./interfaces.ts";
 

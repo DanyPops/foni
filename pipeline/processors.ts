@@ -1,6 +1,6 @@
 import type { AudioProcessor } from "./interfaces.ts";
 import { getLogger }   from "../core/logger.ts";
-import { rms, peak, parseWav } from "./analysis/audio-utils.ts";
+import { rms, peak, parseWav } from "./wav-utils.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
