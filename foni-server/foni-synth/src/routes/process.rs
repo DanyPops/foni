@@ -34,7 +34,7 @@ pub struct WireOpts {
 }
 
 impl WireOpts {
-    fn into_smoothing(self) -> (dsp::SmoothingOptions, f32) {
+    pub(crate) fn into_smoothing(self) -> (dsp::SmoothingOptions, f32) {
         let mut o = dsp::SmoothingOptions::default();
         if let Some(v) = self.rms_target_lufs {
             o.rms_target_lufs = v;

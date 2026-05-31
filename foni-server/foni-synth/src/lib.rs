@@ -2,6 +2,7 @@
 pub mod config;
 pub mod dsp;
 pub mod routes;
+pub mod sessions;
 pub mod ssml;
 pub mod state;
 pub mod wav;
@@ -30,6 +31,7 @@ fn build_router_from_state(state: state::AppState) -> Router {
             get(routes::params::get_params).post(routes::params::set_params),
         )
         .route("/convert", post(routes::convert::convert))
+        .route("/synthesize", post(routes::synthesize::synthesize))
         .route("/analyse", post(routes::analyse::analyse))
         .route("/process", post(routes::process::process))
         .route("/breath", post(routes::breath::breath))
