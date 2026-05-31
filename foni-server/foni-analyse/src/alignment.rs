@@ -68,7 +68,6 @@ pub fn align(
 ) -> TimelineComparison {
     let mut pairs: Vec<AlignedPair> = Vec::new();
 
-    // ── Word pairs ────────────────────────────────────────────────────────────
     for (i, ref_word) in fixture.words.iter().enumerate() {
         let ref_dur = ref_word.end_s - ref_word.start_s;
         if let Some(&(ss, se, srms)) = syn_voiced.get(i) {
@@ -93,7 +92,6 @@ pub fn align(
         }
     }
 
-    // ── Pause pairs ───────────────────────────────────────────────────────────
     for (i, ref_pause) in fixture.pauses.iter().enumerate() {
         let ref_dur = ref_pause.duration_s;
         if let Some(&(ss, se, srms)) = syn_pauses.get(i) {
@@ -130,7 +128,6 @@ pub fn align(
         }
     }
 
-    // ── Summary ───────────────────────────────────────────────────────────────
     let mean_duration_ratio = if pairs.is_empty() {
         1.0
     } else {

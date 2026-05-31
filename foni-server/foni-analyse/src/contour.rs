@@ -1,8 +1,5 @@
-/// F0 and energy envelope contour correlation via DTW + Pearson.
-///
-/// Answers: "does the pitch/loudness shape match over time?"
-/// Aggregate F0 stddev misses flat-robotic synthesis that has the right mean.
-/// Contour correlation catches it: a perfect sine has stddev but flat contour.
+//! F0 and energy contour correlation via DTW + Pearson.
+//! Catches flat-robotic synthesis that has the right F0 mean but wrong shape.
 
 /// Naive O(n²) DTW distance between two sequences.
 /// Bounded to max 1000 frames each (10s of speech at 10ms hop) — fast enough.

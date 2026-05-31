@@ -1,8 +1,6 @@
 use crate::AnalysisResult;
 use serde::{Deserialize, Serialize};
 
-// ─── Target tensor ────────────────────────────────────────────────────────────
-
 /// Desired-state acoustic fingerprint — loaded from baseline/target.json
 /// or built from a single reference WAV via TargetTensor::from_analysis().
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,8 +64,6 @@ impl TargetTensor {
     }
 }
 
-// ─── Gap types ────────────────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, Serialize)]
 pub enum Verdict {
     #[serde(rename = "✅ close")]
@@ -118,8 +114,6 @@ pub struct GapResult {
     pub rows: Vec<GapRow>,
     pub mean_gap_pct: f32,
 }
-
-// ─── Metric definitions ───────────────────────────────────────────────────────
 
 struct MetricDef {
     name: &'static str,

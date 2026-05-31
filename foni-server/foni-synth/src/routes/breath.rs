@@ -73,9 +73,10 @@ pub async fn breath(
         // Fade-in 5ms, fade-out 40ms (asymmetric: fast intake, gradual release)
         let fade_in_n = ((sr as f32 * 0.005) as usize).min(n_samples);
         let fade_out_n = ((sr as f32 * 0.040) as usize).min(n_samples);
-        for i in 0..fade_in_n {
-            samples[i] *= i as f32 / fade_in_n as f32;
-        }
+        samples[..fade_in_n]
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, s)| *s *= i as f32 / fade_in_n as f32);
         for i in 0..fade_out_n {
             samples[n_samples - 1 - i] *= i as f32 / fade_out_n as f32;
         }
@@ -93,16 +94,6 @@ pub async fn breath(
 
 /// Simple 2nd-order low-pass (delegates to Biquad::lowpass).
 fn lowpass_biquad(cutoff_hz: f32, sample_rate: u32) -> Biquad {
-    let w0 = 2.0 * std::f32::consts::PI * cutoff_hz / sample_rate as f32;
-    let cos_w = w0.cos();
-    let q = std::f32::consts::FRAC_1_SQRT_2;
-    let alpha = w0.sin() / (2.0 * q);
-    let b0 = (1.0 - cos_w) / 2.0;
-    let b1 = 1.0 - cos_w;
-    let b2 = (1.0 - cos_w) / 2.0;
-    let a0 = 1.0 + alpha;
-    let a1 = -2.0 * cos_w;
-    let a2 = 1.0 - alpha;
     Biquad::lowpass(cutoff_hz, sample_rate)
 }
 
@@ -124,9 +115,10 @@ mod tests {
         lp.process(&mut samples);
         let fade_in = ((sr as f32 * 0.005) as usize).min(n);
         let fade_out = ((sr as f32 * 0.040) as usize).min(n);
-        for i in 0..fade_in {
-            samples[i] *= i as f32 / fade_in as f32;
-        }
+        samples[..fade_in]
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, s)| *s *= i as f32 / fade_in as f32);
         for i in 0..fade_out {
             samples[n - 1 - i] *= i as f32 / fade_out as f32;
         }

@@ -1,15 +1,14 @@
-/// Time-domain effects: fade, silence trim, reverb (echo), vibrato.
-
+/// Fade, silence trim, echo, vibrato.
 const SILENCE_THR: f32 = 0.01; // -40 dBFS
-const PAUSE_MIN_S: f32 = 0.05;
-
-// ─── Fade ─────────────────────────────────────────────────────────────────────
+#[allow(dead_code)]
+const PAUSE_MIN_S: f32 = 0.05; // reserved: minimum interior pause preserved by silence_trim
 
 pub fn fade_in(samples: &mut [f32], duration_s: f32, sample_rate: u32) {
     let fade_len = ((sample_rate as f32 * duration_s) as usize).min(samples.len());
-    for i in 0..fade_len {
-        samples[i] *= i as f32 / fade_len as f32;
-    }
+    samples[..fade_len]
+        .iter_mut()
+        .enumerate()
+        .for_each(|(i, s)| *s *= i as f32 / fade_len as f32);
 }
 
 pub fn fade_out(samples: &mut [f32], duration_s: f32, sample_rate: u32) {
@@ -19,8 +18,6 @@ pub fn fade_out(samples: &mut [f32], duration_s: f32, sample_rate: u32) {
         samples[n - 1 - i] *= i as f32 / fade_len as f32;
     }
 }
-
-// ─── Silence trim (two-pass, preserves interior pauses) ──────────────────────
 
 /// Remove leading silence below threshold.
 fn trim_leading(samples: &[f32], frame_ms: f32, sr: u32) -> usize {
@@ -53,8 +50,6 @@ pub fn silence_trim(samples: Vec<f32>, threshold_db: f32, sample_rate: u32) -> V
     rev.iter().copied().rev().collect()
 }
 
-// ─── Simple echo/reverb (aecho equivalent) ───────────────────────────────────
-
 /// Single-tap delay echo (approximates ffmpeg aecho).
 pub fn echo(
     samples: &mut [f32],
@@ -77,8 +72,6 @@ pub fn echo(
         *s += echo_out;
     }
 }
-
-// ─── Vibrato (sinusoidal pitch micro-variation via interpolated delay) ─────────
 
 /// Vibrato via LFO-modulated delay line. Depth in fractional samples.
 pub fn vibrato(samples: &mut [f32], freq_hz: f32, depth: f32, sample_rate: u32) {

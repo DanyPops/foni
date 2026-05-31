@@ -1,8 +1,6 @@
 /// Dynamics processing: compressor, hard limiter, EBU R128 loudnorm.
 use ebur128::{EbuR128, Mode};
 
-// ─── Compressor ───────────────────────────────────────────────────────────────
-
 pub struct Compressor {
     threshold: f32, // linear
     ratio: f32,
@@ -55,8 +53,6 @@ impl Compressor {
     }
 }
 
-// ─── Hard limiter ─────────────────────────────────────────────────────────────
-
 /// Clip samples to ±ceiling (linear amplitude).
 pub fn hard_clip(samples: &mut [f32], ceiling_db: f32) {
     let ceil = 10f32.powf(ceiling_db / 20.);
@@ -64,8 +60,6 @@ pub fn hard_clip(samples: &mut [f32], ceiling_db: f32) {
         *s = s.clamp(-ceil, ceil);
     }
 }
-
-// ─── EBU R128 loudnorm ───────────────────────────────────────────────────────
 
 /// Normalise to target_lufs using the ebur128 crate (single-pass, linear gain).
 /// Falls back to identity if measurement fails.
@@ -105,6 +99,7 @@ mod tests {
         (s.iter().map(|&x| x * x).sum::<f32>() / s.len() as f32).sqrt()
     }
 
+    #[allow(dead_code)]
     fn db(r: f32) -> f32 {
         if r > 0. {
             20. * r.log10()

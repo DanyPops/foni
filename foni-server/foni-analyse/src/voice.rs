@@ -37,8 +37,6 @@ pub fn compute(samples: &[f32], sample_rate: u32) -> VoiceMetrics {
     }
 }
 
-// ─── HNR via autocorrelation ──────────────────────────────────────────────────
-
 fn compute_hnr(samples: &[f32], sample_rate: u32, frame_size: usize) -> f32 {
     let sr = sample_rate as usize;
     let hop = (sample_rate as f32 * HOP_MS / 1000.0) as usize;
@@ -90,8 +88,6 @@ fn compute_hnr(samples: &[f32], sample_rate: u32, frame_size: usize) -> f32 {
         (hnr_sum / count as f64) as f32
     }
 }
-
-// ─── CPP (Cepstral Peak Prominence) ──────────────────────────────────────────
 
 fn compute_cpp(samples: &[f32], sample_rate: u32, frame_size: usize) -> f32 {
     use std::f64::consts::PI;
@@ -191,8 +187,6 @@ fn compute_cpp(samples: &[f32], sample_rate: u32, frame_size: usize) -> f32 {
         (cpp_sum / count as f64) as f32
     }
 }
-
-// ─── Jitter and Shimmer via zero-crossing period estimation ───────────────────
 
 fn estimate_periods(samples: &[f32], sample_rate: u32) -> Vec<(f32, f32)> {
     // Returns (period_secs, rms_amplitude) for each detected cycle via zero crossings
