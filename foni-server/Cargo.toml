@@ -50,13 +50,16 @@ ndarray      = "0.15"
 rand         = "0.8"
 lru          = "0.12"
 sha2         = "0.10"
+clap         = { version = "4", features = ["derive", "env"] }
+dialoguer    = "0.11"
+indicatif    = "0.17"
 
 # ONNX runtime — RVC model inference
 ort          = { version = "2.0.0-rc.12", features = ["copy-dylibs"] }
 
 # utility
 base64       = "0.22"
-reqwest      = { version = "0.12", features = ["json"] }
+reqwest      = { version = "0.12", features = ["json", "blocking"] }
 tempfile     = "3"
 thiserror    = "1"
 tracing      = "0.1"
