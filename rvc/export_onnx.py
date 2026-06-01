@@ -136,7 +136,7 @@ def export_generator(model_name: str) -> Path:
             do_constant_folding=False, opset_version=16, verbose=False,
             input_names=["phone","phone_lengths","pitch","pitchf","ds","rnd"],
             output_names=["audio"],
-            dynamo=False,
+            # dynamo=False,  # not supported in torch < 2.3
         )
 
     done.set(); t.join()
