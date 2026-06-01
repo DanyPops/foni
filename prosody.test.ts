@@ -1,9 +1,3 @@
-/**
- * prosody.test.ts — ProsodyAnnotator and BreathInjector unit tests.
- *
- * Tests are independent of espeak/RVC (no external services needed).
- * DSP assertions are done on synthesised WAV buffers.
- */
 
 import { describe, it, expect } from "vitest";
 import { annotateProsody, isSsml, ProsodyBackend } from "./pipeline/prosody.ts";

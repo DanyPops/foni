@@ -1,21 +1,4 @@
-/**
- * Translation chunking test harness
- *
- * Measures the tradeoff between chunking granularity and translation quality.
- * When an LLM translator sees shorter chunks it loses inter-sentence context,
- * producing worse output. Smaller chunks = more cache keys = higher hit rate.
- *
- * Three levels tested per paragraph:
- *   paragraph  — 1 translate call, 1 cache key, full context
- *   sentence   — N calls (split on .!?), N keys, sentence context only
- *   clause     — M calls (split on ,;), M keys, clause context only
- *
- * Run (silent — shows quality table only):
- *   npx vitest run translation-chunking
- *
- * Run with a live translator (LibreTranslate on :5000):
- *   TRANSLATE=1 npx vitest run translation-chunking
- */
+// Chunk granularity tradeoff: smaller chunks = more cache keys, less context.
 
 import { describe, it, expect, beforeAll } from "vitest";
 import {
@@ -132,7 +115,7 @@ async function translate(chunks: string[]): Promise<string[]> {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe("Translation chunking: quality vs cache granularity", () => {
+describe("chunking granularity — keyword retention and cache key count", () => {
   const results: Array<{
     id:          string;
     level:       string;

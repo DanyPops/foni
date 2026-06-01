@@ -1,9 +1,3 @@
-/**
- * TranslationScheduler tests — verifies FIFO/LIFO routing and budget logic.
- *
- * Uses controlled fake translators so we can assert queue order, race outcomes,
- * and fallback behaviour without hitting real services.
- */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TranslationJob, TranslationScheduler, makeTranslateMiddleware } from "./translators.ts";

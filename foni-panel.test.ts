@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ─── Mock @earendil-works/pi-tui ─────────────────────────────────────────────
+
 
 vi.mock("@earendil-works/pi-tui", () => {
   const KEYS: Record<string, string> = {
@@ -33,7 +33,6 @@ import {
   type TextCtx, type TextMiddleware,
 } from "./pipeline/translators.ts";
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Strip all ANSI escape codes — what a human sees in the terminal. */
 function stripAnsi(s: string): string {
@@ -94,7 +93,6 @@ async function mountPanel(state = makeState(), actions = makeActions()) {
   return { component, panelPromise, screen, actions };
 }
 
-// ─── MatTranslator ───────────────────────────────────────────────────────────
 
 describe("MatTranslator", () => {
   it("prob=0 is a pure passthrough", async () => {
@@ -152,7 +150,6 @@ describe("MatTranslator", () => {
   });
 });
 
-// ─── Middleware pipeline ────────────────────────────────────────────────────────
 
 function makeCtx(overrides: Partial<TextCtx> = {}): TextCtx {
   return { input: "Hello", text: "Hello", lang: "en", ...overrides };
@@ -288,7 +285,6 @@ describe("PipelineTranslator", () => {
   });
 });
 
-// ─── stretchExpression ──────────────────────────────────────────────────────
 
 describe("stretchExpression", () => {
   it("no Cyrillic vowels → returns expression unchanged", () => {
@@ -320,7 +316,6 @@ describe("stretchExpression", () => {
   });
 });
 
-// ─── InterjectTranslator ─────────────────────────────────────────────────────
 
 describe("InterjectTranslator", () => {
   it("prob=0 is a pure passthrough", async () => {
@@ -360,13 +355,12 @@ describe("InterjectTranslator", () => {
   });
 });
 
-// ─── Pipeline E2E showcase ────────────────────────────────────────────────────
 //
 // These tests demonstrate the full translator chain as it runs in production:
 //   inner → MatTranslator → InterjectTranslator
 // They are intentionally prob=1 to make assertions deterministic.
 
-describe("Pipeline E2E showcase: Mat + Interject stacked", () => {
+describe("mat and interject middleware stack", () => {
   it("prob=0 on both layers: inner result passes through untouched", async () => {
     const inner = { translate: vi.fn().mockResolvedValue("Я люблю этот город.") };
     const result = await new InterjectTranslator(
@@ -410,7 +404,6 @@ describe("Pipeline E2E showcase: Mat + Interject stacked", () => {
   });
 });
 
-// ─── Panel rendering — snapshot tests ────────────────────────────────────────
 //
 // Render is stripped of ANSI codes before snapshotting so:
 //   • humans can read the snapshot file
@@ -449,7 +442,6 @@ describe("FoniPanel render snapshots", () => {
   });
 });
 
-// ─── Panel behaviour — action call tests ─────────────────────────────────────
 //
 // Feed a keystroke, assert the right action was called with the right args.
 // We test what the panel *does*, not what it *looks like* after.
@@ -535,7 +527,6 @@ describe("FoniPanel handleInput → actions", () => {
   });
 });
 
-// ─── Stale snapshot (known bug) ───────────────────────────────────────────────
 //
 // The panel receives a one-time state snapshot on mount.
 // Actions mutate external config but panel.updateState() is never called,

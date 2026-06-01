@@ -1,18 +1,3 @@
-/**
- * latency.e2e.test.ts — TTFA scaling test: 10 / 100 / 1,000 words.
- *
- * Metrics per run:
- *   TTFA       — ms from first delta to first audio chunk played
- *   Stream dur — ms to push all deltas
- *   Audio tail — ms of audio still playing after stream ended (queue depth)
- *   Total      — stream start → last audio chunk
- *
- * Run (espeak baseline, no services needed):
- *   npx vitest run latency.e2e
- *
- * Run (full RVC+DSP pipeline):
- *   FONI_SYNTH_URL=http://localhost:5051 npx vitest run latency.e2e
- */
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { FoniEngine }    from "./core/engine.ts";
@@ -27,7 +12,6 @@ import {
 } from "./test/stubs.ts";
 import { corpusOfWords, streamChunks } from "./test/corpus.ts";
 
-// ─── Engine factory ───────────────────────────────────────────────────────────
 
 function buildEngine(player: TimingPlayer): FoniEngine {
   const synthUrl = Env.SYNTH_URL;
@@ -45,7 +29,6 @@ function buildEngine(player: TimingPlayer): FoniEngine {
   );
 }
 
-// ─── Runner ───────────────────────────────────────────────────────────────────
 
 interface RunResult {
   words:       number;
@@ -96,9 +79,8 @@ async function runScaling(wordCount: number): Promise<RunResult> {
   };
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe("TTFA scaling — 10 / 100 / 1,000 words", () => {
+describe("TTFA scales linearly with word count", () => {
   const synthUrl = process.env.FONI_SYNTH_URL;
   const mode     = synthUrl ? `RVC+DSP @ ${synthUrl}` : "espeak-only";
 
@@ -120,7 +102,6 @@ describe("TTFA scaling — 10 / 100 / 1,000 words", () => {
     ];
   }, 600_000);
 
-  // ── Per-size assertions ──────────────────────────────────────────────────
 
   for (const wordTarget of [10, 100, 1_000]) {
     it(`${wordTarget}-word stream`, () => {
@@ -142,7 +123,6 @@ describe("TTFA scaling — 10 / 100 / 1,000 words", () => {
     }, 600_000);
   }
 
-  // ── Summary table ────────────────────────────────────────────────────────
 
   it("prints scaling summary", () => {
     const rows = results.map(r => ({
