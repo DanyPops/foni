@@ -196,9 +196,25 @@ fn get_json(server: &str, path: &str) -> Result<serde_json::Value, String> {
 
 // ─── Audio playback ───────────────────────────────────────────────────────────
 
+/// Read sample count and sample rate from a WAV header (bytes 24–27 = sr, 40–43 = data size).
+fn wav_duration_secs(path: &std::path::Path) -> Option<f64> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 44 {
+        return None;
+    }
+    let sr = u32::from_le_bytes(data[24..28].try_into().ok()?) as f64;
+    let channels = u16::from_le_bytes(data[22..24].try_into().ok()?) as f64;
+    let bits = u16::from_le_bytes(data[34..36].try_into().ok()?) as f64;
+    let data_size = u32::from_le_bytes(data[40..44].try_into().ok()?) as f64;
+    Some(data_size / (sr * channels * bits / 8.0))
+}
+
 fn play_wav(path: &std::path::Path) {
-    // Try aplay → paplay → afplay → mpv → ffplay in order
-    for player in &["aplay", "paplay", "afplay", "mpv", "ffplay"] {
+    // paplay first: it drains the PipeWire/PulseAudio buffer before exiting,
+    // so the process blocks until playback is actually done.
+    // aplay exits as soon as audio is submitted to PipeWire — playback continues
+    // async, causing the next prompt to appear mid-audio.
+    for player in &["paplay", "afplay", "mpv", "aplay", "ffplay"] {
         if Command::new(player)
             .arg(path)
             .stdout(std::process::Stdio::null())
@@ -210,7 +226,11 @@ fn play_wav(path: &std::path::Path) {
             return;
         }
     }
-    eprintln!("⚠  No audio player found (tried aplay, paplay, afplay, mpv, ffplay)");
+    // Last resort: calculate duration from WAV header and sleep.
+    if let Some(dur) = wav_duration_secs(path) {
+        std::thread::sleep(std::time::Duration::from_secs_f64(dur));
+    }
+    eprintln!("⚠  No audio player found (tried paplay, afplay, mpv, aplay, ffplay)");
     eprintln!("   File saved to: {}", path.display());
 }
 
