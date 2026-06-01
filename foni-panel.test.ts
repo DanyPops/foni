@@ -48,7 +48,7 @@ function makeState(overrides: Partial<FoniPanelState> = {}): FoniPanelState {
     backendName: "espeak",
     backendPref: "auto",
     rvcEnabled:  false,
-    rvcModel:    "bandit",
+    rvcModel:    "sidorovich",
     rvcUrl:      "http://localhost:5050",
     rvcServerOk: null,
     ...overrides,
@@ -421,8 +421,8 @@ describe("FoniPanel render snapshots", () => {
     expect(screen()).toMatchSnapshot();
   });
 
-  it("RVC enabled with bandit model", async () => {
-    const { screen } = await mountPanel(makeState({ rvcEnabled: true, rvcModel: "bandit" }));
+  it("RVC enabled with sidorovich model", async () => {
+    const { screen } = await mountPanel(makeState({ rvcEnabled: true, rvcModel: "sidorovich" }));
     expect(screen()).toMatchSnapshot();
   });
 

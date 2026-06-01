@@ -387,7 +387,7 @@ export default async function (pi: ExtensionAPI) {
             lines.push(r.ok ? ok(`RVC: ${config.rvcUrl} -- model: ${p.current_model ?? "none"}`) : err(`RVC ${r.status}`));
           } catch { lines.push(err(`RVC unreachable at ${config.rvcUrl}`)); }
         } else {
-          lines.push(warn("RVC disabled -- /tts rvc on to enable bandit voice"));
+          lines.push(warn("RVC disabled -- /tts rvc on to enable sidorovich voice"));
         }
         ctx.ui.notify(lines.join("\n"), "info");
         if (backend && 'synthesize' in backend) {

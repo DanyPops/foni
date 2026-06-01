@@ -24,7 +24,7 @@ export interface FoniConfig {
   interjectProb:       number;
   interjectCooldownMs: number;
 
-  // RVC — bandit voice
+  // RVC — Sidorovich voice
   rvcEnabled: boolean;
   rvcUrl:     string;
   rvcModel:   string;
@@ -56,7 +56,7 @@ export const DEFAULT_CONFIG: FoniConfig = {
 
   rvcEnabled: true,
   rvcUrl:     "http://localhost:5050",
-  rvcModel:   "bandit",
+  rvcModel:   "sidorovich",
 
   prosodyEnabled: true,
   breathEnabled:  true,
