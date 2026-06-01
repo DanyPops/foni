@@ -53,8 +53,8 @@ const translatorFactory: TranslatorFactory = (cfg, emotion) => {
     stack.push(makeTranslateMiddleware(cfg.inputLang, cfg.outputLang));
   }
   if (cfg.outputLang === "ru") {
-    if (cfg.matEnabled)       stack.push(makeMatMiddleware(matProb, cfg.matStretch, bias, BIAS_WORDS));
-    if (cfg.interjectEnabled) stack.push(makeInterjectMiddleware(interjectProb, bias, BIAS_WORDS));
+    if (cfg.matEnabled)       stack.push(makeMatMiddleware(matProb, cfg.matStretch, bias, BIAS_WORDS, cfg.matCooldownMs));
+    if (cfg.interjectEnabled) stack.push(makeInterjectMiddleware(interjectProb, bias, BIAS_WORDS, cfg.interjectCooldownMs));
   }
   return new PipelineTranslator(stack, cfg.outputLang);
 };
@@ -513,9 +513,20 @@ export default async function (pi: ExtensionAPI) {
           ctx.ui.notify(`Mat probability -> ${prob}`, "info");
           return;
         }
+        if (matSub === "cooldown") {
+          const ms = parseInt(parts[2] ?? "");
+          if (!isNaN(ms) && ms >= 0) {
+            config.matCooldownMs = ms;
+            engine.rebuildTranslator();
+            ctx.ui.notify(`Mat cooldown -> ${ms}ms`, "info");
+          } else {
+            ctx.ui.notify(`Mat cooldown: ${config.matCooldownMs}ms\nUsage: /tts mat cooldown <ms>`, "info");
+          }
+          return;
+        }
         ctx.ui.notify(
-          `Mat: ${config.matEnabled ? "включён" : "выключен"} (prob=${config.matProb}, stretch=${config.matStretch})\n` +
-          "Usage: /tts mat on|off | /tts mat 0.0-1.0 | /tts mat stretch 0.0-1.0",
+          `Mat: ${config.matEnabled ? "включён" : "выключен"} (prob=${config.matProb}, stretch=${config.matStretch}, cooldown=${config.matCooldownMs}ms)\n` +
+          "Usage: /tts mat on|off | /tts mat 0.0-1.0 | /tts mat stretch 0.0-1.0 | /tts mat cooldown <ms>",
           "info",
         );
         return;

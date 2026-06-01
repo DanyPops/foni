@@ -72,16 +72,29 @@ export function drainChunks(text: string): DrainResult {
 
 export function stripMarkdown(text: string): string {
   return text
+    // Complete fenced code blocks
     .replace(/\n?```[\s\S]*?```\n?/g, "\n")
+    // Unclosed fenced code block (mid-stream: ``` opened but not closed yet)
+    .replace(/```[\s\S]*/g, "")
+    // Inline code
     .replace(/`[^`]+`/g, "")
+    // Images, links
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    // Headers, emphasis, blockquote, rules, lists
     .replace(/^#{1,6}\s+/gm, "")
     .replace(/(\*{1,3}|_{1,3})(.+?)\1/g, "$2")
     .replace(/^>\s*/gm, "")
     .replace(/^[-*_]{3,}\s*$/gm, "")
     .replace(/^[\s]*[-*+]\s+/gm, "")
     .replace(/^[\s]*\d+\.\s+/gm, "")
+    // Shell/regex special sequences that produce audible noise:
+    //   \| (grep alternation), \n \t (escape sequences), trailing backslash
+    .replace(/\\[|ntrfv\\]/g, " ")
+    .replace(/\\\s*$/gm, "")
+    // /path-like-tokens that aren't prose (e.g. /metrics, /tts, /no_think)
+    // Only strip when surrounded by non-letter context (not mid-word fractions)
+    .replace(/(?<![\w])\/[a-z][a-z0-9_\-]*/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
