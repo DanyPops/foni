@@ -1,24 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { FoniEngine }          from "./core/engine.ts";
 import { DEFAULT_CONFIG }      from "./core/config.ts";
-import type { BackendFactory, ProcessorFactory } from "./core/engine.ts";
-import type { AudioProcessor, Player, SynthOptions, TTSBackend } from "./pipeline/interfaces.ts";
+import type { BackendFactory } from "./core/engine.ts";
+import { stubBackend, NullProcessor, NullPlayer } from "./test/stubs.ts";
 
-// ─── Stubs ────────────────────────────────────────────────────────────────────
-
-const stubBackend: TTSBackend = {
-  name: "stub",
-  isAvailable: async () => true,
-  synthesize: async (_t: string, _o: SynthOptions): Promise<Buffer> => Buffer.alloc(44),
-};
-
-const stubProcessor: AudioProcessor = { process: async (b) => b };
-
-const stubPlayer: Player = { play: async () => {} };
-
-const okFactory: BackendFactory   = async () => stubBackend;
-const nullFactory: BackendFactory  = async () => null;
-const okProcessor: ProcessorFactory = () => stubProcessor;
+const okFactory: BackendFactory  = async () => stubBackend;
+const nullFactory: BackendFactory = async () => null;
+const okProcessor = () => new NullProcessor();
+const stubPlayer  = new NullPlayer();
 
 function makeEngine(factory: BackendFactory = okFactory) {
   return new FoniEngine({ ...DEFAULT_CONFIG }, factory, okProcessor, stubPlayer);
