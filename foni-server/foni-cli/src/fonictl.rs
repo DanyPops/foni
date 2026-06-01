@@ -972,20 +972,157 @@ fn cmd_listen(server: &str, text: &str, model: &str, dsp_variants: bool, play_re
 
 // ─── Mixer REPL ────────────────────────────────────────────────────────────────────
 
+// ─ Session file — the AI/human contract ──────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct TrackRecord {
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rating: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    winner: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+    opts: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gap_pct: Option<f32>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+struct AiSuggestion {
+    label: String,
+    rationale: String,
+    opts: serde_json::Value,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct MixerSession {
+    phrase: String,
+    model: String,
+    saved_at: String,
+    tracks: Vec<TrackRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ai_suggestions: Vec<AiSuggestion>,
+}
+
+impl MixerSession {
+    fn path() -> std::path::PathBuf {
+        let base = std::env::var("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                let mut p = dirs_next("HOME");
+                p.push(".local/share");
+                p
+            });
+        let dir = base.join("foni");
+        std::fs::create_dir_all(&dir).ok();
+        dir.join("mixer-session.json")
+    }
+
+    fn save(&self) {
+        let json = serde_json::to_string_pretty(self).unwrap_or_default();
+        std::fs::write(Self::path(), json).ok();
+    }
+
+    fn load() -> Option<Self> {
+        serde_json::from_str(&std::fs::read_to_string(Self::path()).ok()?).ok()
+    }
+
+    fn now() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let (y, mo, d, h, mi, s) = epoch_ymd(secs);
+        format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+    }
+}
+
+fn dirs_next(var: &str) -> std::path::PathBuf {
+    std::env::var(var)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default()
+}
+
+fn epoch_ymd(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
+    let (s, m, h) = (secs % 60, (secs / 60) % 60, (secs / 3600) % 24);
+    let mut rem = secs / 86400;
+    let mut y = 1970u64;
+    loop {
+        let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+        let yd = if leap { 366 } else { 365 };
+        if rem < yd {
+            break;
+        }
+        rem -= yd;
+        y += 1;
+    }
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let md = [
+        31u64,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut mo = 0u64;
+    for &days in &md {
+        if rem < days {
+            break;
+        }
+        rem -= days;
+        mo += 1;
+    }
+    (y, mo + 1, rem + 1, h, m, s)
+}
+
+// ─ Runtime track (in-memory only) ─────────────────────────────────────────────
+
 struct Track {
     label: String,
     desc: String,
     path: std::path::PathBuf,
     opts: serde_json::Value,
+    rating: Option<u8>,
+    note: Option<String>,
+    winner: bool,
+}
+
+fn stars(rating: Option<u8>) -> String {
+    match rating {
+        None => "     ".into(),
+        Some(n) => format!("{}☆{}", "★".repeat(n as usize), "★".repeat(5 - n as usize)),
+    }
 }
 
 fn mixer_print_tracks(tracks: &[Track]) {
     println!();
-    println!("  {:>3}  {:<22}  {}", "#", "Label", "Config");
-    println!("  {}", "─".repeat(72));
+    println!(
+        "  {:>3}  {:<20}  {:<7}  {}",
+        "#", "Label", "Rating", "Config"
+    );
+    println!("  {}", "─".repeat(78));
     for (i, t) in tracks.iter().enumerate() {
-        let rendered = if t.path.exists() { "●" } else { "◦" };
-        println!("  {} {:>2}  {:<22}  {}", rendered, i + 1, t.label, t.desc);
+        let dot = if t.path.exists() { "●" } else { "◦" };
+        let crown = if t.winner { " ✪" } else { "  " };
+        let rating = stars(t.rating);
+        println!(
+            "  {dot}{crown}{:>2}  {:<20}  {rating}  {}",
+            i + 1,
+            t.label,
+            t.desc
+        );
+        if let Some(ref n) = t.note {
+            println!("        └ {n}");
+        }
     }
     println!();
 }
@@ -1025,21 +1162,32 @@ fn opts_describe(opts: &serde_json::Value) -> String {
 }
 
 const MIXER_HELP: &str = r#"
-  Commands:
-    ls / list          show all tracks
-    N                  play track N
-    r                  replay last
-    cmp A B            play A, then B back-to-back
-    opts               show scratchpad DSP opts
-    set KEY VAL        set scratchpad opt  (e.g. set vibratoDepth 0)
-    reset              reset scratchpad to defaults
-    fork N             copy track N’s opts to scratchpad
-    render NAME        render scratchpad → new track
-    drop N             remove track N
-    phrase TEXT        change phrase (clears rendered tracks)
-    analyse N          print acoustic metrics for track N
-    cmp N ref          compare track N against Sidorovich original
-    q / quit           exit
+  Playback:
+    N            play track N
+    r            replay last
+    cmp A B      play A then B  ('ref' = Sidorovich original)
+
+  Rating (written to ~/.local/share/foni/mixer-session.json):
+    rate N SCORE note...   rate track N (1-5) with optional note
+    winner N               mark track N as winner (auto-saves)
+    note N TEXT            add/replace note on track N
+    ai                     load AI suggestions as pending tracks
+    save                   write session file now
+
+  DSP scratchpad:
+    opts                   show current scratchpad opts
+    set KEY VAL            tweak a param  (e.g. set vibratoDepth 0)
+    reset                  reset to defaults
+    fork N                 copy track N opts to scratchpad
+    render NAME            render scratchpad as new track
+
+  Tracks:
+    ls                     list all tracks
+    drop N                 remove track N
+    analyse N              acoustic metrics for track N
+    phrase TEXT            change phrase (clears rendered tracks)
+
+    q / quit               save session and exit
 "#;
 
 fn cmd_mix(server: &str, text: &str, model: &str) {
@@ -1065,10 +1213,13 @@ fn cmd_mix(server: &str, text: &str, model: &str) {
             path: std::env::temp_dir()
                 .join(format!("fonictl_mix_{}.wav", m.name.replace(' ', "_"))),
             opts: m.opts,
+            rating: None,
+            note: None,
+            winner: false,
         })
         .collect();
 
-    // Also pick up any existing diagnose files from the last --diagnose run.
+    // Pick up existing diagnose files.
     for (slug, desc) in &[
         ("a_rvc_raw", "RVC only"),
         ("b_novibrato", "vibrato off"),
@@ -1084,7 +1235,23 @@ fn cmd_mix(server: &str, text: &str, model: &str) {
                 desc: desc.to_string(),
                 path,
                 opts: serde_json::json!({}),
+                rating: None,
+                note: None,
+                winner: false,
             });
+        }
+    }
+
+    // Restore ratings/notes from the last saved session if phrase matches.
+    if let Some(prev) = MixerSession::load() {
+        if prev.phrase == phrase {
+            for t in tracks.iter_mut() {
+                if let Some(r) = prev.tracks.iter().find(|r| r.label == t.label) {
+                    t.rating = r.rating;
+                    t.note = r.note.clone();
+                    t.winner = r.winner.unwrap_or(false);
+                }
+            }
         }
     }
 
@@ -1238,6 +1405,9 @@ fn cmd_mix(server: &str, text: &str, model: &str) {
                                     desc,
                                     path,
                                     opts: scratch.clone(),
+                                    rating: None,
+                                    note: None,
+                                    winner: false,
                                 });
                             }
                             mixer_print_tracks(&tracks);
@@ -1245,6 +1415,106 @@ fn cmd_mix(server: &str, text: &str, model: &str) {
                     },
                 }
             }
+
+            "rate" if parts.len() >= 2 => {
+                if let Ok(n) = parts[1].parse::<usize>() {
+                    if n >= 1 && n <= tracks.len() {
+                        let score = parts.get(2).and_then(|s| s.parse::<u8>().ok()).unwrap_or(0);
+                        if !(1..=5).contains(&score) {
+                            eprintln!("  usage: rate N 1-5 [note...]");
+                        } else {
+                            let note_text: String =
+                                parts.get(3..).map(|s| s.join(" ")).unwrap_or_default();
+                            // re-split from raw line to get full note
+                            let full_note =
+                                line.splitn(4, ' ').nth(3).unwrap_or("").trim().to_string();
+                            tracks[n - 1].rating = Some(score);
+                            if !full_note.is_empty() {
+                                tracks[n - 1].note = Some(full_note);
+                            }
+                            let _ = note_text; // used via full_note
+                            println!("  track {n} ({}) rated {}/5", tracks[n - 1].label, score);
+                            save_session(&tracks, &phrase, model);
+                            mixer_print_tracks(&tracks);
+                        }
+                    } else {
+                        eprintln!("  no track {n}");
+                    }
+                }
+            }
+
+            "note" if parts.len() >= 3 => {
+                if let Ok(n) = parts[1].parse::<usize>() {
+                    if n >= 1 && n <= tracks.len() {
+                        let text = line.splitn(3, ' ').nth(2).unwrap_or("").trim().to_string();
+                        tracks[n - 1].note = Some(text.clone());
+                        println!("  note on {}: {text}", tracks[n - 1].label);
+                        save_session(&tracks, &phrase, model);
+                    } else {
+                        eprintln!("  no track {n}");
+                    }
+                }
+            }
+
+            "winner" if parts.len() >= 2 => {
+                if let Ok(n) = parts[1].parse::<usize>() {
+                    if n >= 1 && n <= tracks.len() {
+                        for t in tracks.iter_mut() {
+                            t.winner = false;
+                        }
+                        tracks[n - 1].winner = true;
+                        println!(
+                            "  ✪  winner: {} — session saved to {}",
+                            tracks[n - 1].label,
+                            MixerSession::path().display()
+                        );
+                        save_session(&tracks, &phrase, model);
+                        mixer_print_tracks(&tracks);
+                    } else {
+                        eprintln!("  no track {n}");
+                    }
+                }
+            }
+
+            "save" => {
+                save_session(&tracks, &phrase, model);
+                println!("  saved → {}", MixerSession::path().display());
+            }
+
+            "ai" => match MixerSession::load() {
+                None => eprintln!("  no session file found"),
+                Some(sess) if sess.ai_suggestions.is_empty() => {
+                    println!("  no AI suggestions in session.  Run /tts mix suggest in pi.");
+                }
+                Some(sess) => {
+                    let mut added = 0usize;
+                    for sug in &sess.ai_suggestions {
+                        if tracks.iter().any(|t| t.label == sug.label) {
+                            continue;
+                        }
+                        let path = std::env::temp_dir()
+                            .join(format!("fonictl_mix_{}.wav", sug.label.replace(' ', "_")));
+                        tracks.push(Track {
+                            label: sug.label.clone(),
+                            desc: format!("AI: {}", sug.rationale),
+                            path,
+                            opts: sug.opts.clone(),
+                            rating: None,
+                            note: None,
+                            winner: false,
+                        });
+                        added += 1;
+                    }
+                    if added > 0 {
+                        println!(
+                            "  added {added} AI suggestion(s) — render them with: render NAME"
+                        );
+                        mixer_print_tracks(&tracks);
+                    } else {
+                        println!("  all AI suggestions already present");
+                    }
+                }
+            },
 
             "drop" if parts.len() >= 2 => {
                 if let Ok(n) = parts[1].parse::<usize>() {
@@ -1352,7 +1622,30 @@ fn cmd_mix(server: &str, text: &str, model: &str) {
             }
         }
     }
-    println!("\n  bye.");
+    save_session(&tracks, &phrase, model);
+    println!("\n  session saved → {}", MixerSession::path().display());
+    println!("  bye.");
+}
+
+fn save_session(tracks: &[Track], phrase: &str, model: &str) {
+    let session = MixerSession {
+        phrase: phrase.to_string(),
+        model: model.to_string(),
+        saved_at: MixerSession::now(),
+        tracks: tracks
+            .iter()
+            .map(|t| TrackRecord {
+                label: t.label.clone(),
+                rating: t.rating,
+                winner: if t.winner { Some(true) } else { None },
+                note: t.note.clone(),
+                opts: t.opts.clone(),
+                gap_pct: None,
+            })
+            .collect(),
+        ai_suggestions: Vec::new(),
+    };
+    session.save();
 }
 
 fn cmd_samples(server: &str, out_dir: &PathBuf, model: &str) {
