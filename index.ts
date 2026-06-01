@@ -21,7 +21,6 @@ import {
 } from "./pipeline/translators.ts";
 import { BIAS_WORDS, effectiveWeights } from "./core/emotion.ts";
 import { IdentityProcessor, RVCProcessor, SmoothingProcessor } from "./pipeline/processors.ts";
-import { ProsodyBackend }    from "./pipeline/prosody.ts";
 import { SynthBackend }      from "./pipeline/synth-backend.ts";
 import { BreathProcessor }   from "./pipeline/breath-injector.ts";
 import { SpeakFacade }       from "./pipeline/speak-facade.ts";
@@ -86,14 +85,12 @@ const facadeFactory: FacadeFactory = async (cfg, translator) => {
   if (cfg.backendPref !== "auto") {
     const preferred = candidates.find(b => b.name === cfg.backendPref);
     if (preferred && await preferred.isAvailable()) {
-      backend = cfg.prosodyEnabled && cfg.outputLang === "ru"
-        ? new ProsodyBackend(preferred) : preferred;
+      backend = preferred;
     }
   } else {
     for (const b of candidates) {
       if (await b.isAvailable()) {
-        backend = cfg.prosodyEnabled && cfg.outputLang === "ru"
-          ? new ProsodyBackend(b) : b;
+        backend = b;
         break;
       }
     }
