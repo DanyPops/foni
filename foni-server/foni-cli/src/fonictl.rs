@@ -1,5 +1,7 @@
 // fonictl — foni-synth command-line factory.
-// Commands: synth | studio | samples | listen | status | play | analyse
+// Commands: synth | studio | samples | listen | mix | status | play | analyse
+
+mod tui;
 
 use std::{path::PathBuf, process::Command};
 
@@ -1191,35 +1193,28 @@ const MIXER_HELP: &str = r#"
 "#;
 
 fn cmd_mix(server: &str, text: &str, model: &str) {
-    use std::io::{BufRead, Write};
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
 
-    let default_opts = serde_json::json!({
-        "rmsTargetLufs": -8, "compressionRatio": 4, "compressionMakeupDb": 5,
-        "tiltLowDb": 10, "tiltHighDb": -8,
-        "vibratoFreq": 6, "vibratoDepth": 0.003,
-        "reverbMs": 8, "reverbDecay": 0.04
-    });
-
-    let mut phrase = text.to_string();
-    let mut scratch = default_opts.clone();
-    let mut last_played: Option<usize> = None;
-
-    // Seed tracks from default maquettes.
-    let mut tracks: Vec<Track> = default_maquettes()
+    // Seed tracks from default maquettes (pre-render if WAV exists).
+    let mut tracks: Vec<tui::state::Track> = default_maquettes()
         .into_iter()
-        .map(|m| Track {
-            label: m.name.clone(),
-            desc: m.describe(),
-            path: std::env::temp_dir()
-                .join(format!("fonictl_mix_{}.wav", m.name.replace(' ', "_"))),
-            opts: m.opts,
-            rating: None,
-            note: None,
-            winner: false,
+        .map(|m| {
+            let path =
+                std::env::temp_dir().join(format!("fonictl_mix_{}.wav", m.name.replace(' ', "_")));
+            tui::state::Track {
+                label: m.name.clone(),
+                desc: m.describe(),
+                path,
+                opts: serde_json::from_value(m.opts).unwrap_or_default(),
+                rating: None,
+                note: None,
+                winner: false,
+                analyse: None,
+            }
         })
         .collect();
 
-    // Pick up existing diagnose files.
+    // Pick up existing diagnose WAVs from the last --diagnose run.
     for (slug, desc) in &[
         ("a_rvc_raw", "RVC only"),
         ("b_novibrato", "vibrato off"),
@@ -1230,401 +1225,63 @@ fn cmd_mix(server: &str, text: &str, model: &str) {
     ] {
         let path = std::env::temp_dir().join(format!("fonictl_diag_{slug}.wav"));
         if path.exists() {
-            tracks.push(Track {
+            tracks.push(tui::state::Track {
                 label: slug.to_string(),
                 desc: desc.to_string(),
                 path,
-                opts: serde_json::json!({}),
+                opts: Default::default(),
                 rating: None,
                 note: None,
                 winner: false,
+                analyse: None,
             });
         }
     }
 
-    // Restore ratings/notes from the last saved session if phrase matches.
-    if let Some(prev) = MixerSession::load() {
-        if prev.phrase == phrase {
-            for t in tracks.iter_mut() {
-                if let Some(r) = prev.tracks.iter().find(|r| r.label == t.label) {
-                    t.rating = r.rating;
-                    t.note = r.note.clone();
-                    t.winner = r.winner.unwrap_or(false);
-                }
-            }
-        }
-    }
+    // Pre-render un-rendered maquettes upfront.
+    {
+        let to_render: Vec<usize> = tracks
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| !t.path.exists())
+            .map(|(i, _)| i)
+            .collect();
 
-    println!("\n————————————————————————————————————————");
-    println!("  🏛  Foni Mixer   (type 'help' for commands)");
-    println!("  Phrase: «{phrase}»");
-    println!("  Model:  {model}");
+        if !to_render.is_empty() {
+            println!("  Rendering {} maquettes…", to_render.len());
+            let pb = ProgressBar::new(to_render.len() as u64);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("[{bar:30}] {pos}/{len}  {msg}")
+                    .unwrap(),
+            );
 
-    // Render un-rendered maquettes upfront.
-    let to_render: Vec<usize> = tracks
-        .iter()
-        .enumerate()
-        .filter(|(_, t)| {
-            !t.path.exists() && !t.opts.as_object().map(|o| o.is_empty()).unwrap_or(true)
-        })
-        .map(|(i, _)| i)
-        .collect();
+            let client = foni_client::FoniClient::new(server);
+            let base_result = rt.block_on(client.synthesize(&foni_client::SynthRequest {
+                text: text.to_string(),
+                model: Some(model.to_string()),
+                dsp: false,
+                prosody: false,
+                ..foni_client::SynthRequest::new(text)
+            }));
 
-    if !to_render.is_empty() {
-        println!("  Rendering {} maquettes…", to_render.len());
-        let pb = ProgressBar::new(to_render.len() as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("  [{bar:30}] {pos}/{len}  {msg}")
-                .unwrap(),
-        );
-
-        // Render: synthesize RVC base once, then /process for each.
-        let rvc_base = synth_request(
-            server,
-            &phrase,
-            model,
-            "ru",
-            150,
-            false,
-            serde_json::json!({}),
-        );
-        match rvc_base {
-            Err(e) => pb.println(format!("  ❌ RVC synthesis: {e}")),
-            Ok(base) => {
+            if let Ok(base) = base_result {
                 for i in to_render {
                     let t = &tracks[i];
                     pb.set_message(t.label.clone());
-                    match process_request(server, &base, t.opts.clone()) {
-                        Ok(wav) => {
-                            std::fs::write(&t.path, wav).unwrap();
-                        }
-                        Err(e) => {
-                            pb.println(format!("  ❌ {}: {e}", t.label));
-                        }
+                    if let Ok(wav) = rt.block_on(client.process(&base, t.opts.clone())) {
+                        std::fs::write(&t.path, wav.as_bytes()).ok();
                     }
                     pb.inc(1);
                 }
+            } else {
+                pb.println("  ⚠  server unreachable — tracks will render on demand");
             }
-        }
-        pb.finish_and_clear();
-    }
-
-    mixer_print_tracks(&tracks);
-
-    let stdin = std::io::stdin();
-    loop {
-        print!("  mix> ");
-        std::io::stdout().flush().ok();
-        let mut raw = String::new();
-        if stdin.lock().read_line(&mut raw).unwrap_or(0) == 0 {
-            break;
-        }
-        let line = raw.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        let parts: Vec<&str> = line.splitn(3, ' ').collect();
-        let cmd = parts[0];
-
-        match cmd {
-            "q" | "quit" | "exit" => break,
-
-            "help" | "?" => println!("{MIXER_HELP}"),
-
-            "ls" | "list" => mixer_print_tracks(&tracks),
-
-            "opts" => {
-                println!("  Scratchpad:");
-                if let Some(obj) = scratch.as_object() {
-                    for (k, v) in obj {
-                        println!("    {k:<24} {v}");
-                    }
-                }
-                println!();
-            }
-
-            "set" if parts.len() == 3 => {
-                let key = parts[1];
-                if let Ok(f) = parts[2].parse::<f64>() {
-                    scratch[key] = f.into();
-                    println!("  {key} = {}", parts[2]);
-                } else {
-                    eprintln!("  not a number: {}", parts[2]);
-                }
-            }
-
-            "reset" => {
-                scratch = default_opts.clone();
-                println!("  scratchpad reset to defaults");
-            }
-
-            "fork" if parts.len() >= 2 => {
-                if let Ok(n) = parts[1].parse::<usize>() {
-                    if n >= 1 && n <= tracks.len() {
-                        scratch = tracks[n - 1].opts.clone();
-                        println!("  forked opts from track {n} ({})", tracks[n - 1].label);
-                        println!("  {}", opts_describe(&scratch));
-                    } else {
-                        eprintln!("  track {n} not found");
-                    }
-                }
-            }
-
-            "render" if parts.len() >= 2 => {
-                let label = parts[1].to_string();
-                let desc = opts_describe(&scratch);
-                let path = std::env::temp_dir()
-                    .join(format!("fonictl_mix_{}.wav", label.replace(' ', "_")));
-                print!("  rendering ‘{label}’… ");
-                std::io::stdout().flush().ok();
-                match synth_request(
-                    server,
-                    &phrase,
-                    model,
-                    "ru",
-                    150,
-                    false,
-                    serde_json::json!({}),
-                ) {
-                    Err(e) => eprintln!("  ❌ RVC: {e}"),
-                    Ok(base) => match process_request(server, &base, scratch.clone()) {
-                        Err(e) => eprintln!("  ❌ DSP: {e}"),
-                        Ok(wav) => {
-                            std::fs::write(&path, &wav).unwrap();
-                            println!("ok  ({} kB)", wav.len() / 1024);
-                            // Replace existing track with same label or append.
-                            if let Some(t) = tracks.iter_mut().find(|t| t.label == label) {
-                                t.desc = desc;
-                                t.path = path;
-                                t.opts = scratch.clone();
-                            } else {
-                                tracks.push(Track {
-                                    label,
-                                    desc,
-                                    path,
-                                    opts: scratch.clone(),
-                                    rating: None,
-                                    note: None,
-                                    winner: false,
-                                });
-                            }
-                            mixer_print_tracks(&tracks);
-                        }
-                    },
-                }
-            }
-
-            "rate" if parts.len() >= 2 => {
-                if let Ok(n) = parts[1].parse::<usize>() {
-                    if n >= 1 && n <= tracks.len() {
-                        let score = parts.get(2).and_then(|s| s.parse::<u8>().ok()).unwrap_or(0);
-                        if !(1..=5).contains(&score) {
-                            eprintln!("  usage: rate N 1-5 [note...]");
-                        } else {
-                            let note_text: String =
-                                parts.get(3..).map(|s| s.join(" ")).unwrap_or_default();
-                            // re-split from raw line to get full note
-                            let full_note =
-                                line.splitn(4, ' ').nth(3).unwrap_or("").trim().to_string();
-                            tracks[n - 1].rating = Some(score);
-                            if !full_note.is_empty() {
-                                tracks[n - 1].note = Some(full_note);
-                            }
-                            let _ = note_text; // used via full_note
-                            println!("  track {n} ({}) rated {}/5", tracks[n - 1].label, score);
-                            save_session(&tracks, &phrase, model);
-                            mixer_print_tracks(&tracks);
-                        }
-                    } else {
-                        eprintln!("  no track {n}");
-                    }
-                }
-            }
-
-            "note" if parts.len() >= 3 => {
-                if let Ok(n) = parts[1].parse::<usize>() {
-                    if n >= 1 && n <= tracks.len() {
-                        let text = line.splitn(3, ' ').nth(2).unwrap_or("").trim().to_string();
-                        tracks[n - 1].note = Some(text.clone());
-                        println!("  note on {}: {text}", tracks[n - 1].label);
-                        save_session(&tracks, &phrase, model);
-                    } else {
-                        eprintln!("  no track {n}");
-                    }
-                }
-            }
-
-            "winner" if parts.len() >= 2 => {
-                if let Ok(n) = parts[1].parse::<usize>() {
-                    if n >= 1 && n <= tracks.len() {
-                        for t in tracks.iter_mut() {
-                            t.winner = false;
-                        }
-                        tracks[n - 1].winner = true;
-                        println!(
-                            "  ✪  winner: {} — session saved to {}",
-                            tracks[n - 1].label,
-                            MixerSession::path().display()
-                        );
-                        save_session(&tracks, &phrase, model);
-                        mixer_print_tracks(&tracks);
-                    } else {
-                        eprintln!("  no track {n}");
-                    }
-                }
-            }
-
-            "save" => {
-                save_session(&tracks, &phrase, model);
-                println!("  saved → {}", MixerSession::path().display());
-            }
-
-            "ai" => match MixerSession::load() {
-                None => eprintln!("  no session file found"),
-                Some(sess) if sess.ai_suggestions.is_empty() => {
-                    println!("  no AI suggestions in session.  Run /tts mix suggest in pi.");
-                }
-                Some(sess) => {
-                    let mut added = 0usize;
-                    for sug in &sess.ai_suggestions {
-                        if tracks.iter().any(|t| t.label == sug.label) {
-                            continue;
-                        }
-                        let path = std::env::temp_dir()
-                            .join(format!("fonictl_mix_{}.wav", sug.label.replace(' ', "_")));
-                        tracks.push(Track {
-                            label: sug.label.clone(),
-                            desc: format!("AI: {}", sug.rationale),
-                            path,
-                            opts: sug.opts.clone(),
-                            rating: None,
-                            note: None,
-                            winner: false,
-                        });
-                        added += 1;
-                    }
-                    if added > 0 {
-                        println!(
-                            "  added {added} AI suggestion(s) — render them with: render NAME"
-                        );
-                        mixer_print_tracks(&tracks);
-                    } else {
-                        println!("  all AI suggestions already present");
-                    }
-                }
-            },
-
-            "drop" if parts.len() >= 2 => {
-                if let Ok(n) = parts[1].parse::<usize>() {
-                    if n >= 1 && n <= tracks.len() {
-                        let removed = tracks.remove(n - 1);
-                        println!("  dropped track {n}: {}", removed.label);
-                        mixer_print_tracks(&tracks);
-                    } else {
-                        eprintln!("  track {n} not found");
-                    }
-                }
-            }
-
-            "phrase" if parts.len() >= 2 => {
-                let new_phrase: String = line["phrase".len()..].trim().to_string();
-                if !new_phrase.is_empty() {
-                    phrase = new_phrase;
-                    for t in tracks.iter_mut() {
-                        if t.path.exists() {
-                            std::fs::remove_file(&t.path).ok();
-                        }
-                    }
-                    println!("  phrase → «{phrase}»  (tracks cleared — re-render to listen)");
-                }
-            }
-
-            "analyse" if parts.len() >= 2 => {
-                if let Ok(n) = parts[1].parse::<usize>() {
-                    if n >= 1 && n <= tracks.len() && tracks[n - 1].path.exists() {
-                        cmd_analyse(&tracks[n - 1].path, None);
-                    } else {
-                        eprintln!("  track {n} not rendered yet");
-                    }
-                }
-            }
-
-            "cmp" if parts.len() >= 3 => {
-                let ref_path =
-                    std::path::PathBuf::from("baseline/stalker/wav/sidorovich/trader1a.wav");
-                let resolve = |s: &str| -> Option<std::path::PathBuf> {
-                    if s == "ref" {
-                        return if ref_path.exists() {
-                            Some(ref_path.clone())
-                        } else {
-                            None
-                        };
-                    }
-                    s.parse::<usize>().ok().and_then(|n| {
-                        if n >= 1 && n <= tracks.len() && tracks[n - 1].path.exists() {
-                            Some(tracks[n - 1].path.clone())
-                        } else {
-                            None
-                        }
-                    })
-                };
-                match (resolve(parts[1]), resolve(parts[2])) {
-                    (Some(a), Some(b)) => {
-                        println!("  ▶ A: {}", parts[1]);
-                        play_wav(&a);
-                        println!("  ▶ B: {}", parts[2]);
-                        play_wav(&b);
-                    }
-                    _ => eprintln!(
-                        "  invalid track(s) — use numbers 1-{} or 'ref'",
-                        tracks.len()
-                    ),
-                }
-            }
-
-            "r" => {
-                if let Some(n) = last_played {
-                    if tracks[n].path.exists() {
-                        play_wav(&tracks[n].path);
-                    }
-                } else {
-                    eprintln!("  nothing played yet");
-                }
-            }
-
-            n_str => {
-                if let Ok(n) = n_str.parse::<usize>() {
-                    if n >= 1 && n <= tracks.len() {
-                        let path = tracks[n - 1].path.clone();
-                        if path.exists() {
-                            println!(
-                                "  ▶  [{}] {} — {}",
-                                n,
-                                tracks[n - 1].label,
-                                tracks[n - 1].desc
-                            );
-                            play_wav(&path);
-                            last_played = Some(n - 1);
-                        } else {
-                            eprintln!(
-                                "  track {n} not rendered. Run: render {}",
-                                tracks[n - 1].label
-                            );
-                        }
-                    } else {
-                        eprintln!("  no track {n}");
-                    }
-                } else {
-                    eprintln!("  unknown command: {cmd}  (type 'help')");
-                }
-            }
+            pb.finish_and_clear();
         }
     }
-    save_session(&tracks, &phrase, model);
-    println!("\n  session saved → {}", MixerSession::path().display());
-    println!("  bye.");
+
+    tui::run(&rt, server, text, model, tracks);
 }
 
 fn save_session(tracks: &[Track], phrase: &str, model: &str) {
