@@ -176,7 +176,7 @@ pub async fn synthesize(
         let guard = state.0.current_model.read().await;
         req.model
             .clone()
-            .unwrap_or_else(|| guard.as_deref().unwrap_or("bandit").to_string())
+            .unwrap_or_else(|| guard.as_deref().unwrap_or("sidorovich").to_string())
     };
 
     let key = cache_key(&req, &model_name);

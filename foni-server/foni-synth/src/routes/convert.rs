@@ -482,7 +482,7 @@ pub async fn convert(
         let guard = state.0.current_model.read().await;
         req.model
             .clone()
-            .unwrap_or_else(|| guard.as_deref().unwrap_or("bandit").to_string())
+            .unwrap_or_else(|| guard.as_deref().unwrap_or("sidorovich").to_string())
     };
 
     // Ensure sessions are loaded for this model (no-op if already in pool).
