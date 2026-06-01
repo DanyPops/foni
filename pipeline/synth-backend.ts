@@ -19,12 +19,10 @@ export interface SynthBackendOpts {
   url:      string;
   /** RVC model name.  Default: "bandit" */
   model?:   string;
-  /** Apply per-sentence SSML prosody variation (rate/pitch/range). Default: true */
+  /** Apply per-sentence SSML prosody variation (rate/range). Default: true */
   prosody?: boolean;
-  /** Global rate override % — ignored when prosody=true. */
+  /** Global rate override %. */
   ratePct?: number;
-  /** Global pitch override (espeak 0-99 scale, 50=normal). */
-  pitchPt?: number;
   /** Global range override: "x-high" | "high" | "medium" | "low". */
   range?:   string;
 }
@@ -56,7 +54,6 @@ export class SynthBackend implements TTSBackend {
     };
 
     if (this.opts.ratePct !== undefined) body["rate_pct"] = this.opts.ratePct;
-    if (this.opts.pitchPt !== undefined) body["pitch_pt"] = this.opts.pitchPt;
     if (this.opts.range   !== undefined) body["range"]    = this.opts.range;
 
     log.debug("SynthBackend", "POST /synthesize", {

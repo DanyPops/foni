@@ -19,9 +19,12 @@ import {
   IdentityTranslator, LibreTranslateTranslator, PipelineTranslator,
   makeTranslateMiddleware, makeMatMiddleware, makeInterjectMiddleware, makeITGlossaryMiddleware,
 } from "./pipeline/translators.ts";
-import { BIAS_WORDS, effectiveWeights } from "./core/emotion.ts";
+import { BIAS_WORDS, effectiveWeights, currentIntensity } from "./core/emotion.ts";
+import type { EmotionState, Emotion } from "./core/emotion.ts";
 import { IdentityProcessor, RVCProcessor, SmoothingProcessor } from "./pipeline/processors.ts";
 import { SynthBackend }      from "./pipeline/synth-backend.ts";
+import type { SynthBackendOpts } from "./pipeline/synth-backend.ts";
+import { syncBreaksFrom }    from "./pipeline/prosody.ts";
 import { BreathProcessor }   from "./pipeline/breath-injector.ts";
 import { SpeakFacade }       from "./pipeline/speak-facade.ts";
 import { SystemPlayer }      from "./pipeline/player.ts";
@@ -56,18 +59,46 @@ const translatorFactory: TranslatorFactory = (cfg, emotion) => {
   return new PipelineTranslator(stack, cfg.outputLang);
 };
 
-const facadeFactory: FacadeFactory = async (cfg, translator) => {
+const RATE_NEUTRAL  = 100;
+
+function lerpRound(a: number, b: number, t: number): number {
+  return Math.round(a + t * (b - a));
+}
+
+/** Compute espeak prosody overrides from the current emotion state. */
+function emotionProsody(
+  emotion: Emotion,
+  intensity: number,
+): { ratePct: number; range: string } {
+  switch (emotion) {
+    case "angry":      return { ratePct: lerpRound(RATE_NEUTRAL, 90,  intensity), range: "x-high" };
+    case "frustrated": return { ratePct: lerpRound(RATE_NEUTRAL, 97,  intensity), range: "high"   };
+    case "sarcastic":  return { ratePct: lerpRound(RATE_NEUTRAL, 95,  intensity), range: "x-high" };
+    case "excited":    return { ratePct: lerpRound(RATE_NEUTRAL, 107, intensity), range: "high"   };
+    case "cute":       return { ratePct: lerpRound(RATE_NEUTRAL, 104, intensity), range: "medium"  };
+    default:           return { ratePct: RATE_NEUTRAL, range: "medium" };
+  }
+}
+
+/** Build SynthBackendOpts, blending emotion state into prosody overrides. */
+function synthBackendOpts(cfg: typeof DEFAULT_CONFIG, emotion: EmotionState): SynthBackendOpts {
+  const base: SynthBackendOpts = {
+    url:     cfg.rvcUrl,
+    model:   cfg.rvcModel,
+    prosody: cfg.prosodyEnabled && cfg.outputLang === "ru",
+  };
+  const intensity = currentIntensity(emotion);
+  if (intensity < 0.3 || emotion.emotion === "neutral") return base;
+  return { ...base, ...emotionProsody(emotion.emotion, intensity) };
+}
+
+const facadeFactory: FacadeFactory = async (cfg, translator, emotion) => {
   // Fast path: when foni-synth is up and RVC is enabled, route all synthesis
   // through a single POST /synthesize — SSML + espeak + RVC + DSP in Rust.
   if (cfg.rvcEnabled && cfg.rvcModel) {
-    const synth = new SynthBackend({
-      url:     cfg.rvcUrl,
-      model:   cfg.rvcModel,
-      prosody: cfg.prosodyEnabled && cfg.outputLang === "ru",
-    });
+    const synth = new SynthBackend(synthBackendOpts(cfg, emotion));
     if (await synth.isAvailable()) {
-      // processorFactory returns IdentityProcessor when SynthBackend is active
-      // (DSP already applied inside /synthesize).
+      syncBreaksFrom(cfg.rvcUrl); // fire-and-forget: keeps prosody.ts in sync with Rust
       return new SpeakFacade(translator, synth, new IdentityProcessor(), new SystemPlayer(), {
         voice: cfg.voice, speed: cfg.speed,
       });

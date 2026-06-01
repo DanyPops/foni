@@ -72,7 +72,7 @@ export const glossaryTranslatorFactory: TranslatorFactory = (cfg, _emotion) =>
  * Used by engine-level tests that need real synthesis without RVC overhead.
  */
 export function makeEspeakFactory(player: Player): FacadeFactory {
-  return async (_cfg, translator) => {
+  return async (_cfg, translator, _emotion) => {
     const backend = new EspeakBackend(Env.VOICE);
     if (!await backend.isAvailable()) return null;
     return new SpeakFacade(translator, backend, new NullProcessor(), player, {
@@ -86,7 +86,7 @@ export function makeEspeakFactory(player: Player): FacadeFactory {
  * Requires foni-synth reachable at `synthUrl`.
  */
 export function makeRvcFactory(player: Player, synthUrl: string): FacadeFactory {
-  return async (_cfg, translator) => {
+  return async (_cfg, translator, _emotion) => {
     const backend   = new EspeakBackend(Env.VOICE);
     if (!await backend.isAvailable()) return null;
     const processor = new SmoothingProcessor(new RVCProcessor(synthUrl), {}, synthUrl);

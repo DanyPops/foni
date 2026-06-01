@@ -19,17 +19,40 @@
 
 // ─── Break durations (ms) ────────────────────────────────────────────────────
 
-/** Silence inserted for each punctuation type. */
-const BREAKS = {
-  comma:       150,   // ,  — brief clause pause
-  semicolon:   220,   // ;  — heavier clause pause
-  dash:        200,   // —  — parenthetical or clause boundary
-  colon:       180,   // :  — list or elaboration
-  ellipsis:    420,   // …  — trailing-off, dramatic pause
-  question:    350,   // ?  — sentence-final (rising intonation handled separately)
-  exclamation: 300,   // !  — emphatic end
-  period:      320,   // .  — neutral sentence end
+/**
+ * Silence inserted for each punctuation type.
+ * Default values mirror Rust ssml.rs constants (authoritative source).
+ * Refreshed at runtime from GET /ssml-params when foni-synth is available.
+ */
+const BREAKS_DEFAULT = {
+  comma:       150,
+  semicolon:   220,
+  dash:        200,
+  colon:       180,
+  ellipsis:    420,
+  question:    350,
+  exclamation: 300,
+  period:      320,
 } as const;
+
+type BreakMap = { -readonly [K in keyof typeof BREAKS_DEFAULT]: number };
+
+let BREAKS: BreakMap = { ...BREAKS_DEFAULT };
+
+/**
+ * Fetch break durations from the Rust server and update the in-memory map.
+ * Fire-and-forget — falls back to defaults if the server is unreachable.
+ */
+export async function syncBreaksFrom(url: string): Promise<void> {
+  try {
+    const r = await fetch(`${url}/ssml-params`, { signal: AbortSignal.timeout(2_000) });
+    if (!r.ok) return;
+    const data = await r.json() as Record<string, number>;
+    for (const key of Object.keys(BREAKS) as (keyof BreakMap)[]) {
+      if (typeof data[key] === "number") BREAKS[key] = data[key];
+    }
+  } catch { /* keep defaults */ }
+}
 
 /** Russian coordinating conjunctions that often precede independent clauses. */
 const CLAUSE_CONJUNCTIONS = /(?<=[,;—]\s*)(?:и|а|но|да(?!\s+не)|или|либо|зато|однако|притом|причём)\b/gu;
@@ -39,8 +62,6 @@ const CLAUSE_CONJUNCTIONS = /(?<=[,;—]\s*)(?:и|а|но|да(?!\s+не)|или
 /** Rate variation ±X% from baseline per sentence. Seeded from sentence index. */
 const RATE_JITTER_PCT = 6;
 
-/** Pitch shift range per sentence (relative to baseline). */
-const PITCH_JITTER_PT = 3;   // in espeak pitch units (0-99 scale, 50 = normal)
 
 /** Rate reduction for phrase-final clause (last clause before sentence end). */
 const PHRASE_FINAL_RATE_REDUCTION_PCT = 8;
@@ -141,23 +162,17 @@ function applyPhraseFinalSlowing(text: string): string {
 
 /**
  * Build the <prosody> wrapper for a complete sentence.
- * Varies rate and pitch deterministically from the sentence content.
+ * Varies rate and range deterministically from the sentence content.
+ * pitch= is intentionally omitted: bare integer pitch= values in espeak SSML
+ * shift the fundamental frequency into the wrong range (~3× natural F0).
+ * range= is sufficient for expressiveness; absolute pitch is set by espeak voice choice.
  */
-function sentenceProsody(sentence: Sentence, idx: number): { rate: number; pitch: number; range: string } {
+function sentenceProsody(sentence: Sentence, idx: number): { rate: number; range: string } {
   const rng = hashStr(sentence.text + idx);
-
-  // Rate: ±RATE_JITTER_PCT from baseline
   const rate = Math.round(100 + (rng - 0.5) * 2 * RATE_JITTER_PCT);
-
-  // Pitch and range: questions get high range and slight pitch lift
-  if (sentence.terminator === "?") {
-    return { rate, pitch: 53 + Math.round(rng * PITCH_JITTER_PT), range: "high" };
-  }
-  if (sentence.terminator === "!") {
-    return { rate: rate + 3, pitch: 52 + Math.round(rng * PITCH_JITTER_PT), range: "x-high" };
-  }
-  // Statements: slight declination (pitch slightly below centre)
-  return { rate, pitch: 48 - Math.round(rng * PITCH_JITTER_PT), range: "medium" };
+  if (sentence.terminator === "?") return { rate, range: "high" };
+  if (sentence.terminator === "!") return { rate: rate + 3, range: "x-high" };
+  return { rate, range: "medium" };
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -203,8 +218,8 @@ export function annotateProsody(text: string, opts: ProsodyOptions = {}): string
 
     // 3. Per-sentence prosody wrapper
     if (prosodyVariation) {
-      const { rate, pitch, range } = sentenceProsody(s, i);
-      body = `<prosody rate="${rate}%" pitch="${pitch}" range="${range}">${body}</prosody>`;
+      const { rate, range } = sentenceProsody(s, i);
+      body = `<prosody rate="${rate}%" range="${range}">${body}</prosody>`;
     }
 
     // 4. Sentence-final break (except last sentence)

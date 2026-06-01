@@ -38,7 +38,7 @@ export type TranslatorFactory = (config: FoniConfig, emotion: EmotionState) => T
  * Constructs the full audio pipeline facade.
  * Called by FoniEngine.buildFacade(); encapsulates backend + processor + player.
  */
-export type FacadeFactory = (config: FoniConfig, translator: Translator) => Promise<FacadePort | null>;
+export type FacadeFactory = (config: FoniConfig, translator: Translator, emotion: EmotionState) => Promise<FacadePort | null>;
 
 /**
  * Reconstructs the audio processor chain (RVC, smoothing, breath).

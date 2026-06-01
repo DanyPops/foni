@@ -36,9 +36,10 @@ describe("annotateProsody", () => {
     expect(out).toContain(`<break time="420ms"/>`);
   });
 
-  it("wraps sentences in <prosody> with rate and pitch", () => {
+  it("wraps sentences in <prosody> with rate and range (no pitch)", () => {
     const out = annotateProsody("Хорошо. Понял.");
-    expect(out).toMatch(/<prosody rate="\d+%" pitch="\d+" range="\w+">/);
+    expect(out).toMatch(/<prosody rate="\d+%" range="\w+">/);
+    expect(out).not.toMatch(/pitch=/);
   });
 
   it("questions get range=high", () => {

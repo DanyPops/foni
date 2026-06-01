@@ -1,5 +1,5 @@
 // fonictl — foni-synth command-line factory.
-// Commands: synth | studio | samples | status | play | analyse
+// Commands: synth | studio | samples | listen | status | play | analyse
 
 use std::{path::PathBuf, process::Command};
 
@@ -85,6 +85,22 @@ enum Cmd {
 
     /// Print server health and loaded model
     Status,
+
+    /// Render pipeline stages or DSP variants and play interactively
+    Listen {
+        /// Phrase to synthesize
+        #[arg(default_value = "Подойди-ка, надо тебе ситуацию прояснить.")]
+        text: String,
+        /// Model name
+        #[arg(short, long, default_value = "bandit")]
+        model: String,
+        /// Compare DSP variants (baseline/warm/punchy/bright) instead of pipeline stages
+        #[arg(long)]
+        dsp: bool,
+        /// Play reference original before each stage (needs baseline/stalker/wav/sidorovich/trader1a.wav)
+        #[arg(long)]
+        vs: bool,
+    },
 
     /// Play a WAV file via system player
     Play { file: PathBuf },
@@ -606,6 +622,137 @@ fn cmd_studio(server: &str, text: &str, model: &str, from: Option<&std::path::Pa
     }
 }
 
+fn cmd_listen(server: &str, text: &str, model: &str, dsp_variants: bool, play_ref: bool) {
+    use std::io::{BufRead, Write};
+
+    let ref_path = std::path::PathBuf::from("baseline/stalker/wav/sidorovich/trader1a.wav");
+
+    // Stages: (label, prosody, dsp)
+    let stages: &[(&str, bool, bool)] = if dsp_variants {
+        &[
+            ("baseline", true, true),
+            ("warm", true, true),
+            ("punchy", true, true),
+            ("bright", true, true),
+        ]
+    } else {
+        &[
+            ("1 espeak raw", false, false),
+            ("2 rvc", false, false),
+            ("3 rvc+dsp", false, true),
+            ("4 rvc+dsp+prosody", true, true),
+        ]
+    };
+
+    // For pipeline mode, espeak stage is special (no RVC).
+    println!("\n⚘  Listen — rendering {} stages", stages.len());
+    println!("   Phrase: «{text}»\n");
+
+    // Pre-render all stages.
+    let pb = ProgressBar::new(stages.len() as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{bar:30}] {pos}/{len}  {msg}")
+            .unwrap(),
+    );
+
+    let maquettes: Vec<Maquette> = default_maquettes();
+
+    struct Stage {
+        label: String,
+        path: std::path::PathBuf,
+    }
+    let mut rendered: Vec<Stage> = Vec::new();
+
+    for (i, (label, prosody, dsp)) in stages.iter().enumerate() {
+        pb.set_message(label.to_string());
+
+        let result: Result<Vec<u8>, String> = if i == 0 && !dsp_variants {
+            // Stage 0: raw espeak only, bypass RVC entirely.
+            let tmp = std::env::temp_dir().join("fonictl_espeak_raw.wav");
+            let status = Command::new("espeak-ng")
+                .args(["-v", "ru", "-s", "150", "-w"])
+                .arg(&tmp)
+                .arg(text)
+                .status();
+            match status {
+                Ok(s) if s.success() => std::fs::read(&tmp).map_err(|e| e.to_string()),
+                Ok(_) => Err("espeak-ng failed".into()),
+                Err(e) => Err(e.to_string()),
+            }
+        } else {
+            let opts = if dsp_variants {
+                maquettes.get(i).map(|m| m.opts.clone()).unwrap_or_default()
+            } else if *dsp {
+                default_maquettes()[0].opts.clone()
+            } else {
+                serde_json::json!({})
+            };
+            synth_request(server, text, model, "ru", 150, *dsp, opts).map_err(|e| e)
+        };
+
+        match result {
+            Ok(bytes) => {
+                let path = std::env::temp_dir().join(format!("fonictl_listen_{i}.wav"));
+                std::fs::write(&path, &bytes).unwrap();
+                rendered.push(Stage {
+                    label: label.to_string(),
+                    path,
+                });
+                pb.inc(1);
+            }
+            Err(e) => {
+                pb.println(format!("  ❌ {label}: {e}"));
+                pb.inc(1);
+            }
+        }
+    }
+    pb.finish_and_clear();
+
+    if rendered.is_empty() {
+        println!("  No stages rendered.");
+        return;
+    }
+
+    println!("  ✓  All stages ready.  Controls: Enter=next  r=replay  q=quit\n");
+
+    let stdin = std::io::stdin();
+    let mut i = 0usize;
+    loop {
+        if i >= rendered.len() {
+            break;
+        }
+        let stage = &rendered[i];
+
+        println!("▶  [{}] {}", i + 1, stage.label);
+
+        if play_ref && ref_path.exists() {
+            println!("   ▶ reference (Sidorovich original)");
+            play_wav(&ref_path);
+        }
+
+        play_wav(&stage.path);
+
+        print!("   [Enter] next  [r] replay  [p] prev  [q] quit  > ");
+        std::io::stdout().flush().ok();
+
+        let mut line = String::new();
+        stdin.lock().read_line(&mut line).ok();
+        match line.trim() {
+            "q" | "quit" => break,
+            "r" | "replay" => {} // replay same index
+            "p" | "prev" => {
+                i = i.saturating_sub(1);
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    println!("\n  done.");
+}
+
 fn cmd_samples(server: &str, out_dir: &PathBuf, model: &str) {
     let phrases = vec![
         ("01_trader1a", "Подойди-ка, надо тебе ситуацию прояснить."),
@@ -786,6 +933,14 @@ fn main() {
         }
         Cmd::Analyse { file, vs } => {
             cmd_analyse(&file, vs.as_ref());
+        }
+        Cmd::Listen {
+            text,
+            model,
+            dsp,
+            vs,
+        } => {
+            cmd_listen(server, &text, &model, dsp, vs);
         }
     }
 }
