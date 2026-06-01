@@ -134,18 +134,17 @@ enum Cmd {
     },
 
     /// Batch A/B/C/N tuning — run all presets through the compare pipeline, rank by gap
+    /// Play maquette presets sequentially, hear reference then synthetic, rate each
     Tune {
-        /// Directory of studio WAV files
-        studio: PathBuf,
-        /// JSON file with named presets [{"name":"", "opts":{...}}]
+        /// Phrase to synthesize for each preset
+        #[arg(default_value = "Подойди-ка, надо тебе ситуацию прояснить.")]
+        text: String,
+        /// JSON file with named presets
         #[arg(long, default_value = "foni-maquettes.json")]
         presets: PathBuf,
-        /// Only process WAVs shorter than this (seconds)
-        #[arg(long, default_value_t = 8.0)]
-        max_dur: f32,
-        /// Reuse existing Whisper transcriptions (skip re-transcribing)
+        /// Reference WAV to play before each preset (A/B)
         #[arg(long)]
-        skip_transcribe: bool,
+        reference: Option<PathBuf>,
         #[arg(short, long, default_value = "bandit")]
         model: String,
     },
@@ -1370,7 +1369,14 @@ fn cmd_mix(
         }
     }
 
-    tui::run(&rt, server, text, model, tracks);
+    tui::run(
+        &rt,
+        server,
+        text,
+        model,
+        tracks,
+        reference.map(|p| p.to_path_buf()),
+    );
 }
 
 fn save_session(tracks: &[Track], phrase: &str, model: &str) {
@@ -1738,6 +1744,159 @@ fn cmd_compare(
     println!("  Synthetic WAVs: {}/", out_dir.display());
 }
 
+fn cmd_tune(
+    server: &str,
+    text: &str,
+    presets_path: &PathBuf,
+    reference: Option<&std::path::Path>,
+    model: &str,
+) {
+    use std::io::{BufRead, Write};
+
+    let maquettes = load_maquettes(Some(presets_path));
+    if maquettes.is_empty() {
+        eprintln!("No presets in {}", presets_path.display());
+        return;
+    }
+
+    println!("\n▶  Tune — {} presets", maquettes.len());
+    println!("   Phrase: «{text}»");
+    if let Some(r) = reference {
+        println!("   Reference: {}", r.display());
+    }
+    println!("   Controls: 1–5 rate  n next  r replay  q quit\n");
+
+    // Synthesize RVC base once, apply each preset via /process.
+    print!("  Synthesizing RVC base… ");
+    std::io::stdout().flush().ok();
+    let base: Vec<u8> =
+        match synth_request(server, text, model, "ru", 150, false, serde_json::json!({})) {
+            Ok(b) => {
+                println!("ok ({} kB)", b.len() / 1024);
+                b
+            }
+            Err(e) => {
+                eprintln!("\n  ❌ {e}");
+                return;
+            }
+        };
+
+    let mut results: Vec<(String, u8, String)> = Vec::new(); // (name, rating, note)
+    let stdin = std::io::stdin();
+    let mut i = 0usize;
+
+    while i < maquettes.len() {
+        let m = &maquettes[i];
+        let wav_path =
+            std::env::temp_dir().join(format!("fonictl_tune_{}.wav", m.name.replace(' ', "_")));
+
+        // Render preset.
+        if !wav_path.exists() {
+            print!("  Rendering «{}»… ", m.name);
+            std::io::stdout().flush().ok();
+            match process_request(server, &base, m.opts.clone()) {
+                Ok(wav) => {
+                    std::fs::write(&wav_path, &wav).unwrap();
+                    println!("ok");
+                }
+                Err(e) => {
+                    println!("\n  ❌ {e}");
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+
+        println!(
+            "\n[{}/{}] «{}»  —  {}",
+            i + 1,
+            maquettes.len(),
+            m.name,
+            m.describe()
+        );
+
+        // Play reference first if provided.
+        if let Some(r) = reference {
+            println!("  ▶ reference");
+            play_wav(r);
+        }
+
+        println!("  ▶ synthetic");
+        play_wav(&wav_path);
+
+        // Ask for rating.
+        loop {
+            print!("  Rating 1–5 (n=next  r=replay  q=quit)  > ");
+            std::io::stdout().flush().ok();
+            let mut line = String::new();
+            stdin.lock().read_line(&mut line).ok();
+            let line = line.trim();
+
+            match line {
+                "q" | "quit" => {
+                    print_tune_results(&results);
+                    return;
+                }
+                "n" | "next" | "" => {
+                    i += 1;
+                    break;
+                }
+                "r" | "replay" => {
+                    if let Some(r) = reference {
+                        play_wav(r);
+                    }
+                    play_wav(&wav_path);
+                }
+                s if s.len() == 1
+                    && s.chars()
+                        .next()
+                        .map(|c| c.is_ascii_digit())
+                        .unwrap_or(false) =>
+                {
+                    let score: u8 = s.parse().unwrap_or(0);
+                    if (1..=5).contains(&score) {
+                        print!("  Note (Enter to skip): ");
+                        std::io::stdout().flush().ok();
+                        let mut note = String::new();
+                        stdin.lock().read_line(&mut note).ok();
+                        let note = note.trim().to_string();
+                        results.push((m.name.clone(), score, note));
+                        println!("  ★{}/5 saved", score);
+                        i += 1;
+                        break;
+                    }
+                }
+                _ => println!("  ? type 1–5, r, n, or q"),
+            }
+        }
+    }
+
+    print_tune_results(&results);
+}
+
+fn print_tune_results(results: &[(String, u8, String)]) {
+    if results.is_empty() {
+        return;
+    }
+    let mut sorted = results.to_vec();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    println!("\n╬══ Results ══════════════════════════════════════════");
+    for (name, score, note) in &sorted {
+        let stars = format!(
+            "{}{}",
+            "★".repeat(*score as usize),
+            "☆".repeat(5 - *score as usize)
+        );
+        let note_str = if note.is_empty() {
+            String::new()
+        } else {
+            format!(" — {note}")
+        };
+        println!("  {stars}  {name}{note_str}");
+    }
+    println!("╚════════════════════════════════════════════");
+}
+
 fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
     use foni_analyse::{
         analyse, analyse_fast, compute_gap, decode_wav, fast_f0_stats, format_gap_table,
@@ -1949,9 +2108,13 @@ fn main() {
         } => {
             cmd_compare(server, &studio, &out_dir, max_dur, &model, skip_transcribe);
         }
-        Cmd::Tune { .. } => {
-            eprintln!("tune not yet implemented — see FON-TSK-109");
-            std::process::exit(1);
+        Cmd::Tune {
+            text,
+            presets,
+            reference,
+            model,
+        } => {
+            cmd_tune(server, &text, &presets, reference.as_deref(), &model);
         }
         Cmd::Corpus { dir, vs } => {
             cmd_corpus(&dir, vs.as_ref());

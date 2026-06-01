@@ -52,19 +52,32 @@ fn handle_tracks(app: &mut MixerApp, key: KeyEvent) {
             app.selected = app.selected.saturating_sub(1);
         }
 
-        // Play
+        // Play — optionally preceded by reference
         KeyCode::Enter => {
             if let Some(t) = app.tracks.get(app.selected) {
                 if t.path.exists() {
                     let path = t.path.clone();
                     app.last_played = Some(app.selected);
-                    spawn_play(path);
+                    // Play reference first if set, then the track
+                    if let Some(ref_path) = app.reference.clone() {
+                        let track_path = path.clone();
+                        std::thread::spawn(move || {
+                            spawn_play(ref_path);
+                            // Brief gap between reference and track
+                            std::thread::sleep(std::time::Duration::from_millis(300));
+                            spawn_play(track_path);
+                        });
+                    } else {
+                        spawn_play(path);
+                    }
                 } else {
                     app.status_msg = Some("not rendered yet — press n to render".into());
                 }
             }
         }
 
+        // Replay (plays track only, no reference)
+        // Press Enter again after listening to replay without reference
         // Replay
         KeyCode::Char('r') => {
             if let Some(idx) = app.last_played {
