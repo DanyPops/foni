@@ -25,3 +25,5 @@ serde_json   = { workspace = true }
 reqwest      = { workspace = true }
 tokio        = { workspace = true }
 thiserror    = { workspace = true }
+ratatui      = "0.29"
+crossterm    = { version = "0.28", features = ["event-stream"] }
