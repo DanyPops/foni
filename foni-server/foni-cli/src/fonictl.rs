@@ -1665,25 +1665,33 @@ fn cmd_compare(
         centroid: f64,
         f0: f64,
         f0_std: f64,
+        visqol_mos: Option<f32>,
     }
     let studio_rows = Mutex::new(Vec::<Row>::new());
     let synth_rows = Mutex::new(Vec::<Row>::new());
 
     pairs.par_iter().for_each(|(s_path, y_path)| {
-        let analyse = |p: &PathBuf| -> Option<Row> {
+        let analyse = |p: &PathBuf| -> Option<(Row, Vec<f32>, u32)> {
             let bytes = std::fs::read(p).ok()?;
             let wav = decode_wav(&bytes).ok()?;
             let a = analyse_fast(&wav.samples, wav.sample_rate);
             let (f0, f0s, _) = foni_analyse::fast_f0_stats(&wav.samples, wav.sample_rate);
-            Some(Row {
+            let row = Row {
                 rms: a.loudness.rms_db as f64,
                 crest: a.loudness.crest_factor as f64,
                 centroid: a.spectral.centroid_hz as f64,
                 f0: f0 as f64,
                 f0_std: f0s as f64,
-            })
+                visqol_mos: None,
+            };
+            Some((row, wav.samples, wav.sample_rate))
         };
-        if let (Some(sr), Some(sy)) = (analyse(s_path), analyse(y_path)) {
+        if let (Some((mut sr, _, _)), Some((sy, _, _))) = (analyse(s_path), analyse(y_path)) {
+            let mos = foni_analyse::visqol::score(
+                s_path.to_str().unwrap_or(""),
+                y_path.to_str().unwrap_or(""),
+            );
+            sr.visqol_mos = mos;
             studio_rows.lock().unwrap().push(sr);
             synth_rows.lock().unwrap().push(sy);
         }
@@ -1738,6 +1746,24 @@ fn cmd_compare(
         println!(
             "║ {:<24}  {:>10.1}  {:>10.1}  {:>6.1}%  {} {}",
             label, sv, yv, gap, verdict, target
+        );
+    }
+    // ViSQOL MOS-LQO mean across all pairs
+    let mos_scores: Vec<f32> = sr.iter().filter_map(|r| r.visqol_mos).collect();
+    if !mos_scores.is_empty() {
+        let mean_mos = mos_scores.iter().sum::<f32>() / mos_scores.len() as f32;
+        let verdict = if mean_mos > 4.0 {
+            "✅"
+        } else if mean_mos > 3.5 {
+            "🟡"
+        } else if mean_mos > 3.0 {
+            "🟠"
+        } else {
+            "🔴"
+        };
+        println!(
+            "║ {:<24}  {:>10}  {:>10.2}  {:>7}  {}",
+            "ViSQOL MOS-LQO", "5.0", mean_mos, "", verdict
         );
     }
     println!("╚═════════════════════════════════════════════════════════════════════════════");
