@@ -1,13 +1,13 @@
 // Rule-based plain-text → SSML prosody annotator for Russian espeak-ng.
 // Ports pipeline/prosody.ts: deterministic per-sentence rate/pitch/range variation.
-const BREAK_COMMA_MS: u32 = 150;
-const BREAK_SEMICOLON_MS: u32 = 220;
-const BREAK_COLON_MS: u32 = 200;
-const BREAK_DASH_MS: u32 = 180;
-const BREAK_ELLIPSIS_MS: u32 = 420;
-const BREAK_PERIOD_MS: u32 = 320;
-const BREAK_EXCLAIM_MS: u32 = 280;
-const BREAK_QUESTION_MS: u32 = 300;
+pub const BREAK_COMMA_MS: u32 = 150;
+pub const BREAK_SEMICOLON_MS: u32 = 220;
+pub const BREAK_COLON_MS: u32 = 180;
+pub const BREAK_DASH_MS: u32 = 200;
+pub const BREAK_ELLIPSIS_MS: u32 = 420;
+pub const BREAK_PERIOD_MS: u32 = 320;
+pub const BREAK_EXCLAIM_MS: u32 = 300;
+pub const BREAK_QUESTION_MS: u32 = 350;
 
 fn brk(ms: u32) -> String {
     format!(r#"<break time="{}ms"/>"#, ms)
@@ -22,16 +22,17 @@ pub fn annotate(text: &str) -> String {
 
 // ─── Prosody variation ───────────────────────────────────────────────────────
 
-/// Per-sentence rate/pitch/range — matches pipeline/prosody.ts sentenceProsody().
+/// Per-sentence rate/range — matches pipeline/prosody.ts sentenceProsody().
+/// pitch is omitted: bare integer pitch= values in espeak SSML shift the
+/// fundamental frequency into the wrong range (~3× natural). range= is
+/// sufficient for expressiveness; absolute pitch is set by espeak voice choice.
 #[allow(dead_code)]
 pub struct SentenceProsody {
     pub rate: i32,           // % of baseline (100 = normal)
-    pub pitch: i32,          // espeak pitch units (50 = normal, 0-99 scale)
     pub range: &'static str, // "x-high" | "high" | "medium"
 }
 
 const RATE_JITTER_PCT: i32 = 6;
-const PITCH_JITTER_PT: i32 = 3;
 const PHRASE_FINAL_REDUCTION: i32 = 8;
 
 /// FNV-1a hash → 0.0..1.0. Same algorithm as hashStr() in prosody.ts.
@@ -56,19 +57,16 @@ pub fn sentence_prosody(sentence: &str) -> SentenceProsody {
     if is_q {
         SentenceProsody {
             rate,
-            pitch: 53 + (rng * PITCH_JITTER_PT as f64).round() as i32,
             range: "high",
         }
     } else if is_ex {
         SentenceProsody {
             rate: rate + 3,
-            pitch: 52 + (rng * PITCH_JITTER_PT as f64).round() as i32,
             range: "x-high",
         }
     } else {
         SentenceProsody {
             rate,
-            pitch: 48 - (rng * PITCH_JITTER_PT as f64).round() as i32,
             range: "medium",
         }
     }
@@ -107,9 +105,8 @@ pub fn annotate_with_prosody(text: &str) -> String {
                 // Phrase-final slowing on the last part after the final comma
                 let slowed = apply_phrase_final_slowing(&inner);
                 body.push_str(&format!(
-                    r#"<prosody rate="{rate}%" pitch="{pitch}" range="{range}">{slowed}</prosody> "#,
-                    rate  = p.rate,
-                    pitch = p.pitch,
+                    r#"<prosody rate="{rate}%" range="{range}">{slowed}</prosody> "#,
+                    rate = p.rate,
                     range = p.range,
                 ));
             }
@@ -125,9 +122,8 @@ pub fn annotate_with_prosody(text: &str) -> String {
         let p = sentence_prosody(tail);
         let inner = annotate_punctuation(tail);
         body.push_str(&format!(
-            r#"<prosody rate="{rate}%" pitch="{pitch}" range="{range}">{inner}</prosody>"#,
+            r#"<prosody rate="{rate}%" range="{range}">{inner}</prosody>"#,
             rate = p.rate,
-            pitch = p.pitch,
             range = p.range,
         ));
     }

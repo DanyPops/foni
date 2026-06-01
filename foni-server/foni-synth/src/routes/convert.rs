@@ -142,7 +142,10 @@ pub(crate) fn audio_to_mel(audio: &[f32]) -> (Vec<f32>, usize) {
         fft.process(&mut buf);
         let mags: Vec<f32> = buf[..n_spec].iter().map(|c| c.norm()).collect();
         for m in 0..RMVPE_N_MELS {
-            out[m * n_frames + fi] = fb[m].iter().zip(&mags).map(|(&w, &x)| w * x).sum();
+            let mel: f32 = fb[m].iter().zip(&mags).map(|(&w, &x)| w * x).sum();
+            // RMVPE was trained on log-mel (log(clamp(mel, 1e-5))). Linear mel
+            // produces wrong-scale salience peaks → erratic F0 → parrot voice.
+            out[m * n_frames + fi] = mel.max(1e-5_f32).ln();
         }
     }
 
@@ -376,6 +379,63 @@ pub(crate) fn run_generator(
     Ok(audio_out)
 }
 
+/// 4th-order Butterworth highpass at 48 Hz (2 × 2nd-order biquads cascaded).
+/// Matches rvc_python pipeline.py: `signal.butter(N=5, Wn=48, btype="high", fs=16000)`.
+/// Removes DC and sub-bass before ContentVec and RMVPE.
+pub(crate) fn highpass_48hz(audio: &mut [f32]) {
+    use crate::dsp::filters::Biquad;
+    let mut s1 = Biquad::highpass(48.0, 16_000);
+    let mut s2 = Biquad::highpass(48.0, 16_000);
+    for x in audio.iter_mut() {
+        *x = s2.process_sample(s1.process_sample(*x));
+    }
+}
+
+/// Frame-level RMS envelope matching: scale `output` so its loudness tracks `input`.
+/// Matches rvc_python change_rms(data1, sr1, data2, sr2, rate=rms_mix_rate).
+/// rate=0.45 → output *= rms_in^0.55 * rms_out^(-0.55) per frame.
+pub(crate) fn apply_rms_mix(input_16k: &[f32], output: &mut [f32], output_sr: u32, rate: f32) {
+    let frame_in = 16_000_usize / 2; // 0.5 s frames at 16 kHz
+    let frame_out = output_sr as usize / 2; // 0.5 s frames at output SR
+
+    let rms = |s: &[f32], hop: usize| -> Vec<f32> {
+        let n = (s.len() + hop - 1) / hop;
+        (0..n)
+            .map(|i| {
+                let sl = &s[i * hop..((i + 1) * hop).min(s.len())];
+                (sl.iter().map(|x| x * x).sum::<f32>() / sl.len() as f32).sqrt()
+            })
+            .collect()
+    };
+
+    let rms_in = rms(input_16k, frame_in);
+    let rms_out = rms(output, frame_out);
+
+    let interp = |v: &[f32], target_len: usize| -> Vec<f32> {
+        if v.is_empty() {
+            return vec![1.0; target_len];
+        }
+        (0..target_len)
+            .map(|i| {
+                let src = i as f32 * (v.len() as f32 - 1.0) / (target_len as f32 - 1.0).max(1.0);
+                let lo = src.floor() as usize;
+                let hi = (lo + 1).min(v.len() - 1);
+                v[lo] + (src - lo as f32) * (v[hi] - v[lo])
+            })
+            .collect()
+    };
+
+    let n = output.len();
+    let ri = interp(&rms_in, n);
+    let ro = interp(&rms_out, n);
+
+    for (i, x) in output.iter_mut().enumerate() {
+        let env_in = ri[i].max(1e-6);
+        let env_out = ro[i].max(1e-6);
+        *x *= env_in.powf(1.0 - rate) * env_out.powf(rate - 1.0);
+    }
+}
+
 pub(crate) fn resample_to_16k(samples: &[f32], src_sr: u32) -> Vec<f32> {
     if src_sr == 16_000 {
         return samples.to_vec();
@@ -414,7 +474,8 @@ pub async fn convert(
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("base64: {e}")))?;
     let wav =
         decode_wav(&bytes).map_err(|e| (StatusCode::BAD_REQUEST, format!("WAV decode: {e}")))?;
-    let audio_16k = resample_to_16k(&wav.samples, wav.sample_rate);
+    let mut audio_16k = resample_to_16k(&wav.samples, wav.sample_rate);
+    highpass_48hz(&mut audio_16k);
     let t_prime = audio_16k.len() / CONTENTVEC_HOP;
     let t_phone = t_prime * 2;
 
@@ -445,7 +506,7 @@ pub async fn convert(
         "RMVPE",
         run_rmvpe(&audio_16k, t_phone, req.f0_up_key, &mut pool.rmvpe)
     );
-    let audio_out = stage!(
+    let mut audio_out = stage!(
         "Generator",
         run_generator(
             phone,
@@ -456,6 +517,7 @@ pub async fn convert(
             &mut pool.generator
         )
     );
+    apply_rms_mix(&audio_16k, &mut audio_out, GENERATOR_SR, 0.45);
 
     let wav_bytes = encode_wav(&audio_out, GENERATOR_SR).map_err(|e| {
         (

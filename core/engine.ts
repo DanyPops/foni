@@ -71,7 +71,7 @@ export class FoniEngine {
 
   async buildFacade(): Promise<FacadePort | null> {
     const translator = this.translatorFactory(this.config, this.emotionState);
-    return this.facadeFactory(this.config, translator);
+    return this.facadeFactory(this.config, translator, this.emotionState);
   }
 
   async ensureFacade(): Promise<FacadePort | null> {

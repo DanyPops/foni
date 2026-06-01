@@ -8,7 +8,6 @@
 ///     "dsp": true,           // optional, default true
 ///     "prosody": true,       // optional, default true — per-sentence SSML prosody
 ///     "rate_pct": 100,       // optional — override rate (overrides per-sentence jitter)
-///     "pitch_pt": 50,        // optional — override pitch
 ///     "range": "medium" }    // optional — override range
 ///
 /// Response: raw audio/wav bytes (same as /convert).
@@ -26,7 +25,9 @@ use std::process::Command;
 
 use crate::{dsp, ssml, state::AppState, wav};
 
-use super::convert::{resample_to_16k, run_contentvec, run_generator, run_rmvpe};
+use super::convert::{
+    apply_rms_mix, highpass_48hz, resample_to_16k, run_contentvec, run_generator, run_rmvpe,
+};
 use super::process::WireOpts;
 
 use foni_analyse::decode_wav;
@@ -53,8 +54,6 @@ pub struct SynthRequest {
     pub prosody: bool,
     /// Override global rate % (100 = normal). Ignored when prosody=true (per-sentence wins).
     pub rate_pct: Option<i32>,
-    /// Override global pitch point (50 = normal, espeak 0-99 scale).
-    pub pitch_pt: Option<i32>,
     /// Override global range: "x-high" | "high" | "medium" | "low" | "x-low".
     pub range: Option<String>,
     #[serde(default)]
@@ -85,9 +84,6 @@ fn cache_key(req: &SynthRequest, model: &str) -> [u8; 32] {
     if let Some(r) = req.rate_pct {
         h.update(r.to_le_bytes());
     }
-    if let Some(p) = req.pitch_pt {
-        h.update(p.to_le_bytes());
-    }
     if let Some(ref rng) = req.range {
         h.update(rng.as_bytes());
     }
@@ -105,9 +101,8 @@ fn prepare_text(req: &SynthRequest) -> (String, bool) {
     let annotated = ssml::annotate_with_prosody(&req.text);
 
     // Optional caller overrides wrap the whole block.
-    let body = if req.rate_pct.is_some() || req.pitch_pt.is_some() || req.range.is_some() {
+    let body = if req.rate_pct.is_some() || req.range.is_some() {
         let rate = req.rate_pct.unwrap_or(100);
-        let pitch = req.pitch_pt.unwrap_or(50);
         let range = req.range.as_deref().unwrap_or("medium");
         // Strip outer <speak> tags, re-wrap with prosody override.
         let inner = annotated
@@ -115,9 +110,7 @@ fn prepare_text(req: &SynthRequest) -> (String, bool) {
             .unwrap_or(&annotated)
             .strip_suffix("</speak>")
             .unwrap_or(&annotated);
-        format!(
-            r#"<speak><prosody rate="{rate}%" pitch="{pitch}" range="{range}">{inner}</prosody></speak>"#
-        )
+        format!(r#"<speak><prosody rate="{rate}%" range="{range}">{inner}</prosody></speak>"#)
     } else {
         annotated
     };
@@ -189,7 +182,8 @@ pub async fn synthesize(
     // RVC conversion.
     let wav_in = decode_wav(&espeak_bytes)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("WAV decode: {e}")))?;
-    let audio_16k = resample_to_16k(&wav_in.samples, wav_in.sample_rate);
+    let mut audio_16k = resample_to_16k(&wav_in.samples, wav_in.sample_rate);
+    highpass_48hz(&mut audio_16k);
     let t_prime = audio_16k.len() / CONTENTVEC_HOP;
     let t_phone = t_prime * 2;
 
@@ -200,7 +194,7 @@ pub async fn synthesize(
         ));
     }
 
-    let audio_out = {
+    let mut audio_out = {
         let mut pool_guard = state.0.sessions.lock().await;
         let pool = pool_guard.as_mut().expect("sessions loaded above");
 
@@ -223,6 +217,7 @@ pub async fn synthesize(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Generator: {e}")))?
     };
 
+    apply_rms_mix(&audio_16k, &mut audio_out, GENERATOR_SR, 0.45);
     let rvc_wav = wav::encode_wav(&audio_out, GENERATOR_SR).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
