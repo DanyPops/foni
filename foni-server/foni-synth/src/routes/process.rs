@@ -27,75 +27,51 @@ pub struct WireOpts {
     pub warmth_freq: Option<f32>,
     pub air_boost_db: Option<f32>,
     pub air_freq: Option<f32>,
+    pub de_harsh_db: Option<f32>,
+    pub de_harsh_freq: Option<f32>,
+    pub de_harsh_q: Option<f32>,
     pub reverb_ms: Option<f32>,
     pub reverb_decay: Option<f32>,
     pub pad_secs: Option<f32>,
     pub fade_secs: Option<f32>,
 }
 
+macro_rules! apply_overrides {
+    ($wire:expr, $opts:expr, $($field:ident),+ $(,)?) => {
+        $(if let Some(v) = $wire.$field { $opts.$field = v; })+
+    };
+}
+
 impl WireOpts {
     pub(crate) fn into_smoothing(self) -> (dsp::SmoothingOptions, f32) {
         let mut o = dsp::SmoothingOptions::default();
-        if let Some(v) = self.rms_target_lufs {
-            o.rms_target_lufs = v;
-        }
-        if let Some(v) = self.compression_ratio {
-            o.compression_ratio = v;
-        }
-        if let Some(v) = self.compression_attack_ms {
-            o.compression_attack_ms = v;
-        }
-        if let Some(v) = self.compression_release_ms {
-            o.compression_release_ms = v;
-        }
-        if let Some(v) = self.compression_threshold_db {
-            o.compression_threshold_db = v;
-        }
-        if let Some(v) = self.compression_makeup_db {
-            o.compression_makeup_db = v;
-        }
-        if let Some(v) = self.tilt_low_db {
-            o.tilt_low_db = v;
-        }
-        if let Some(v) = self.tilt_high_db {
-            o.tilt_high_db = v;
-        }
-        if let Some(v) = self.vibrato_freq {
-            o.vibrato_freq = v;
-        }
-        if let Some(v) = self.vibrato_depth {
-            o.vibrato_depth = v;
-        }
-        if let Some(v) = self.highpass_freq {
-            o.highpass_freq = v;
-        }
-        if let Some(v) = self.presence_db {
-            o.presence_db = v;
-        }
-        if let Some(v) = self.de_ess_db {
-            o.de_ess_db = v;
-        }
-        if let Some(v) = self.warmth_boost_db {
-            o.warmth_boost_db = v;
-        }
-        if let Some(v) = self.warmth_freq {
-            o.warmth_freq = v;
-        }
-        if let Some(v) = self.air_boost_db {
-            o.air_boost_db = v;
-        }
-        if let Some(v) = self.air_freq {
-            o.air_freq = v;
-        }
-        if let Some(v) = self.reverb_ms {
-            o.reverb_ms = v;
-        }
-        if let Some(v) = self.reverb_decay {
-            o.reverb_decay = v;
-        }
-        if let Some(v) = self.fade_secs {
-            o.fade_secs = v;
-        }
+        apply_overrides!(
+            self,
+            o,
+            rms_target_lufs,
+            compression_ratio,
+            compression_attack_ms,
+            compression_release_ms,
+            compression_threshold_db,
+            compression_makeup_db,
+            tilt_low_db,
+            tilt_high_db,
+            vibrato_freq,
+            vibrato_depth,
+            highpass_freq,
+            presence_db,
+            de_ess_db,
+            warmth_boost_db,
+            warmth_freq,
+            air_boost_db,
+            air_freq,
+            de_harsh_db,
+            de_harsh_freq,
+            de_harsh_q,
+            reverb_ms,
+            reverb_decay,
+            fade_secs,
+        );
         let pad = self.pad_secs.unwrap_or(0.0);
         (o, pad)
     }

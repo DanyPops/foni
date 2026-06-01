@@ -36,10 +36,16 @@ pub struct ControllerTargets {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ControllerSensitivity {
     pub brightness_per_tilt_high: f32,
+    #[serde(default = "default_brightness_per_de_harsh")]
+    pub brightness_per_de_harsh: f32,
     pub loudness_per_rms_lufs: f32,
     pub bass_balance_per_tilt_low: f32,
     pub bass_balance_per_presence: f32,
     pub darkness_per_tilt_high: f32,
+}
+
+fn default_brightness_per_de_harsh() -> f32 {
+    -80.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +54,12 @@ pub struct ControllerRanges {
     pub tilt_high_db: [f32; 2],
     pub rms_target_lufs: [f32; 2],
     pub presence_db: [f32; 2],
+    #[serde(default = "default_de_harsh_range")]
+    pub de_harsh_db: [f32; 2],
+}
+
+fn default_de_harsh_range() -> [f32; 2] {
+    [-12.0, 0.0]
 }
 
 /// What the controller decided — for the inspection endpoint.
@@ -66,13 +78,14 @@ pub struct ControllerSnapshot {
     pub correction_tilt_high_db: f32,
     pub correction_rms_lufs: f32,
     pub correction_presence_db: f32,
+    pub correction_de_harsh_db: f32,
 }
 
 impl Default for ControllerConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            damping: 0.6,
+            damping: 0.9,
             targets: ControllerTargets {
                 brightness_hz: 2288.0,
                 loudness_db: -13.5,
@@ -81,6 +94,7 @@ impl Default for ControllerConfig {
             },
             sensitivity: ControllerSensitivity {
                 brightness_per_tilt_high: 92.0,
+                brightness_per_de_harsh: 0.16,
                 loudness_per_rms_lufs: 0.975,
                 bass_balance_per_tilt_low: 0.21,
                 bass_balance_per_presence: -0.36,
@@ -88,9 +102,10 @@ impl Default for ControllerConfig {
             },
             ranges: ControllerRanges {
                 tilt_low_db: [-4.0, 16.0],
-                tilt_high_db: [-18.0, 0.0],
+                tilt_high_db: [-24.0, 0.0],
                 rms_target_lufs: [-22.0, -4.0],
                 presence_db: [-6.0, 6.0],
+                de_harsh_db: [-12.0, 0.0],
             },
         }
     }
@@ -120,9 +135,19 @@ pub fn correct(
     let delta_rms = err_loud / s.loudness_per_rms_lufs * d;
     let delta_tilt_low = err_bass / s.bass_balance_per_tilt_low * d;
     let delta_presence = err_bass / s.bass_balance_per_presence * d;
+    // Brightness: tilt shelf is the main lever, de-harsh is negligible per calibration
     let delta_tilt_high_bright = err_bright / s.brightness_per_tilt_high;
     let delta_tilt_high_dark = err_dark / s.darkness_per_tilt_high;
     let delta_tilt_high = (delta_tilt_high_bright * 0.7 + delta_tilt_high_dark * 0.3) * d;
+    // De-harsh at 3.5kHz has minimal centroid effect (0.16 Hz/dB) — apply a fixed
+    // cut proportional to brightness error instead of dividing by near-zero sensitivity
+    let delta_de_harsh = if err_bright < -200.0 {
+        -4.0 * d
+    } else if err_bright < -100.0 {
+        -2.0 * d
+    } else {
+        0.0
+    };
 
     let mut opts = base.clone();
     opts.tilt_high_db =
@@ -133,6 +158,8 @@ pub fn correct(
         (base.tilt_low_db + delta_tilt_low).clamp(r.tilt_low_db[0], r.tilt_low_db[1]);
     opts.presence_db =
         (base.presence_db + delta_presence * 0.5).clamp(r.presence_db[0], r.presence_db[1]);
+    opts.de_harsh_db =
+        (base.de_harsh_db + delta_de_harsh).clamp(r.de_harsh_db[0], r.de_harsh_db[1]);
 
     let snap = ControllerSnapshot {
         enabled: true,
@@ -148,6 +175,7 @@ pub fn correct(
         correction_tilt_high_db: opts.tilt_high_db - base.tilt_high_db,
         correction_rms_lufs: opts.rms_target_lufs - base.rms_target_lufs,
         correction_presence_db: opts.presence_db - base.presence_db,
+        correction_de_harsh_db: opts.de_harsh_db - base.de_harsh_db,
     };
 
     (opts, snap)
