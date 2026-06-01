@@ -45,7 +45,7 @@ function makeState(overrides: Partial<FoniPanelState> = {}): FoniPanelState {
     inputLang:   "en",
     outputLang:  "en",
     speed:       1.0,
-    backendName: "silero",
+    backendName: "espeak",
     backendPref: "auto",
     rvcEnabled:  false,
     rvcModel:    "bandit",
@@ -513,10 +513,10 @@ describe("FoniPanel handleInput → actions", () => {
     expect(actions.pickRvcModel).toHaveBeenCalledOnce();
   });
 
-  it("b cycles backend auto→silero", async () => {
+  it("b cycles backend auto→espeak", async () => {
     const { component, actions } = await mountPanel(makeState({ backendPref: "auto" }));
     await component.handleInput("b");
-    expect(actions.setBackendPref).toHaveBeenCalledWith("silero");
+    expect(actions.setBackendPref).toHaveBeenCalledWith("espeak");
   });
 
   it("↓ then space activates the language row", async () => {

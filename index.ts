@@ -11,6 +11,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { EspeakBackend }     from "./backends/espeak.ts";
 
 import { FoniEngine, type FacadeFactory, type TranslatorFactory, type ProcessorFactory } from "./core/engine.ts";
 import { DEFAULT_CONFIG }    from "./core/config.ts";
@@ -28,10 +29,6 @@ import { syncBreaksFrom }    from "./pipeline/prosody.ts";
 import { BreathProcessor }   from "./pipeline/breath-injector.ts";
 import { SpeakFacade }       from "./pipeline/speak-facade.ts";
 import { SystemPlayer }      from "./pipeline/player.ts";
-import { SileroBackend }     from "./backends/silero.ts";
-import { KokoroBackend }     from "./backends/kokoro.ts";
-import { FakeYouBackend }    from "./backends/fakeyou.ts";
-import { EspeakBackend }     from "./backends/espeak.ts";
 
 // ─── Factory implementations (index.ts is the composition root) ───────────────────
 //
@@ -107,28 +104,9 @@ const facadeFactory: FacadeFactory = async (cfg, translator, emotion) => {
     }
   }
 
-  // Fallback: legacy espeak + optional Rust DSP chain.
-  const candidates = [
-    new SileroBackend(cfg.sileroUrl),
-    new KokoroBackend(cfg.kokoroUrl),
-    new FakeYouBackend(cfg.fakeyouToken, cfg.fakeyouApiKey),
-    new EspeakBackend(cfg.outputLang === "ru" ? "ru" : "en"),
-  ];
-  let backend = null;
-  if (cfg.backendPref !== "auto") {
-    const preferred = candidates.find(b => b.name === cfg.backendPref);
-    if (preferred && await preferred.isAvailable()) {
-      backend = preferred;
-    }
-  } else {
-    for (const b of candidates) {
-      if (await b.isAvailable()) {
-        backend = b;
-        break;
-      }
-    }
-  }
-  if (!backend) return null;
+  // Fallback: espeak only when SynthBackend unavailable.
+  const backend = new EspeakBackend(cfg.outputLang === "ru" ? "ru" : "en");
+  if (!(await backend.isAvailable())) return null;
   const processor = processorFactory(cfg);
   return new SpeakFacade(translator, backend, processor, new SystemPlayer(), {
     voice: cfg.outputLang === "ru" ? "ru" : cfg.voice,
@@ -378,7 +356,7 @@ export default async function (pi: ExtensionAPI) {
   // ── Commands ───────────────────────────────────────────────────────────────
 
   pi.registerCommand("tts", {
-    description: "Toggle TTS | /tts test | /tts status | /tts voice | /tts speed | /tts lang en|ru | /tts backend | /tts token | /tts rvc on|off|model|url|models | /tts mat on|off|<prob> | /tts interject on|off|<prob> | /tts stop",
+    description: "Toggle TTS | /tts test | /tts status | /tts voice | /tts speed | /tts lang en|ru | /tts backend espeak|say|auto | /tts rvc on|off|model|url|models | /tts mat on|off|<prob> | /tts interject on|off|<prob> | /tts stop",
     handler: async (args, ctx) => {
       const parts = (args ?? "").trim().split(/\s+/).filter(Boolean);
       const sub   = parts[0] ?? "";
@@ -434,9 +412,6 @@ export default async function (pi: ExtensionAPI) {
             : `${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`),
           "",
           config.rvcEnabled ? on("rvc", `${config.rvcModel} @ ${config.rvcUrl}`) : off("rvc", "disabled"),
-          off("silero", config.sileroUrl),
-          off("kokoro", config.kokoroUrl),
-          config.fakeyouToken ? on("fakeyou", config.fakeyouToken) : off("fakeyou", "no token"),
           "",
           on("audio cache", engine.cacheStats()),
         ].join("\n"), "info");
@@ -560,8 +535,8 @@ export default async function (pi: ExtensionAPI) {
       // ── backend ────────────────────────────────────────────────────────────
       if (sub === "backend") {
         const pref = parts[1];
-        if (!["silero","kokoro","fakeyou","espeak","say","auto"].includes(pref ?? "")) {
-          ctx.ui.notify("Usage: /tts backend <silero|kokoro|fakeyou|espeak|say|auto>", "warning");
+        if (!["espeak","say","auto"].includes(pref ?? "")) {
+          ctx.ui.notify("Usage: /tts backend <espeak|say|auto>", "warning");
           return;
         }
         config.backendPref = pref as typeof config.backendPref;
@@ -572,34 +547,7 @@ export default async function (pi: ExtensionAPI) {
         return;
       }
 
-      // ── token (FakeYou) ────────────────────────────────────────────────────
-      if (sub === "token") {
-        const token = parts[1] ?? "";
-        if (!token) { ctx.ui.notify("Usage: /tts token weight_xxxx", "warning"); return; }
-        config.fakeyouToken = token;
-        engine.invalidateFacade();
-        ctx.ui.notify("FakeYou token set. Run /tts backend fakeyou to activate.", "info");
-        return;
-      }
 
-      // ── search (FakeYou) ───────────────────────────────────────────────────
-      if (sub === "search") {
-        const query = parts.slice(1).join(" ").toLowerCase();
-        if (!query) { ctx.ui.notify("Usage: /tts search <query>", "warning"); return; }
-        try {
-          const r = await fetch("https://api.fakeyou.com/tts/list", { signal: AbortSignal.timeout(10_000) });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          const { models } = await r.json() as { models: Array<{ model_token: string; title: string }> };
-          const hits = models.filter(m => m.title.toLowerCase().includes(query)).slice(0, 10);
-          ctx.ui.notify(
-            hits.length
-              ? `FakeYou "${query}":\n${hits.map(m => `${m.model_token}  ${m.title}`).join("\n")}`
-              : `No TTS voices found for "${query}"`,
-            hits.length ? "info" : "warning",
-          );
-        } catch (e: any) { ctx.ui.notify(`search failed: ${e?.message}`, "warning"); }
-        return;
-      }
 
       // ── rvc ────────────────────────────────────────────────────────────────
       if (sub === "rvc") {
