@@ -26,6 +26,7 @@ thiserror    = { workspace = true }
 tracing      = { workspace = true }
 tracing-subscriber = { workspace = true }
 foni-analyse = { path = "../foni-analyse" }
+rayon        = { workspace = true }
 
 [dev-dependencies]
 reqwest      = { workspace = true }

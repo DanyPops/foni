@@ -10,6 +10,7 @@ use lru::LruCache;
 use tokio::sync::{Mutex, RwLock, Semaphore, SemaphorePermit};
 
 use crate::config::ServerConfig;
+use crate::voice_index::VoiceIndex;
 
 // ── ONNX session (one inference context) ─────────────────────────────────────
 
@@ -167,6 +168,7 @@ pub struct Inner {
     pub models_dir: PathBuf,
     pub sessions: SharedSessionPool,
     pub wav_cache: WavCache,
+    pub voice_index: RwLock<Option<VoiceIndex>>,
 }
 
 impl AppState {
@@ -187,6 +189,7 @@ impl AppState {
             wav_cache: Arc::new(Mutex::new(LruCache::new(
                 std::num::NonZeroUsize::new(WAV_CACHE_CAPACITY).unwrap(),
             ))),
+            voice_index: RwLock::new(None),
         }))
     }
 

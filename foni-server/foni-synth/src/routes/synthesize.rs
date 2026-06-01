@@ -228,7 +228,15 @@ pub async fn synthesize(
         let mut pool_guard = state.0.sessions.acquire().await;
         let pool = pool_guard.session.as_mut().expect("sessions loaded above");
 
-        let phone = run_contentvec(&audio_16k, &mut pool.contentvec).map_err(|e| {
+        let vi = state.0.voice_index.read().await;
+        let params = state.0.params.read().await;
+        let phone = run_contentvec(
+            &audio_16k,
+            &mut pool.contentvec,
+            vi.as_ref(),
+            params.index_rate,
+        )
+        .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("ContentVec: {e}"),

@@ -5,6 +5,7 @@ pub mod routes;
 pub mod sessions;
 pub mod ssml;
 pub mod state;
+pub mod voice_index;
 pub mod wav;
 
 use axum::{

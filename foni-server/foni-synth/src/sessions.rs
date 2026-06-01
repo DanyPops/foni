@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use ort::session::Session;
 
 use crate::state::{AppState, OnnxSession};
+use crate::voice_index::VoiceIndex;
 
 fn load(path: &Path) -> Result<Session, String> {
     Session::builder()
@@ -76,5 +77,20 @@ pub async fn ensure(state: &AppState, model_name: &str) -> Result<(), String> {
     }
 
     tracing::info!("ONNX sessions ready (pool_size={size})");
+
+    // Load voice index for this model (optional — silently skipped if absent).
+    let idx_path = VoiceIndex::path_for(dir, model_name);
+    if idx_path.exists() {
+        match VoiceIndex::load(&idx_path) {
+            Ok(idx) => {
+                *state.0.voice_index.write().await = Some(idx);
+                tracing::info!("voice index loaded for '{model_name}'");
+            }
+            Err(e) => tracing::warn!("voice index skipped: {e}"),
+        }
+    } else {
+        tracing::debug!("no voice index at {}", idx_path.display());
+    }
+
     Ok(())
 }

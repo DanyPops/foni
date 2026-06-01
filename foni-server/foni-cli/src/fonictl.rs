@@ -95,6 +95,9 @@ enum Cmd {
         /// Load maquette presets from JSON instead of built-in defaults
         #[arg(long)]
         from: Option<PathBuf>,
+        /// Play this WAV before each track for A/B reference (e.g. studio original)
+        #[arg(long)]
+        reference: Option<PathBuf>,
     },
 
     /// Print server health and loaded model
@@ -1270,7 +1273,13 @@ const MIXER_HELP: &str = r#"
     q / quit               save session and exit
 "#;
 
-fn cmd_mix(server: &str, text: &str, model: &str, from: Option<&std::path::Path>) {
+fn cmd_mix(
+    server: &str,
+    text: &str,
+    model: &str,
+    from: Option<&std::path::Path>,
+    reference: Option<&std::path::Path>,
+) {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
 
     let maquettes = load_maquettes(from);
@@ -1947,8 +1956,13 @@ fn main() {
         Cmd::Corpus { dir, vs } => {
             cmd_corpus(&dir, vs.as_ref());
         }
-        Cmd::Mix { text, model, from } => {
-            cmd_mix(server, &text, &model, from.as_deref());
+        Cmd::Mix {
+            text,
+            model,
+            from,
+            reference,
+        } => {
+            cmd_mix(server, &text, &model, from.as_deref(), reference.as_deref());
         }
         Cmd::Listen {
             text,
