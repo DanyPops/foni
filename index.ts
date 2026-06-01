@@ -22,6 +22,7 @@ import {
 import { BIAS_WORDS, effectiveWeights } from "./core/emotion.ts";
 import { IdentityProcessor, RVCProcessor, SmoothingProcessor } from "./pipeline/processors.ts";
 import { ProsodyBackend }    from "./pipeline/prosody.ts";
+import { SynthBackend }      from "./pipeline/synth-backend.ts";
 import { BreathProcessor }   from "./pipeline/breath-injector.ts";
 import { SpeakFacade }       from "./pipeline/speak-facade.ts";
 import { SystemPlayer }      from "./pipeline/player.ts";
@@ -57,6 +58,24 @@ const translatorFactory: TranslatorFactory = (cfg, emotion) => {
 };
 
 const facadeFactory: FacadeFactory = async (cfg, translator) => {
+  // Fast path: when foni-synth is up and RVC is enabled, route all synthesis
+  // through a single POST /synthesize — SSML + espeak + RVC + DSP in Rust.
+  if (cfg.rvcEnabled && cfg.rvcModel) {
+    const synth = new SynthBackend({
+      url:     cfg.rvcUrl,
+      model:   cfg.rvcModel,
+      prosody: cfg.prosodyEnabled && cfg.outputLang === "ru",
+    });
+    if (await synth.isAvailable()) {
+      // processorFactory returns IdentityProcessor when SynthBackend is active
+      // (DSP already applied inside /synthesize).
+      return new SpeakFacade(translator, synth, new IdentityProcessor(), new SystemPlayer(), {
+        voice: cfg.voice, speed: cfg.speed,
+      });
+    }
+  }
+
+  // Fallback: legacy espeak + optional Rust DSP chain.
   const candidates = [
     new SileroBackend(cfg.sileroUrl),
     new KokoroBackend(cfg.kokoroUrl),

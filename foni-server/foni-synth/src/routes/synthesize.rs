@@ -1,11 +1,15 @@
-/// POST /synthesize — full text → espeak → RVC → DSP → WAV, with LRU cache.
+/// POST /synthesize — full text → SSML → espeak → RVC → DSP → WAV, with LRU cache.
 ///
 /// Request:
 ///   { "text": "...", "voice": "ru", "speed": 150,
-///     "model": "bandit",  // optional
-///     "speaker_id": 0,    // optional
-///     "f0_up_key": 0,     // optional semitone shift
-///     "dsp": true }       // optional, default true — apply /process DSP chain
+///     "model": "bandit",     // optional
+///     "speaker_id": 0,       // optional
+///     "f0_up_key": 0,        // optional semitone shift
+///     "dsp": true,           // optional, default true
+///     "prosody": true,       // optional, default true — per-sentence SSML prosody
+///     "rate_pct": 100,       // optional — override rate (overrides per-sentence jitter)
+///     "pitch_pt": 50,        // optional — override pitch
+///     "range": "medium" }    // optional — override range
 ///
 /// Response: raw audio/wav bytes (same as /convert).
 /// Cache key: SHA-256(text + model + voice + speed + speaker_id + f0_up_key + dsp).
@@ -20,7 +24,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::process::Command;
 
-use crate::{dsp, state::AppState, wav};
+use crate::{dsp, ssml, state::AppState, wav};
 
 use super::convert::{resample_to_16k, run_contentvec, run_generator, run_rmvpe};
 use super::process::WireOpts;
@@ -44,6 +48,15 @@ pub struct SynthRequest {
     pub f0_up_key: i32,
     #[serde(default = "default_true")]
     pub dsp: bool,
+    /// Apply per-sentence SSML prosody variation (rate / pitch / range).
+    #[serde(default = "default_true")]
+    pub prosody: bool,
+    /// Override global rate % (100 = normal). Ignored when prosody=true (per-sentence wins).
+    pub rate_pct: Option<i32>,
+    /// Override global pitch point (50 = normal, espeak 0-99 scale).
+    pub pitch_pt: Option<i32>,
+    /// Override global range: "x-high" | "high" | "medium" | "low" | "x-low".
+    pub range: Option<String>,
     #[serde(default)]
     pub opts: WireOpts,
 }
@@ -68,24 +81,66 @@ fn cache_key(req: &SynthRequest, model: &str) -> [u8; 32] {
     h.update(req.speed.to_le_bytes());
     h.update(req.speaker_id.to_le_bytes());
     h.update(req.f0_up_key.to_le_bytes());
-    h.update([req.dsp as u8]);
+    h.update([req.dsp as u8, req.prosody as u8]);
+    if let Some(r) = req.rate_pct {
+        h.update(r.to_le_bytes());
+    }
+    if let Some(p) = req.pitch_pt {
+        h.update(p.to_le_bytes());
+    }
+    if let Some(ref rng) = req.range {
+        h.update(rng.as_bytes());
+    }
     h.finalize().into()
 }
 
-fn espeak(text: &str, voice: &str, speed: u32) -> Result<Vec<u8>, String> {
+/// Prepare the text for espeak: apply SSML annotation if prosody is enabled.
+/// Returns `(ssml_text, use_markup_flag)`.
+fn prepare_text(req: &SynthRequest) -> (String, bool) {
+    if !req.prosody {
+        return (req.text.clone(), false);
+    }
+
+    // Per-sentence prosody variation (deterministic, mirrors prosody.ts).
+    let annotated = ssml::annotate_with_prosody(&req.text);
+
+    // Optional caller overrides wrap the whole block.
+    let body = if req.rate_pct.is_some() || req.pitch_pt.is_some() || req.range.is_some() {
+        let rate = req.rate_pct.unwrap_or(100);
+        let pitch = req.pitch_pt.unwrap_or(50);
+        let range = req.range.as_deref().unwrap_or("medium");
+        // Strip outer <speak> tags, re-wrap with prosody override.
+        let inner = annotated
+            .strip_prefix("<speak>")
+            .unwrap_or(&annotated)
+            .strip_suffix("</speak>")
+            .unwrap_or(&annotated);
+        format!(
+            r#"<speak><prosody rate="{rate}%" pitch="{pitch}" range="{range}">{inner}</prosody></speak>"#
+        )
+    } else {
+        annotated
+    };
+
+    (body, true)
+}
+
+fn espeak(text: &str, voice: &str, speed: u32, markup: bool) -> Result<Vec<u8>, String> {
     let tmp = tempfile::NamedTempFile::with_suffix(".wav").map_err(|e| e.to_string())?;
-    let status = Command::new("espeak-ng")
-        .args([
-            "-v",
-            voice,
-            "-s",
-            &speed.to_string(),
-            "-w",
-            tmp.path().to_str().unwrap(),
-            text,
-        ])
-        .status()
-        .map_err(|e| format!("espeak-ng: {e}"))?;
+    let mut cmd = Command::new("espeak-ng");
+    cmd.args([
+        "-v",
+        voice,
+        "-s",
+        &speed.to_string(),
+        "-w",
+        tmp.path().to_str().unwrap(),
+    ]);
+    if markup {
+        cmd.arg("-m");
+    }
+    cmd.arg(text);
+    let status = cmd.status().map_err(|e| format!("espeak-ng: {e}"))?;
     if !status.success() {
         return Err("espeak-ng exited non-zero".into());
     }
@@ -114,14 +169,17 @@ pub async fn synthesize(
         }
     }
 
+    // Prepare text (SSML annotation when prosody=true).
+    let (synth_text, markup) = prepare_text(&req);
+
     // Espeak synthesis (CPU-bound, run in blocking thread).
-    let text = req.text.clone();
     let voice = req.voice.clone();
     let speed = req.speed;
-    let espeak_bytes = tokio::task::spawn_blocking(move || espeak(&text, &voice, speed))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let espeak_bytes =
+        tokio::task::spawn_blocking(move || espeak(&synth_text, &voice, speed, markup))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     // Ensure ONNX sessions are loaded.
     crate::sessions::ensure(&state, &model_name)
