@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`FoniPanel render snapshots > RVC enabled with bandit model 1`] = `
+exports[`FoniPanel render snapshots > RVC enabled with sidorovich model 1`] = `
 "╭────────────────────── Foni ──────────────────────╮
 │                                                  │
 │ ▸ TTS        [OFF] -│
@@ -10,8 +10,8 @@ exports[`FoniPanel render snapshots > RVC enabled with bandit model 1`] = `
 │                                                  │
 │─────────────────── RVC Voice ────────────────────│
 │                                                  │
-│   Voice conv [ ON] bandit│
-│   Model      bandit           │
+│   Voice conv [ ON] sidorovich│
+│   Model      sidorovich       │
 │   Server     http://localhost:5050  …│
 │                                                  │
 ├──────────────────────────────────────────────────┤
@@ -32,7 +32,7 @@ exports[`FoniPanel render snapshots > TTS enabled 1`] = `
 │─────────────────── RVC Voice ────────────────────│
 │                                                  │
 │   Voice conv [OFF] -     │
-│   Model      bandit           │
+│   Model      sidorovich       │
 │   Server     http://localhost:5050  …│
 │                                                  │
 ├──────────────────────────────────────────────────┤
@@ -53,7 +53,7 @@ exports[`FoniPanel render snapshots > initial state (TTS off, RVC off, EN) 1`] =
 │─────────────────── RVC Voice ────────────────────│
 │                                                  │
 │   Voice conv [OFF] -     │
-│   Model      bandit           │
+│   Model      sidorovich       │
 │   Server     http://localhost:5050  …│
 │                                                  │
 ├──────────────────────────────────────────────────┤
@@ -74,7 +74,7 @@ exports[`FoniPanel render snapshots > language RU 1`] = `
 │─────────────────── RVC Voice ────────────────────│
 │                                                  │
 │   Voice conv [OFF] -     │
-│   Model      bandit           │
+│   Model      sidorovich       │
 │   Server     http://localhost:5050  …│
 │                                                  │
 ├──────────────────────────────────────────────────┤
@@ -95,7 +95,7 @@ exports[`FoniPanel render snapshots > narrow terminal (40 cols) 1`] = `
 │───────────── RVC Voice ──────────────│
 │                                      │
 │   Voice conv [OFF] -│
-│   Model      bandit│
+│   Model      sidorovich│
 │   Server     http://local…│
 │                                      │
 ├──────────────────────────────────────┤
@@ -116,7 +116,7 @@ exports[`FoniPanel render snapshots > speed 1.5x 1`] = `
 │─────────────────── RVC Voice ────────────────────│
 │                                                  │
 │   Voice conv [OFF] -     │
-│   Model      bandit           │
+│   Model      sidorovich       │
 │   Server     http://localhost:5050  …│
 │                                                  │
 ├──────────────────────────────────────────────────┤

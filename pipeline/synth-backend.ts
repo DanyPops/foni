@@ -17,7 +17,7 @@ import { getLogger } from "../core/logger.ts";
 export interface SynthBackendOpts {
   /** Base URL of foni-synth.  Default: http://localhost:5050 */
   url:      string;
-  /** RVC model name.  Default: "bandit" */
+  /** RVC model name.  Default: "sidorovich" */
   model?:   string;
   /** Apply per-sentence SSML prosody variation (rate/range). Default: true */
   prosody?: boolean;
@@ -48,7 +48,7 @@ export class SynthBackend implements TTSBackend {
       text,
       voice:   voiceOpts.voice ?? "ru",
       speed:   voiceOpts.speed ? Math.round(voiceOpts.speed * 130) : 150,
-      model:   this.opts.model ?? "bandit",
+      model:   this.opts.model ?? "sidorovich",
       prosody: this.opts.prosody ?? true,
       dsp:     true,
     };
