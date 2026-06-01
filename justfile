@@ -150,10 +150,30 @@ analyse wav:
 
 # ── Model setup (one-time) ─────────────────────────────────────────────────────
 
-# Export FAISS voice index vectors to .npy (requires faiss-cpu)
+# Create persistent Python env for model export tools (run once, ~2GB)
+[group('setup')]
+setup-python:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VENV=rvc/.venv
+    if [ ! -d "$VENV" ]; then
+        echo "Creating venv at $VENV..."
+        uv venv --python 3.12 "$VENV"
+    fi
+    echo "Installing deps (torch + onnx + faiss-cpu)..."
+    uv pip install --python "$VENV/bin/python" -r rvc/requirements.txt
+    echo "✓ Python env ready: $VENV"
+
+# Export ONNX generator for a model (run setup-python first)
+# Usage: just export-model bandit   or   just export-model sidorovich
+[group('setup')]
+export-model model:
+    rvc/.venv/bin/python rvc/export_onnx.py {{model}}
+
+# Export FAISS voice index vectors to .npy (requires setup-python)
 [group('setup')]
 export-index:
-    uv run --with faiss-cpu --with numpy python3 rvc/export_voice_index.py
+    rvc/.venv/bin/python rvc/export_voice_index.py
 
 # ── Git ────────────────────────────────────────────────────────────────────────
 
