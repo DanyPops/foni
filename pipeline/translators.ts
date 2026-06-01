@@ -359,14 +359,17 @@ export function compose(stack: TextMiddleware[]): (ctx: TextCtx) => Promise<void
  * Reads ctx.text (not ctx.input) so upstream middleware like
  * makeITGlossaryMiddleware can pre-process the text first.
  */
-export function makeTranslateMiddleware(from: string, to: string, useOllama = false): TextMiddleware {
-  const t = from === to
-    ? new IdentityTranslatorImpl()
-    : useOllama
-      ? new OllamaTranslator("http://localhost:11434", "qwen3:4b", from, to)
-      : new LibreTranslateTranslatorImpl(from, to);
+export function makeTranslateMiddleware(from: string, to: string): TextMiddleware {
+  if (from === to) {
+    const t = new IdentityTranslatorImpl();
+    return async (ctx, next) => { ctx.text = await t.translate(ctx.text); await next(); };
+  }
+  const libre  = new LibreTranslateTranslatorImpl(from, to);
+  const ollama = new OllamaTranslator("http://localhost:11434", "qwen3:1.7b", from, to);
   return async (ctx, next) => {
-    ctx.text = await t.translate(ctx.text); // ctx.text may be pre-processed by glossary
+    // Try LibreTranslate first (fast, self-hosted); fall back to Ollama if unreachable.
+    const result = await libre.translate(ctx.text);
+    ctx.text = result ?? await ollama.translate(ctx.text);
     await next();
   };
 }
@@ -533,13 +536,11 @@ class LibreTranslateTranslatorImpl {
         body:    JSON.stringify({ q: text, source: this.from, target: this.to, format: "text" }),
         signal:  AbortSignal.timeout(TRANSLATION_TIMEOUT_MS),
       });
-      if (!resp.ok) return text;
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json() as { translatedText: string };
       return data.translatedText || text;
     } catch {
-      // Server not running — passthrough. Start with:
-      // podman run -d -p 5000:5000 libretranslate/libretranslate --load-only en,ru
-      return text;
+      return null as unknown as string; // signal miss to caller
     }
   }
 }
@@ -566,16 +567,18 @@ export class MyMemoryTranslator implements Translator {
  * Requires: podman run -d -p 5000:5000 libretranslate/libretranslate --load-only en,ru
  */
 export class LibreTranslateTranslator implements Translator {
-  private readonly impl: LibreTranslateTranslatorImpl;
+  private readonly impl:    LibreTranslateTranslatorImpl;
+  private readonly ollama:  OllamaTranslator;
   constructor(
     private readonly from: string,
     private readonly to: string,
     url = "http://localhost:5000",
   ) {
-    this.impl = new LibreTranslateTranslatorImpl(from, to, url);
+    this.impl   = new LibreTranslateTranslatorImpl(from, to, url);
+    this.ollama = new OllamaTranslator(undefined, undefined, from, to);
   }
   async translate(text: string): Promise<string> {
-    return this.impl.translate(text);
+    return (await this.impl.translate(text)) ?? this.ollama.translate(text);
   }
 }
 
@@ -633,41 +636,42 @@ export class MatTranslator implements Translator {
  * (e.g. "deploy" → "деплоить", "commit" → "коммит").
  */
 export class OllamaTranslator implements Translator {
-  private readonly fallback: LibreTranslateTranslator;
-
   constructor(
-    private readonly ollamaUrl:  string = "http://localhost:11434",
-    private readonly model:      string = "qwen3:4b",
-    private readonly from:       string = "en",
-    private readonly to:         string = "ru",
-  ) {
-    this.fallback = new LibreTranslateTranslator(from, to);
-  }
+    private readonly ollamaUrl: string = "http://localhost:11434",
+    private readonly model:     string = "qwen3:1.7b",
+    private readonly from:      string = "en",
+    private readonly to:        string = "ru",
+  ) {}
 
   async translate(text: string): Promise<string> {
+    const system = [
+      `You are a professional ${this.from.toUpperCase()}-to-${this.to.toUpperCase()} translator for software engineers.`,
+      "Rules:",
+      "1. Translate naturally and fluently.",
+      "2. Keep IT terms as Russian loanwords: deploy→деплоить, commit→коммит, branch→ветка, merge→мержить, pull request→пулл-реквест, docker→докер.",
+      "3. Return ONLY the translation. No explanations, no quotes, no comments.",
+    ].join("\n");
+
     try {
-      const resp = await fetch(`${this.ollamaUrl}/api/generate`, {
+      const resp = await fetch(`${this.ollamaUrl}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model:  this.model,
-          prompt: text,
-          stream: false,
-          system: [
-            `You are a professional ${this.from.toUpperCase()}-to-${this.to.toUpperCase()} translator for software engineers.`,
-            "Rules:",
-            "1. Translate the text naturally and fluently.",
-            "2. Keep IT/programming terms as common Russian loanwords: deploy→деплоить, commit→коммит, branch→ветка, merge→мержить, pull request→пулл-реквест, docker→докер.",
-            "3. Return ONLY the translation. No explanations, no quotes, no comments.",
-          ].join("\n"),
+          model:    this.model,
+          stream:   false,
+          think:    false,       // disable extended thinking — we need speed
+          messages: [
+            { role: "system",  content: system },
+            { role: "user",    content: text   },
+          ],
         }),
         signal: AbortSignal.timeout(15_000),
       });
       if (!resp.ok) throw new Error(`Ollama ${resp.status}`);
-      const { response } = await resp.json() as { response: string };
-      return response.trim() || text;
+      const { message } = await resp.json() as { message: { content: string } };
+      return message.content.trim() || text;
     } catch {
-      return this.fallback.translate(text);
+      return text; // last resort passthrough
     }
   }
 }
