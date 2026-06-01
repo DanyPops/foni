@@ -110,6 +110,49 @@ fn metrics_from_pyin(f0: &[f64], voiced_flag: &[bool], sample_rate: u32) -> Pitc
     }
 }
 
+/// Fast F0 estimation via McLeod Pitch Method (MPM).
+/// ~50 ms per file vs pyin's ~1400 ms — suitable for batch corpus analysis.
+/// Returns (f0_mean_hz, f0_stddev_hz, voiced_ratio); no per-frame contour.
+pub fn fast_f0_stats(samples: &[f32], sample_rate: u32) -> (f32, f32, f32) {
+    use pitch_detection::detector::mcleod::McLeodDetector;
+    use pitch_detection::detector::PitchDetector;
+
+    const HOP: usize = 512;
+    const SIZE: usize = 2048;
+    const POWER_THRESHOLD: f32 = 5e-4;
+    const CLARITY_THRESHOLD: f32 = 0.6;
+
+    let mut detector = McLeodDetector::<f32>::new(SIZE, SIZE / 2);
+    let mut f0s: Vec<f32> = Vec::new();
+    let mut total_frames = 0usize;
+
+    for start in (0..samples.len().saturating_sub(SIZE)).step_by(HOP) {
+        total_frames += 1;
+        let frame = &samples[start..start + SIZE];
+        if let Some(pitch) = detector.get_pitch(
+            frame,
+            sample_rate as usize,
+            POWER_THRESHOLD,
+            CLARITY_THRESHOLD,
+        ) {
+            let f = pitch.frequency;
+            if f >= FMIN as f32 && f <= FMAX as f32 {
+                f0s.push(f);
+            }
+        }
+    }
+
+    if f0s.is_empty() {
+        return (0.0, 0.0, 0.0);
+    }
+
+    let mean = f0s.iter().sum::<f32>() / f0s.len() as f32;
+    let var = f0s.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / f0s.len() as f32;
+    let voiced_ratio = f0s.len() as f32 / total_frames.max(1) as f32;
+
+    (mean, var.sqrt(), voiced_ratio)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,47 +205,4 @@ mod tests {
             );
         }
     }
-}
-
-/// Fast F0 estimation via McLeod Pitch Method (MPM).
-/// ~50 ms per file vs pyin's ~1400 ms — suitable for batch corpus analysis.
-/// Returns (f0_mean_hz, f0_stddev_hz, voiced_ratio); no per-frame contour.
-pub fn fast_f0_stats(samples: &[f32], sample_rate: u32) -> (f32, f32, f32) {
-    use pitch_detection::detector::mcleod::McLeodDetector;
-    use pitch_detection::detector::PitchDetector;
-
-    const HOP: usize = 512;
-    const SIZE: usize = 2048;
-    const POWER_THRESHOLD: f32 = 5e-4;
-    const CLARITY_THRESHOLD: f32 = 0.6;
-
-    let mut detector = McLeodDetector::<f32>::new(SIZE, SIZE / 2);
-    let mut f0s: Vec<f32> = Vec::new();
-    let mut total_frames = 0usize;
-
-    for start in (0..samples.len().saturating_sub(SIZE)).step_by(HOP) {
-        total_frames += 1;
-        let frame = &samples[start..start + SIZE];
-        if let Some(pitch) = detector.get_pitch(
-            frame,
-            sample_rate as usize,
-            POWER_THRESHOLD,
-            CLARITY_THRESHOLD,
-        ) {
-            let f = pitch.frequency;
-            if f >= FMIN as f32 && f <= FMAX as f32 {
-                f0s.push(f);
-            }
-        }
-    }
-
-    if f0s.is_empty() {
-        return (0.0, 0.0, 0.0);
-    }
-
-    let mean = f0s.iter().sum::<f32>() / f0s.len() as f32;
-    let var = f0s.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / f0s.len() as f32;
-    let voiced_ratio = f0s.len() as f32 / total_frames.max(1) as f32;
-
-    (mean, var.sqrt(), voiced_ratio)
 }
