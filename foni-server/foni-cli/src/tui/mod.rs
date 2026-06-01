@@ -18,6 +18,7 @@ pub fn run(
     phrase: &str,
     model: &str,
     initial_tracks: Vec<Track>,
+    reference: Option<std::path::PathBuf>,
 ) {
     let client = FoniClient::new(server);
     let mut app = MixerApp::new(
@@ -26,6 +27,7 @@ pub fn run(
         model.to_string(),
         initial_tracks,
     );
+    app.reference = reference;
 
     // Restore ratings from previous session if phrase matches.
     if let Some(prev) = load_session() {

@@ -226,6 +226,7 @@ pub struct MixerApp {
     pub rendering: bool,
     /// True while analyse is loading.
     pub analysing: bool,
+    pub reference: Option<std::path::PathBuf>,
     pub playing: bool,
     pub quit: bool,
 }
@@ -256,6 +257,7 @@ impl MixerApp {
             status_msg: None,
             rendering: false,
             analysing: false,
+            reference: None,
             playing: false,
             quit: false,
         }
