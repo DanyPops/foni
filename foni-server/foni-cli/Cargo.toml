@@ -20,6 +20,7 @@ indicatif    = { workspace = true }
 hound        = { workspace = true }
 serde        = { workspace = true }
 base64       = { workspace = true }
+foni-client  = { path = "../foni-client" }
 serde_json   = { workspace = true }
 reqwest      = { workspace = true }
 tokio        = { workspace = true }

@@ -530,8 +530,21 @@ dependencies = [
  "clap",
  "dialoguer",
  "foni-analyse",
+ "foni-client",
  "hound",
  "indicatif",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "foni-client"
+version = "0.1.0"
+dependencies = [
+ "base64",
  "reqwest",
  "serde",
  "serde_json",

@@ -1,5 +1,5 @@
 [workspace]
-members  = ["foni-synth", "foni-analyse", "foni-cli"]
+members  = ["foni-synth", "foni-analyse", "foni-cli", "foni-client"]
 resolver = "2"
 
 # Clippy lints applied to every crate in the workspace.
