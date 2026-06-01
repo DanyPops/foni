@@ -8,7 +8,7 @@
  * New code should import directly from the relevant module.
  */
 
-export * from "./audio-utils.ts";
+export * from "../pipeline/analysis/audio-utils.ts";
 
 // ─── Test signal generators (restored from deleted test-signals.ts) ───────────
 /**
@@ -111,7 +111,7 @@ export function generateSilentWav(durationSecs: number, sampleRate = 22050): Buf
 
 
 // ─── Voice validation (restored from deleted voice-analysis.ts) ───────────────
-import { frameNoiseRatio, bandEnergy } from './audio-utils.ts';
+import { frameNoiseRatio, bandEnergy } from '../pipeline/analysis/audio-utils.ts';
 
 export interface CriterionResult {
   name:  string;
@@ -146,8 +146,8 @@ function gaussScore(value: number, ideal: number, sigma: number): number {
   return Math.exp(-0.5 * ((value - ideal) / sigma) ** 2);
 }
 
-import { parseWav as _pw } from './audio-utils.ts';
-import type { WavData } from './audio-utils.ts';
+import { parseWav as _pw } from '../pipeline/analysis/audio-utils.ts';
+import type { WavData } from '../pipeline/analysis/audio-utils.ts';
 
 export function validateVoiceBuffer(wav: Buffer, sampleRate: number): ValidationResult {
   const { samples } = _pw(wav);

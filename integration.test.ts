@@ -16,7 +16,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { SmoothingProcessor, IdentityProcessor } from "./pipeline/processors.ts";
 import { BreathProcessor, injectBreaths }          from "./pipeline/breath-injector.ts";
 import { parseWav, rms }                           from "./pipeline/analysis/audio-utils.ts";
-import { generateSineWav }                         from "./pipeline/analysis/audio-test-utils.ts";
+import { generateSineWav }                         from "./test/audio-test-utils.ts";
 
 const SYNTH_URL  = process.env.FONI_SYNTH_URL;
 const SKIP       = !SYNTH_URL;
