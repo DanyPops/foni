@@ -129,6 +129,15 @@ enum Cmd {
         #[arg(long)]
         vs: Option<PathBuf>,
     },
+
+    /// Acoustic fingerprint across a directory of WAV files — single Rust process
+    Corpus {
+        /// Directory of WAV files to aggregate
+        dir: PathBuf,
+        /// Compare aggregate against a reference WAV
+        #[arg(long)]
+        vs: Option<PathBuf>,
+    },
 }
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -1466,6 +1475,154 @@ fn cmd_analyse(file: &PathBuf, vs: Option<&PathBuf>) {
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
+/// Aggregate acoustic fingerprint across every WAV in a directory.
+/// Runs in a single process — no subprocess overhead per file.
+fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
+    use foni_analyse::{
+        analyse, analyse_fast, compute_gap, decode_wav, fast_f0_stats, format_gap_table,
+        TargetTensor,
+    };
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| {
+            eprintln!("cannot read dir: {e}");
+            std::process::exit(1);
+        })
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("wav"))
+        .collect();
+    files.sort();
+
+    if files.is_empty() {
+        eprintln!("No WAV files in {}", dir.display());
+        return;
+    }
+
+    let t0 = std::time::Instant::now();
+    println!(
+        "  Analysing {} files in parallel (fast F0 / McLeod, no pyin)…",
+        files.len()
+    );
+
+    // Parallel accumulation — each file decoded and analysed independently.
+    #[derive(Default)]
+    struct Row {
+        rms: f64,
+        crest: f64,
+        centroid: f64,
+        f0: f64,
+        f0_std: f64,
+        voiced: f64,
+    }
+    let acc = Mutex::new(Vec::<Row>::new());
+    let errors = AtomicU64::new(0);
+
+    files.par_iter().for_each(|path| {
+        match std::fs::read(path).and_then(|b| Ok(b)) {
+            Ok(bytes) => match decode_wav(&bytes) {
+                Ok(wav) => {
+                    // Fast path: loudness + spectral + temporal (cheap) + McLeod F0.
+                    // analyse_fast() skips pyin (1400 ms/file) and voice metrics.
+                    let r = analyse_fast(&wav.samples, wav.sample_rate);
+                    let (f0, f0_std, vr) = fast_f0_stats(&wav.samples, wav.sample_rate);
+                    let row = Row {
+                        rms: r.loudness.rms_db as f64,
+                        crest: r.loudness.crest_factor as f64,
+                        centroid: r.spectral.centroid_hz as f64,
+                        f0: f0 as f64,
+                        f0_std: f0_std as f64,
+                        voiced: vr as f64,
+                    };
+                    acc.lock().unwrap().push(row);
+                }
+                Err(e) => {
+                    eprintln!("  skip {}: {e}", path.display());
+                    errors.fetch_add(1, Ordering::Relaxed);
+                }
+            },
+            Err(e) => {
+                eprintln!("  skip {}: {e}", path.display());
+                errors.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    });
+
+    let rows = acc.into_inner().unwrap();
+    let n = rows.len();
+    if n == 0 {
+        eprintln!("All files failed.");
+        return;
+    }
+
+    let mean = |f: fn(&Row) -> f64| rows.iter().map(|r| f(r)).sum::<f64>() / n as f64;
+    let rms = mean(|r| r.rms);
+    let crest = mean(|r| r.crest);
+    let centroid = mean(|r| r.centroid);
+    let f0 = mean(|r| r.f0);
+    let f0_std = mean(|r| r.f0_std);
+    let voiced = mean(|r| r.voiced);
+    let elapsed = t0.elapsed().as_millis();
+    let errs = errors.load(Ordering::Relaxed);
+
+    println!("  Done in {elapsed} ms  ({} files, {} skipped)\n", n, errs);
+
+    // ── Sidorovich acoustic identity (bass-baritone deep Russian voice) ────────
+    //
+    // Parameters from literature (Kob et al. 2022, PMC9605961; Sundberg 1987;
+    // SwiftF0 benchmark 2025):
+    //
+    //   F0 (speaking)  Bass:      75–100 Hz   Baritone: 96–130 Hz
+    //   Spectral cent. Bass:    <2400 Hz      Baritone: 2400–2700 Hz
+    //   FHE (1–5 kHz)  Bass:  2384±164 Hz     Baritone: 2454±206 Hz
+    //   Crest factor   Conversational speech: 12–16 dB
+    //   Voiced ratio   Clean studio speech:    60–85 %
+    //
+    println!("╬══ Sidorovich corpus fingerprint ({n} files) ══════════════════════════════════╗");
+    println!("║                                                                               ║");
+    println!(
+        "║  F0 mean:            {:>7.1} Hz    target bass-baritone: 80–130 Hz          ║",
+        f0
+    );
+    println!(
+        "║  F0 stddev:          {:>7.1} Hz    pitch variation (higher = more expressive)║",
+        f0_std
+    );
+    println!(
+        "║  Spectral centroid:  {:>7.0} Hz    bass<2400  baritone 2400–2700 Hz         ║",
+        centroid
+    );
+    println!(
+        "║  RMS level:          {:>7.1} dBFS  studio reference: −13 to −15 dBFS        ║",
+        rms
+    );
+    println!(
+        "║  Crest factor:       {:>7.1} dB    conversational speech: 12–16 dB          ║",
+        crest
+    );
+    println!(
+        "║  Voiced ratio:       {:>7.1} %     studio speech: 60–85 %                   ║",
+        voiced * 100.0
+    );
+    println!("║                                                                               ║");
+    println!("╚═══════════════════════════════════════════════════════════════════════════════╝");
+
+    if let Some(ref_path) = vs {
+        let ref_bytes = std::fs::read(ref_path).expect("cannot read reference");
+        let ref_wav = decode_wav(&ref_bytes).expect("cannot decode reference");
+        let ref_an = analyse(&ref_wav.samples, ref_wav.sample_rate);
+        let tensor = TargetTensor::from_analysis(&ref_an, ref_path.to_str().unwrap_or("?"));
+        let med_bytes = std::fs::read(&files[files.len() / 2]).expect("cannot read median file");
+        let med_wav = decode_wav(&med_bytes).expect("cannot decode median");
+        let med_an = analyse(&med_wav.samples, med_wav.sample_rate);
+        let gap = compute_gap("corpus-median", &med_an, &tensor);
+        println!("\n(median file vs reference WAV)");
+        println!("{}", format_gap_table(&gap));
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     let server = cli.server.trim_end_matches('/');
@@ -1521,6 +1678,9 @@ fn main() {
         }
         Cmd::Analyse { file, vs } => {
             cmd_analyse(&file, vs.as_ref());
+        }
+        Cmd::Corpus { dir, vs } => {
+            cmd_corpus(&dir, vs.as_ref());
         }
         Cmd::Mix { text, model, from } => {
             cmd_mix(server, &text, &model, from.as_deref());

@@ -45,7 +45,9 @@ rustfft      = "6"
 ebur128      = "0.1"
 
 # pitch detection — pYIN algorithm (same as librosa)
-pyin         = "1.2"
+pyin             = "1.2"
+pitch-detection  = "0.3"
+rayon            = "1"
 ndarray      = "0.15"
 rand         = "0.8"
 lru          = "0.12"

@@ -24,7 +24,9 @@ pub use loudness::LoudnessMetrics;
 pub use mcd::compute_mcd;
 pub use mfcc::mfcc_distance;
 pub use pitch::compute_with_contour;
+pub use pitch::fast_f0_stats;
 pub use pitch::PitchMetrics;
+
 pub use report::{format_gap_summary, format_gap_table};
 pub use speaker_sim::{
     cosine_similarity, embed as speaker_embed, speaker_similarity, SpeakerEmbedding,
@@ -114,14 +116,60 @@ pub fn compare(
 
 /// Run the full analysis pipeline on raw f32 samples.
 pub fn analyse(samples: &[f32], sample_rate: u32) -> AnalysisResult {
-    let (pitch_metrics, f0_contour) = pitch::compute_with_contour(samples, sample_rate);
+    let t0 = std::time::Instant::now();
+
+    let t_loudness = std::time::Instant::now();
+    let loudness = loudness::compute(samples, sample_rate);
+    let energy_envelope = loudness::energy_envelope(samples, sample_rate);
+    tracing::debug!(stage = "loudness", ms = t_loudness.elapsed().as_millis());
+
+    let t_spectral = std::time::Instant::now();
+    let spectral = spectral::compute(samples, sample_rate);
+    tracing::debug!(stage = "spectral", ms = t_spectral.elapsed().as_millis());
+
+    let t_temporal = std::time::Instant::now();
+    let temporal = temporal::compute(samples, sample_rate);
+    tracing::debug!(stage = "temporal", ms = t_temporal.elapsed().as_millis());
+
+    let t_voice = std::time::Instant::now();
+    let voice = voice::compute(samples, sample_rate);
+    tracing::debug!(stage = "voice", ms = t_voice.elapsed().as_millis());
+
+    let t_pitch = std::time::Instant::now();
+    let (pitch, f0_contour) = pitch::compute_with_contour(samples, sample_rate);
+    tracing::debug!(stage = "pitch/pyin", ms = t_pitch.elapsed().as_millis());
+
+    tracing::debug!(
+        stage = "total",
+        ms = t0.elapsed().as_millis(),
+        dur_s = samples.len() as f64 / sample_rate as f64
+    );
+
     AnalysisResult {
-        temporal: temporal::compute(samples, sample_rate),
-        spectral: spectral::compute(samples, sample_rate),
-        loudness: loudness::compute(samples, sample_rate),
-        pitch: pitch_metrics,
-        voice: voice::compute(samples, sample_rate),
+        temporal,
+        spectral,
+        loudness,
+        pitch,
+        voice,
         f0_contour,
-        energy_envelope: loudness::energy_envelope(samples, sample_rate),
+        energy_envelope,
+    }
+}
+
+/// Cheap analysis — loudness, spectral, temporal only.  Skips pyin (the 1400ms bottleneck)
+/// and voice metrics. Use for batch corpus fingerprinting; use `analyse()` for single-file detail.
+pub fn analyse_fast(samples: &[f32], sample_rate: u32) -> AnalysisResult {
+    let loudness = loudness::compute(samples, sample_rate);
+    let energy_envelope = loudness::energy_envelope(samples, sample_rate);
+    let spectral = spectral::compute(samples, sample_rate);
+    let temporal = temporal::compute(samples, sample_rate);
+    AnalysisResult {
+        temporal,
+        spectral,
+        loudness,
+        pitch: pitch::PitchMetrics::default(),
+        voice: voice::VoiceMetrics::default(),
+        f0_contour: vec![],
+        energy_envelope,
     }
 }
