@@ -10,42 +10,15 @@
 import { describe, it, expect } from "vitest";
 import { FoniEngine }            from "./core/engine.ts";
 import { DEFAULT_CONFIG }        from "./core/config.ts";
-import type { FacadeFactory, TranslatorFactory, ProcessorFactory } from "./core/engine.ts";
-import { IdentityProcessor }     from "./pipeline/processors.ts";
-import { PipelineTranslator }    from "./pipeline/translators.ts";
-import { makeITGlossaryMiddleware } from "./pipeline/translators.ts";
-import type { AudioProcessor, Player }     from "./core/interfaces.ts";
-import { neutralState }          from "./core/emotion.ts";
+import type { FacadeFactory }    from "./core/engine.ts";
+import { Env }                   from "./test/env.ts";
+import {
+  NullPlayer, NullProcessor,
+  nullProcessorFactory, glossaryTranslatorFactory, makeEspeakFactory,
+} from "./test/stubs.ts";
+import { SHORT_PHRASES } from "./test/corpus.ts";
 
-const PLAY    = process.env.FONI_PLAY === "1";
 const PHRASES = 20;
-
-// ─── Null implementations ─────────────────────────────────────────────────────
-
-class NullProcessor implements AudioProcessor {
-  async process(b: Buffer): Promise<Buffer> { return b; }
-}
-
-class NullPlayer implements Player {
-  readonly played: number[] = [];
-  async play(b: Buffer): Promise<void> { this.played.push(b.length); }
-}
-
-// ─── Factories ────────────────────────────────────────────────────────────────
-
-const nullProcessorFactory: ProcessorFactory = () => new NullProcessor();
-const nullTranslatorFactory: TranslatorFactory = (cfg, _emotion) => {
-  return new PipelineTranslator([makeITGlossaryMiddleware()], cfg.outputLang);
-};
-const nullFacadeFactory: FacadeFactory = async (_cfg, translator) => {
-  const { EspeakBackend } = await import("./backends/espeak.ts");
-  const { SpeakFacade }   = await import("./pipeline/speak-facade.ts");
-  const backend = new EspeakBackend("ru");
-  if (!await backend.isAvailable()) return null;
-  return new SpeakFacade(translator, backend, new NullProcessor(), new NullPlayer(), {
-    voice: "ru", speed: 1.15,
-  });
-};
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -53,30 +26,14 @@ describe("Stress — 30-minute session simulation", () => {
   it(`synthesises ${PHRASES} phrases without queue build-up`, async () => {
     const player = new NullPlayer();
 
-    const facadeFactory: FacadeFactory = async (_cfg, translator) => {
-      const { EspeakBackend } = await import("./backends/espeak.ts");
-      const { SpeakFacade }   = await import("./pipeline/speak-facade.ts");
-      const backend = new EspeakBackend("ru");
-      if (!await backend.isAvailable()) return null;
-      return new SpeakFacade(translator, backend, new NullProcessor(), player, {
-        voice: "ru", speed: 1.15,
-      });
-    };
-
     const engine = new FoniEngine(
       { ...DEFAULT_CONFIG, enabled: true },
-      facadeFactory,
-      nullTranslatorFactory,
+      makeEspeakFactory(player),
+      glossaryTranslatorFactory,
       nullProcessorFactory,
     );
 
-    const phrases = [
-      "Подойди, надо поговорить.",
-      "Деплой прошёл успешно.",
-      "Коммит запушен в мастер.",
-      "Пулл-реквест открыт.",
-      "Тесты прошли.",
-    ];
+    const phrases = [...SHORT_PHRASES];
 
     const t0 = Date.now();
     const latencies: number[] = [];
@@ -116,19 +73,9 @@ describe("Stress — 30-minute session simulation", () => {
 
   it("engine.reset() cancels queued synthesis", async () => {
     const player = new NullPlayer();
-    const facadeFactory: FacadeFactory = async (_cfg, translator) => {
-      const { EspeakBackend } = await import("./backends/espeak.ts");
-      const { SpeakFacade }   = await import("./pipeline/speak-facade.ts");
-      const backend = new EspeakBackend("ru");
-      if (!await backend.isAvailable()) return null;
-      return new SpeakFacade(translator, backend, new NullProcessor(), player, {
-        voice: "ru", speed: 1.15,
-      });
-    };
-
     const engine = new FoniEngine(
       { ...DEFAULT_CONFIG, enabled: true },
-      facadeFactory, nullTranslatorFactory, nullProcessorFactory,
+      makeEspeakFactory(player), glossaryTranslatorFactory, nullProcessorFactory,
     );
 
     // Queue 10 phrases
