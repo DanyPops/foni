@@ -153,7 +153,60 @@ export default async function (pi: ExtensionAPI) {
   );
   const config = engine.config;
 
-  // ── Status bar ─────────────────────────────────────────────────────────────
+    // ── Mixer session ───────────────────────────────────────────────────────────
+
+  interface MixerTrack {
+    label: string; rating?: number; winner?: boolean;
+    note?: string; opts: Record<string, number>; gap_pct?: number;
+  }
+  interface MixerSession {
+    phrase: string; model: string; saved_at: string;
+    tracks: MixerTrack[];
+    ai_suggestions?: Array<{ label: string; rationale: string; opts: Record<string, number> }>;
+  }
+
+  const SESSION_PATH = `${process.env["HOME"] ?? "~"}/.local/share/foni/mixer-session.json`;
+  let mixerSession: MixerSession | null = null;
+
+  async function loadMixerSession(): Promise<void> {
+    try {
+      const { readFile } = await import("node:fs/promises");
+      mixerSession = JSON.parse(await readFile(SESSION_PATH, "utf8")) as MixerSession;
+    } catch { mixerSession = null; }
+  }
+
+  async function saveMixerSession(session: MixerSession): Promise<void> {
+    try {
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const dir = SESSION_PATH.replace(/\/[^\/]+$/, "");
+      await mkdir(dir, { recursive: true });
+      await writeFile(SESSION_PATH, JSON.stringify(session, null, 2));
+    } catch { /* best-effort */ }
+  }
+
+  function mixerWinner(): MixerTrack | undefined {
+    return mixerSession?.tracks.find(t => t.winner);
+  }
+
+  function mixerContext(): string {
+    if (!mixerSession) return "No mixer session loaded.";
+    const winner = mixerWinner();
+    const rated  = mixerSession.tracks.filter(t => t.rating !== undefined);
+    return [
+      `Mixer QA session — phrase: «${mixerSession.phrase}»`,
+      `Saved: ${mixerSession.saved_at}`,
+      "",
+      "Rated tracks (human perceptual judgment):",
+      ...rated.map(t =>
+        `  ${"★".repeat(t.rating ?? 0)}${"☆".repeat(5 - (t.rating ?? 0))} ${t.label}${
+          t.winner ? " ✪ winner" : ""}${t.note ? ` — ${t.note}` : ""}`
+      ),
+      ...(winner ? ["", `Winner DSP opts (${winner.label}):`,
+        JSON.stringify(winner.opts, null, 2)] : []),
+    ].join("\n");
+  }
+
+// ── Status bar ─────────────────────────────────────────────────────────────
 
   function updateStatus(ctx: { ui: { setStatus: Function; theme: any } }): void {
     const { theme } = ctx.ui;
@@ -165,15 +218,18 @@ export default async function (pi: ExtensionAPI) {
     const mat = s.matEnabled ? "+mat" : "";
     const ij  = s.interjectEnabled ? "+oj" : "";
     const emotion = s.emotionEmoji ? ` ${s.emotionEmoji}` : "";
+    const winner   = mixerWinner();
+    const mix      = winner ? theme.fg("accent", ` ✪${winner.label}`) : "";
     ctx.ui.setStatus(
       "tts",
-      theme.fg("accent", "TTS") + theme.fg("dim", ` ${s.backendName}${s.rvcModel ? `+${s.rvcModel}` : ""}${mat}${ij} ${lang}${emotion}`),
+      theme.fg("accent", "TTS") + theme.fg("dim", ` ${s.backendName}${s.rvcModel ? `+${s.rvcModel}` : ""}${mat}${ij} ${lang}${emotion}`) + mix,
     );
   }
 
   // ── Lifecycle events ───────────────────────────────────────────────────────
 
   pi.on("session_start", (_event, ctx) => {
+    loadMixerSession().then(() => updateStatus(ctx));
     updateStatus(ctx);
     // Auto-detect RVC server
     fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(1500) })
@@ -577,6 +633,52 @@ export default async function (pi: ExtensionAPI) {
 
       // ── stop ───────────────────────────────────────────────────────────────
       if (sub === "stop") { engine.stop(); ctx.ui.notify("TTS stopped", "info"); return; }
+
+      // ── mix ─────────────────────────────────────────────────────────────────────
+      if (sub === "mix") {
+        const mixSub = parts[1] ?? "";
+
+        if (mixSub === "status") {
+          await loadMixerSession();
+          ctx.ui.notify(mixerContext(), "info");
+          updateStatus(ctx);
+          return;
+        }
+
+        if (mixSub === "apply") {
+          const winner = mixerWinner();
+          if (!winner) { ctx.ui.notify("No winner set in mixer session. Rate tracks with fonictl mix.", "warning"); return; }
+          ctx.ui.notify(
+            `Applying winner DSP opts from «${winner.label}»\n` +
+            JSON.stringify(winner.opts, null, 2),
+            "info",
+          );
+          return;
+        }
+
+        if (mixSub === "suggest") {
+          if (!mixerSession) { await loadMixerSession(); }
+          if (!mixerSession) { ctx.ui.notify("No mixer session. Run fonictl mix first.", "warning"); return; }
+          const rated   = mixerSession.tracks.filter(t => t.rating !== undefined);
+          const winner  = mixerWinner();
+          if (!rated.length) { ctx.ui.notify("No rated tracks yet. Use rate N 1-5 in fonictl mix.", "warning"); return; }
+
+          // Build suggestion prompt from session context.
+          const prompt  = mixerContext() + "\n\nBased on the ratings and notes above, suggest 2-3 new DSP variants to try next. " +
+            "Format each as JSON: { label, rationale, opts }. opts keys match fonictl mix scratchpad params.";
+          ctx.ui.notify(`⚠ Sending mixer context to agent...\n\n${prompt}`, "info");
+          return;
+        }
+
+        ctx.ui.notify(
+          "Usage: /tts mix status | apply | suggest\n" +
+          "  status  — show current mixer QA session\n" +
+          "  apply   — surface winner DSP opts\n" +
+          "  suggest — ask agent to propose next experiments",
+          "info",
+        );
+        return;
+      }
 
       // ── toggle (no sub) / open panel ───────────────────────────────────────
       if (sub === "") {
