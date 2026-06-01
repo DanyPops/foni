@@ -1,5 +1,8 @@
 import type { Translator } from "./interfaces.ts";
 import type { WordBias, BiasWordMap } from "./interfaces.ts";
+import { getLogger } from "../core/logger.ts";
+
+const log = getLogger();
 
 // ─── Translator defaults ────────────────────────────────────────────────────────────────
 
@@ -359,20 +362,274 @@ export function compose(stack: TextMiddleware[]): (ctx: TextCtx) => Promise<void
  * Reads ctx.text (not ctx.input) so upstream middleware like
  * makeITGlossaryMiddleware can pre-process the text first.
  */
+/**
+ * Budget for subsequent chunks (ms).
+ *
+ * Chunk 0 of every message uses LibreTranslate unconditionally — TTFA.
+ * Chunks 1+ race LibreTranslate vs Ollama; whichever finishes within this
+ * window wins. Ollama quality is preferred when synthesis of the previous
+ * chunk provides the breathing room.
+ *
+ * Tuned to ~one espeak sentence (~2 s at 150 WPM); set lower if RVC is on.
+ */
+// ─── Translation scheduler ───────────────────────────────────────────────────
+
+/**
+ * A translation job. Submitted to the scheduler, resolved when synthesis
+ * is ready to play this chunk.
+ */
+export class TranslationJob {
+  /** LibreTranslate result — set when the FIFO worker finishes. */
+  libreResult: string | null = null;
+  /** Ollama result — set when the LIFO worker reaches this job. */
+  ollamaResult: string | null = null;
+
+  private readonly _libreSettled: Promise<void>;
+  private readonly _ollamaSettled: Promise<void>;
+  private _libreResolve!: () => void;
+  private _ollamaResolve!: () => void;
+
+  constructor(public readonly text: string) {
+    this._libreSettled = new Promise(r => { this._libreResolve = r; });
+    this._ollamaSettled = new Promise(r => { this._ollamaResolve = r; });
+  }
+
+  setLibre(ru: string | null): void {
+    this.libreResult = ru;
+    this._libreResolve();
+  }
+
+  setOllama(ru: string | null): void {
+    this.ollamaResult = ru;
+    this._ollamaResolve();
+  }
+
+  /**
+   * Return the best available translation within `budgetMs`.
+   *
+   * Waits up to `budgetMs` for Ollama; if it doesn't deliver, falls back
+   * to LibreTranslate (which should already be done — it's a FIFO parallel pool).
+   * Never stalls: one of the two will always be available.
+   */
+  async resolve(budgetMs: number): Promise<string> {
+    const preview = this.text.slice(0, 40);
+    const t0      = Date.now();
+
+    log.debug("Job.resolve", "waiting", { preview, budgetMs });
+
+    let timedOut = false;
+    const ollamaOrTimeout = Promise.race([
+      this._ollamaSettled,
+      new Promise<void>(r => setTimeout(() => { timedOut = true; r(); }, budgetMs)),
+    ]);
+    await ollamaOrTimeout;
+
+    if (this.ollamaResult && this.ollamaResult !== this.text) {
+      log.debug("Job.resolve", "winner: ollama", { preview, ms: Date.now() - t0 });
+      return this.ollamaResult;
+    }
+
+    if (timedOut) {
+      log.debug("Job.resolve", "ollama missed budget — using libre", { preview, budgetMs });
+    }
+
+    await this._libreSettled;
+    const result = this.libreResult ?? this.text;
+    log.debug("Job.resolve", this.libreResult ? "winner: libre" : "winner: passthrough", {
+      preview, ms: Date.now() - t0,
+    });
+    return result;
+  }
+}
+
+/**
+ * TranslationScheduler — coordinates LibreTranslate (FIFO + parallel) and
+ * Ollama (LIFO + single worker) so every chunk gets translated as quickly as
+ * possible while Ollama opportunistically upgrades quality on recent chunks.
+ *
+ * FIFO for Libre: preserves ordering guarantees; `libreWorkers` run concurrently.
+ * LIFO for Ollama: most-recently-submitted job is processed first — it has the
+ *   largest synthesis time-budget and benefits most from a quality upgrade.
+ */
+export class TranslationScheduler {
+  private readonly libre:  LibreTranslateTranslatorImpl;
+  private readonly ollama: OllamaTranslator;
+
+  // LibreTranslate FIFO pool — semaphore controls parallelism.
+  private libreSlots:    number;
+  private readonly libreWaiters: Array<() => void> = [];
+  private readonly libreQueue:   TranslationJob[]  = [];
+
+  // Ollama LIFO stack — single worker, pops from the top.
+  private readonly ollamaStack: TranslationJob[] = [];
+  private ollamaRunning = false;
+
+  constructor(
+    from:         string,
+    to:           string,
+    libreWorkers = 3,           // parallel Libre requests
+    ollamaUrl    = "http://localhost:11434",
+    ollamaModel  = "qwen3:1.7b",
+  ) {
+    this.libre       = new LibreTranslateTranslatorImpl(from, to);
+    this.ollama      = new OllamaTranslator(ollamaUrl, ollamaModel, from, to);
+    this.libreSlots  = libreWorkers;
+  }
+
+  /**
+   * Submit a chunk. Returns a `TranslationJob` immediately.
+   * Both translators start as soon as capacity allows (Libre: next free slot,
+   * Ollama: next time the LIFO worker is free).
+   */
+  submit(text: string): TranslationJob {
+    const job    = new TranslationJob(text);
+    const preview = text.slice(0, 40);
+
+    this.libreQueue.push(job);
+    log.debug("Scheduler", "libre enqueue", {
+      preview, libreQueue: this.libreQueue.length, libreSlots: this.libreSlots,
+    });
+    void this.drainLibre();
+
+    this.ollamaStack.push(job);
+    log.debug("Scheduler", "ollama push (LIFO stack top)", {
+      preview, stackDepth: this.ollamaStack.length, ollamaRunning: this.ollamaRunning,
+    });
+    void this.drainOllama();
+
+    return job;
+  }
+
+  // ── Libre FIFO pool ──────────────────────────────────────────────────────
+
+  private async drainLibre(): Promise<void> {
+    if (this.libreSlots <= 0) {
+      log.debug("Scheduler", "libre waiting for slot", { queue: this.libreQueue.length });
+      await new Promise<void>(r => this.libreWaiters.push(r));
+    }
+    this.libreSlots--;
+
+    const job = this.libreQueue.shift();
+    if (!job) { this.releaseLibre(); return; }
+
+    const preview = job.text.slice(0, 40);
+    const t0 = Date.now();
+    log.debug("Scheduler", "libre start", { preview, slotsLeft: this.libreSlots });
+
+    try {
+      const ru = await this.libre.translate(job.text);
+      const ms = Date.now() - t0;
+      log.debug("Scheduler", ru ? "libre done" : "libre miss (down)", { preview, ms, ru: ru?.slice(0, 40) });
+      job.setLibre(ru);
+    } catch (e) {
+      log.warn("Scheduler", "libre error", { preview, err: String(e) });
+      job.setLibre(null);
+    } finally {
+      this.releaseLibre();
+    }
+  }
+
+  private releaseLibre(): void {
+    this.libreSlots++;
+    const next = this.libreWaiters.shift();
+    if (next) {
+      log.debug("Scheduler", "libre slot released → unblocking waiter", { waiters: this.libreWaiters.length });
+      next();
+    }
+  }
+
+  // ── Ollama LIFO worker ────────────────────────────────────────────────────
+
+  private async drainOllama(): Promise<void> {
+    if (this.ollamaRunning) {
+      log.debug("Scheduler", "ollama already running — job queued on stack", {
+        stackDepth: this.ollamaStack.length,
+      });
+      return;
+    }
+    this.ollamaRunning = true;
+    log.debug("Scheduler", "ollama worker started");
+
+    while (this.ollamaStack.length > 0) {
+      const stackSnapshot = this.ollamaStack.map(j => j.text.slice(0, 20));
+      const job = this.ollamaStack.pop()!;
+      const preview = job.text.slice(0, 40);
+      const t0 = Date.now();
+
+      log.debug("Scheduler", "ollama pop (LIFO)", {
+        chosen: preview,
+        remaining: stackSnapshot.slice(0, -1), // stack before pop
+      });
+
+      try {
+        const ru = await this.ollama.translate(job.text);
+        const ms = Date.now() - t0;
+        log.info("Scheduler", "ollama done", { preview, ms, ru: ru?.slice(0, 40) });
+        job.setOllama(ru);
+      } catch (e) {
+        log.warn("Scheduler", "ollama error", { preview, err: String(e) });
+        job.setOllama(null);
+      }
+
+      log.debug("Scheduler", "ollama stack after job", { remaining: this.ollamaStack.length });
+    }
+
+    log.debug("Scheduler", "ollama worker idle — stack empty");
+    this.ollamaRunning = false;
+  }
+
+  get stats(): { libre: number; ollamaStack: number; ollamaRunning: boolean } {
+    return {
+      libre:        this.libreQueue.length,
+      ollamaStack:  this.ollamaStack.length,
+      ollamaRunning: this.ollamaRunning,
+    };
+  }
+}
+
+// Budget constants — tune per deployment.
+/** Chunk 0: how long to wait before declaring Libre too slow and using Ollama result. */
+const CHUNK0_LIBRE_BUDGET_MS = 800;
+/** Chunks 1+: synthesis window for the previous chunk (RVC ≈ 2–4 s, espeak ≈ 0.1 s). */
+const CHUNKN_OLLAMA_BUDGET_MS = 4_000;
+/** Gap between calls that separates messages. */
+const NEW_MESSAGE_GAP_MS = 1_500;
+
 export function makeTranslateMiddleware(from: string, to: string): TextMiddleware {
   if (from === to) {
     const t = new IdentityTranslatorImpl();
     return async (ctx, next) => { ctx.text = await t.translate(ctx.text); await next(); };
   }
-  const libre  = new LibreTranslateTranslatorImpl(from, to);
-  const ollama = new OllamaTranslator("http://localhost:11434", "qwen3:1.7b", from, to);
+
+  const scheduler = new TranslationScheduler(from, to);
+  let lastCallMs  = 0;
+  let chunkIdx    = 0;
+
   return async (ctx, next) => {
-    // Try LibreTranslate first (fast, self-hosted); fall back to Ollama if unreachable.
-    const result = await libre.translate(ctx.text);
-    ctx.text = result ?? await ollama.translate(ctx.text);
+    const now     = Date.now();
+    const isFirst = (now - lastCallMs) > NEW_MESSAGE_GAP_MS;
+    if (isFirst) chunkIdx = 0;
+    lastCallMs = now;
+
+    const chunk  = chunkIdx++;
+    const budget = isFirst ? CHUNK0_LIBRE_BUDGET_MS : CHUNKN_OLLAMA_BUDGET_MS;
+
+    log.debug("Translate", `chunk ${chunk} submitted`, {
+      preview: ctx.text.slice(0, 40),
+      isFirst,
+      budget,
+      stats: scheduler.stats,
+    });
+
+    const job    = scheduler.submit(ctx.text);
+    ctx.text     = await job.resolve(budget);
+
+    log.debug("Translate", `chunk ${chunk} resolved`, { result: ctx.text.slice(0, 40) });
+
     await next();
   };
 }
+
 
 // ─── IT Glossary middleware ─────────────────────────────────────────────────────────
 //
