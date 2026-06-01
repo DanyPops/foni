@@ -130,6 +130,23 @@ enum Cmd {
         vs: Option<PathBuf>,
     },
 
+    /// Batch A/B/C/N tuning — run all presets through the compare pipeline, rank by gap
+    Tune {
+        /// Directory of studio WAV files
+        studio: PathBuf,
+        /// JSON file with named presets [{"name":"", "opts":{...}}]
+        #[arg(long, default_value = "foni-maquettes.json")]
+        presets: PathBuf,
+        /// Only process WAVs shorter than this (seconds)
+        #[arg(long, default_value_t = 8.0)]
+        max_dur: f32,
+        /// Reuse existing Whisper transcriptions (skip re-transcribing)
+        #[arg(long)]
+        skip_transcribe: bool,
+        #[arg(short, long, default_value = "bandit")]
+        model: String,
+    },
+
     /// 1:1 studio vs synthetic test harness
     Compare {
         /// Directory of studio WAV files (the ground truth)

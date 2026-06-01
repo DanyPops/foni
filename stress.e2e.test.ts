@@ -1,11 +1,4 @@
-/**
- * stress.e2e.test.ts — TSK-22: TTTS latency, audio queue, memory under load.
- *
- * Simulates a 30-minute session with 120 phrases synthesized back-to-back.
- * Measures: TTTS (time-to-first-speech), queue delay, peak memory usage.
- *
- * Run: RVC_URL=http://127.0.0.1:5050 npx vitest run stress.e2e
- */
+// 120-phrase synthesis stress test: queue ordering, no build-up, clean reset.
 
 import { describe, it, expect } from "vitest";
 import { FoniEngine }            from "./core/engine.ts";
@@ -22,7 +15,7 @@ const PHRASES = 20;
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe("Stress — 30-minute session simulation", () => {
+describe("synthesis queue under load", () => {
   it(`synthesises ${PHRASES} phrases without queue build-up`, async () => {
     const player = new NullPlayer();
 

@@ -1,16 +1,3 @@
-/**
- * integration.test.ts — Rust↔TS seam tests.
- *
- * Verifies that the TypeScript extension correctly calls foni-synth endpoints
- * and that those calls produce measurable effects on the audio.
- *
- * Skipped when FONI_SYNTH_URL is not set (local dev without foni-synth running).
- * Required in CI with foni-synth started before the test run.
- *
- * Run with foni-synth:
- *   cargo run -p foni-synth &
- *   FONI_SYNTH_URL=http://localhost:5050 npx vitest run integration
- */
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { SmoothingProcessor, IdentityProcessor } from "./pipeline/processors.ts";

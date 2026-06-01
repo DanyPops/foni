@@ -1,12 +1,3 @@
-/**
- * E2E tests for RVC container — run only when RVC server is reachable.
- *
- * Start server before running:
- *   podman start foni-rvc   (or: podman run -d --name foni-rvc -p 5050:5050 localhost/foni-rvc)
- *
- * Run:
- *   RVC_URL=http://127.0.0.1:5050 npm test -- rvc.e2e
- */
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { RVCProcessor } from "./pipeline/processors.ts";
