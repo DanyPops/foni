@@ -234,41 +234,44 @@ export default async function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     loadMixerSession().then(() => updateStatus(ctx));
     updateStatus(ctx);
-    // Auto-detect RVC server and ensure model is loaded in ONNX session pool.
-    // Always check onnx_ready — a server restart clears the session pool even
-    // if rvcEnabled is sticky from the previous session.
-    fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(1500) })
-      .then(r => r.ok ? r.json() : null)
-      .then(async (data: unknown) => {
-        const typed = data as { models: string[]; onnx_ready?: string[] } | null;
-        if (!typed) return;
-        const models: string[]     = typed.models     ?? [];
-        const onnxReady: string[]  = typed.onnx_ready ?? [];
-        if (models.length > 0 && !config.rvcModel) config.rvcModel = models[0];
-        // Load model when: not yet enabled OR enabled but ONNX sessions lost (server restart).
-        const needsLoad = config.rvcModel &&
-          (!config.rvcEnabled || !onnxReady.includes(config.rvcModel));
-        if (needsLoad) {
-          try {
-            const r = await fetch(`${config.rvcUrl}/models/${encodeURIComponent(config.rvcModel!)}`, {
-              method: "POST", signal: AbortSignal.timeout(10_000),
-            });
-            if (r.ok) {
-              config.rvcEnabled = true;
-              engine.invalidateFacade();
-            }
-          } catch { /* RVC load failed — stay on current facade */ }
-        }
-        updateStatus(ctx);
-        engine.prewarm().then(async () => {
-          try {
-            const { PREWARM_RU } = await import("./core/config.ts");
-            ctx.ui.notify(`Аудио кэш прогрет (${PREWARM_RU.length} фраз)`, "info");
-          } catch { /* ctx may be stale in CLI sessions — ignore */ }
-        });
-      })
-      .catch(() => {});
+    bootstrapServer(ctx);
   });
+
+  /** Connect to foni-synth, load model if needed, rebuild facade. Retries once after 10s. */
+  async function bootstrapServer(ctx: any, attempt = 0): Promise<void> {
+    try {
+      const r    = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(2_000) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data      = await r.json() as { models: string[]; onnx_ready?: string[] };
+      const models    = data.models     ?? [];
+      const onnxReady = data.onnx_ready ?? [];
+
+      if (models.length > 0 && !config.rvcModel) config.rvcModel = models[0];
+
+      const needsLoad = config.rvcModel &&
+        (!config.rvcEnabled || !onnxReady.includes(config.rvcModel));
+
+      if (needsLoad) {
+        const load = await fetch(
+          `${config.rvcUrl}/models/${encodeURIComponent(config.rvcModel!)}`,
+          { method: "POST", signal: AbortSignal.timeout(15_000) },
+        );
+        if (load.ok) {
+          config.rvcEnabled = true;
+          engine.invalidateFacade();
+        }
+      }
+
+      updateStatus(ctx);
+      engine.prewarm().catch(() => {});
+    } catch {
+      if (attempt === 0) {
+        // Server may still be starting (ExecStartPost 5s warm-up). Retry once.
+        setTimeout(() => bootstrapServer(ctx, 1), 10_000);
+      }
+      // After second failure stay silent — user can /tts rvc on to retry.
+    }
+  }
 
   pi.on("message_update", (_event, _ctx) => {
     if (_event.message.role !== "assistant") return;

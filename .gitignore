@@ -18,3 +18,11 @@ Thumbs.db
 
 # Logs
 *.log
+ncpamixer
+pulsemixer
+rsmixer
+scope-tui
+oosc-rs
+wiremix
+stalker-anomaly-gamedata
+stalker-soc-gamedata
