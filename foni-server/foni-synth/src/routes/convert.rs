@@ -38,10 +38,11 @@ pub(crate) fn load_session(path: &Path) -> Result<ort::session::Session, String>
         .map_err(|e| e.to_string())
 }
 
-pub(crate) fn run_contentvec(
+/// Extract ContentVec features. Returns raw [t_prime, 768] (before repeat-by-2).
+pub(crate) fn extract_contentvec(
     audio_16k: &[f32],
     session: &mut ort::session::Session,
-) -> Result<Vec<f32>, String> {
+) -> Result<(Vec<f32>, usize), String> {
     use ort::value::Tensor;
 
     let t = audio_16k.len();
@@ -58,16 +59,36 @@ pub(crate) fn run_contentvec(
 
     let t_prime = shape[1] as usize;
     assert_eq!(shape[2], 768, "ContentVec must output 768-dim features");
+    Ok((data.to_vec(), t_prime))
+}
 
-    let mut repeated = vec![0.0f32; t_prime * 2 * 768];
+/// Repeat each frame twice (50 Hz → 100 Hz) to match the generator hop.
+pub(crate) fn repeat_by_2(feats: &[f32], t_prime: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; t_prime * 2 * 768];
     for ti in 0..t_prime {
         for di in 0..768 {
-            let v = data[ti * 768 + di];
-            repeated[(ti * 2) * 768 + di] = v;
-            repeated[(ti * 2 + 1) * 768 + di] = v;
+            let v = feats[ti * 768 + di];
+            out[(ti * 2) * 768 + di] = v;
+            out[(ti * 2 + 1) * 768 + di] = v;
         }
     }
-    Ok(repeated)
+    out
+}
+
+/// Backward-compat wrapper: extract + optional voice-index blend + repeat.
+pub(crate) fn run_contentvec(
+    audio_16k: &[f32],
+    session: &mut ort::session::Session,
+    voice_idx: Option<&crate::voice_index::VoiceIndex>,
+    index_rate: f32,
+) -> Result<Vec<f32>, String> {
+    let (raw, t_prime) = extract_contentvec(audio_16k, session)?;
+    let blended = if let Some(idx) = voice_idx {
+        idx.blend(&raw, t_prime, index_rate)
+    } else {
+        raw
+    };
+    Ok(repeat_by_2(&blended, t_prime))
 }
 
 // Fixed mel-spectrogram params required by the RMVPE model training config.
@@ -498,9 +519,16 @@ pub async fn convert(
         };
     }
 
+    let vi = state.0.voice_index.read().await;
+    let params = state.0.params.read().await;
     let phone = stage!(
         "ContentVec",
-        run_contentvec(&audio_16k, &mut pool.contentvec)
+        run_contentvec(
+            &audio_16k,
+            &mut pool.contentvec,
+            vi.as_ref(),
+            params.index_rate
+        )
     );
     let (pitch, pitchf) = stage!(
         "RMVPE",
