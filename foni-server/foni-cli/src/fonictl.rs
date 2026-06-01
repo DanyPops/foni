@@ -83,6 +83,15 @@ enum Cmd {
         model: String,
     },
 
+    /// Interactive DSP mixer REPL — play, tweak, compare, render
+    Mix {
+        /// Phrase to mix
+        #[arg(default_value = "Подойди-ка, надо тебе ситуацию прояснить.")]
+        text: String,
+        #[arg(short, long, default_value = "bandit")]
+        model: String,
+    },
+
     /// Print server health and loaded model
     Status,
 
@@ -961,6 +970,391 @@ fn cmd_listen(server: &str, text: &str, model: &str, dsp_variants: bool, play_re
     println!("\n  done.");
 }
 
+// ─── Mixer REPL ────────────────────────────────────────────────────────────────────
+
+struct Track {
+    label: String,
+    desc: String,
+    path: std::path::PathBuf,
+    opts: serde_json::Value,
+}
+
+fn mixer_print_tracks(tracks: &[Track]) {
+    println!();
+    println!("  {:>3}  {:<22}  {}", "#", "Label", "Config");
+    println!("  {}", "─".repeat(72));
+    for (i, t) in tracks.iter().enumerate() {
+        let rendered = if t.path.exists() { "●" } else { "◦" };
+        println!("  {} {:>2}  {:<22}  {}", rendered, i + 1, t.label, t.desc);
+    }
+    println!();
+}
+
+fn opts_describe(opts: &serde_json::Value) -> String {
+    let get = |k: &str| opts.get(k).and_then(|v| v.as_f64());
+    let mut parts = Vec::new();
+    if let Some(v) = get("rmsTargetLufs") {
+        parts.push(format!("rms={v:.0}"))
+    }
+    if let Some(v) = get("compressionRatio") {
+        parts.push(format!("comp={v:.1}"))
+    }
+    if let Some(v) = get("tiltLowDb") {
+        parts.push(format!("lo={v:.0}"))
+    }
+    if let Some(v) = get("tiltHighDb") {
+        parts.push(format!("hi={v:.0}"))
+    }
+    if let Some(v) = get("vibratoDepth") {
+        parts.push(format!("vib={v:.4}"))
+    }
+    if let Some(v) = get("presenceDb") {
+        parts.push(format!("pres={v:.1}"))
+    }
+    if let Some(v) = get("deEssDb") {
+        parts.push(format!("deess={v:.0}"))
+    }
+    if let Some(v) = get("reverbMs") {
+        parts.push(format!("rev={v:.0}ms"))
+    }
+    if parts.is_empty() {
+        "defaults".into()
+    } else {
+        parts.join("  ")
+    }
+}
+
+const MIXER_HELP: &str = r#"
+  Commands:
+    ls / list          show all tracks
+    N                  play track N
+    r                  replay last
+    cmp A B            play A, then B back-to-back
+    opts               show scratchpad DSP opts
+    set KEY VAL        set scratchpad opt  (e.g. set vibratoDepth 0)
+    reset              reset scratchpad to defaults
+    fork N             copy track N’s opts to scratchpad
+    render NAME        render scratchpad → new track
+    drop N             remove track N
+    phrase TEXT        change phrase (clears rendered tracks)
+    analyse N          print acoustic metrics for track N
+    cmp N ref          compare track N against Sidorovich original
+    q / quit           exit
+"#;
+
+fn cmd_mix(server: &str, text: &str, model: &str) {
+    use std::io::{BufRead, Write};
+
+    let default_opts = serde_json::json!({
+        "rmsTargetLufs": -8, "compressionRatio": 4, "compressionMakeupDb": 5,
+        "tiltLowDb": 10, "tiltHighDb": -8,
+        "vibratoFreq": 6, "vibratoDepth": 0.003,
+        "reverbMs": 8, "reverbDecay": 0.04
+    });
+
+    let mut phrase = text.to_string();
+    let mut scratch = default_opts.clone();
+    let mut last_played: Option<usize> = None;
+
+    // Seed tracks from default maquettes.
+    let mut tracks: Vec<Track> = default_maquettes()
+        .into_iter()
+        .map(|m| Track {
+            label: m.name.clone(),
+            desc: m.describe(),
+            path: std::env::temp_dir()
+                .join(format!("fonictl_mix_{}.wav", m.name.replace(' ', "_"))),
+            opts: m.opts,
+        })
+        .collect();
+
+    // Also pick up any existing diagnose files from the last --diagnose run.
+    for (slug, desc) in &[
+        ("a_rvc_raw", "RVC only"),
+        ("b_novibrato", "vibrato off"),
+        ("c_nocomp", "no compression"),
+        ("d_notilt", "no tilt"),
+        ("e_noreverb", "no reverb"),
+        ("f_full_dsp", "full DSP"),
+    ] {
+        let path = std::env::temp_dir().join(format!("fonictl_diag_{slug}.wav"));
+        if path.exists() {
+            tracks.push(Track {
+                label: slug.to_string(),
+                desc: desc.to_string(),
+                path,
+                opts: serde_json::json!({}),
+            });
+        }
+    }
+
+    println!("\n————————————————————————————————————————");
+    println!("  🏛  Foni Mixer   (type 'help' for commands)");
+    println!("  Phrase: «{phrase}»");
+    println!("  Model:  {model}");
+
+    // Render un-rendered maquettes upfront.
+    let to_render: Vec<usize> = tracks
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| {
+            !t.path.exists() && !t.opts.as_object().map(|o| o.is_empty()).unwrap_or(true)
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    if !to_render.is_empty() {
+        println!("  Rendering {} maquettes…", to_render.len());
+        let pb = ProgressBar::new(to_render.len() as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("  [{bar:30}] {pos}/{len}  {msg}")
+                .unwrap(),
+        );
+
+        // Render: synthesize RVC base once, then /process for each.
+        let rvc_base = synth_request(
+            server,
+            &phrase,
+            model,
+            "ru",
+            150,
+            false,
+            serde_json::json!({}),
+        );
+        match rvc_base {
+            Err(e) => pb.println(format!("  ❌ RVC synthesis: {e}")),
+            Ok(base) => {
+                for i in to_render {
+                    let t = &tracks[i];
+                    pb.set_message(t.label.clone());
+                    match process_request(server, &base, t.opts.clone()) {
+                        Ok(wav) => {
+                            std::fs::write(&t.path, wav).unwrap();
+                        }
+                        Err(e) => {
+                            pb.println(format!("  ❌ {}: {e}", t.label));
+                        }
+                    }
+                    pb.inc(1);
+                }
+            }
+        }
+        pb.finish_and_clear();
+    }
+
+    mixer_print_tracks(&tracks);
+
+    let stdin = std::io::stdin();
+    loop {
+        print!("  mix> ");
+        std::io::stdout().flush().ok();
+        let mut raw = String::new();
+        if stdin.lock().read_line(&mut raw).unwrap_or(0) == 0 {
+            break;
+        }
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.splitn(3, ' ').collect();
+        let cmd = parts[0];
+
+        match cmd {
+            "q" | "quit" | "exit" => break,
+
+            "help" | "?" => println!("{MIXER_HELP}"),
+
+            "ls" | "list" => mixer_print_tracks(&tracks),
+
+            "opts" => {
+                println!("  Scratchpad:");
+                if let Some(obj) = scratch.as_object() {
+                    for (k, v) in obj {
+                        println!("    {k:<24} {v}");
+                    }
+                }
+                println!();
+            }
+
+            "set" if parts.len() == 3 => {
+                let key = parts[1];
+                if let Ok(f) = parts[2].parse::<f64>() {
+                    scratch[key] = f.into();
+                    println!("  {key} = {}", parts[2]);
+                } else {
+                    eprintln!("  not a number: {}", parts[2]);
+                }
+            }
+
+            "reset" => {
+                scratch = default_opts.clone();
+                println!("  scratchpad reset to defaults");
+            }
+
+            "fork" if parts.len() >= 2 => {
+                if let Ok(n) = parts[1].parse::<usize>() {
+                    if n >= 1 && n <= tracks.len() {
+                        scratch = tracks[n - 1].opts.clone();
+                        println!("  forked opts from track {n} ({})", tracks[n - 1].label);
+                        println!("  {}", opts_describe(&scratch));
+                    } else {
+                        eprintln!("  track {n} not found");
+                    }
+                }
+            }
+
+            "render" if parts.len() >= 2 => {
+                let label = parts[1].to_string();
+                let desc = opts_describe(&scratch);
+                let path = std::env::temp_dir()
+                    .join(format!("fonictl_mix_{}.wav", label.replace(' ', "_")));
+                print!("  rendering ‘{label}’… ");
+                std::io::stdout().flush().ok();
+                match synth_request(
+                    server,
+                    &phrase,
+                    model,
+                    "ru",
+                    150,
+                    false,
+                    serde_json::json!({}),
+                ) {
+                    Err(e) => eprintln!("  ❌ RVC: {e}"),
+                    Ok(base) => match process_request(server, &base, scratch.clone()) {
+                        Err(e) => eprintln!("  ❌ DSP: {e}"),
+                        Ok(wav) => {
+                            std::fs::write(&path, &wav).unwrap();
+                            println!("ok  ({} kB)", wav.len() / 1024);
+                            // Replace existing track with same label or append.
+                            if let Some(t) = tracks.iter_mut().find(|t| t.label == label) {
+                                t.desc = desc;
+                                t.path = path;
+                                t.opts = scratch.clone();
+                            } else {
+                                tracks.push(Track {
+                                    label,
+                                    desc,
+                                    path,
+                                    opts: scratch.clone(),
+                                });
+                            }
+                            mixer_print_tracks(&tracks);
+                        }
+                    },
+                }
+            }
+
+            "drop" if parts.len() >= 2 => {
+                if let Ok(n) = parts[1].parse::<usize>() {
+                    if n >= 1 && n <= tracks.len() {
+                        let removed = tracks.remove(n - 1);
+                        println!("  dropped track {n}: {}", removed.label);
+                        mixer_print_tracks(&tracks);
+                    } else {
+                        eprintln!("  track {n} not found");
+                    }
+                }
+            }
+
+            "phrase" if parts.len() >= 2 => {
+                let new_phrase: String = line["phrase".len()..].trim().to_string();
+                if !new_phrase.is_empty() {
+                    phrase = new_phrase;
+                    for t in tracks.iter_mut() {
+                        if t.path.exists() {
+                            std::fs::remove_file(&t.path).ok();
+                        }
+                    }
+                    println!("  phrase → «{phrase}»  (tracks cleared — re-render to listen)");
+                }
+            }
+
+            "analyse" if parts.len() >= 2 => {
+                if let Ok(n) = parts[1].parse::<usize>() {
+                    if n >= 1 && n <= tracks.len() && tracks[n - 1].path.exists() {
+                        cmd_analyse(&tracks[n - 1].path, None);
+                    } else {
+                        eprintln!("  track {n} not rendered yet");
+                    }
+                }
+            }
+
+            "cmp" if parts.len() >= 3 => {
+                let ref_path =
+                    std::path::PathBuf::from("baseline/stalker/wav/sidorovich/trader1a.wav");
+                let resolve = |s: &str| -> Option<std::path::PathBuf> {
+                    if s == "ref" {
+                        return if ref_path.exists() {
+                            Some(ref_path.clone())
+                        } else {
+                            None
+                        };
+                    }
+                    s.parse::<usize>().ok().and_then(|n| {
+                        if n >= 1 && n <= tracks.len() && tracks[n - 1].path.exists() {
+                            Some(tracks[n - 1].path.clone())
+                        } else {
+                            None
+                        }
+                    })
+                };
+                match (resolve(parts[1]), resolve(parts[2])) {
+                    (Some(a), Some(b)) => {
+                        println!("  ▶ A: {}", parts[1]);
+                        play_wav(&a);
+                        println!("  ▶ B: {}", parts[2]);
+                        play_wav(&b);
+                    }
+                    _ => eprintln!(
+                        "  invalid track(s) — use numbers 1-{} or 'ref'",
+                        tracks.len()
+                    ),
+                }
+            }
+
+            "r" => {
+                if let Some(n) = last_played {
+                    if tracks[n].path.exists() {
+                        play_wav(&tracks[n].path);
+                    }
+                } else {
+                    eprintln!("  nothing played yet");
+                }
+            }
+
+            n_str => {
+                if let Ok(n) = n_str.parse::<usize>() {
+                    if n >= 1 && n <= tracks.len() {
+                        let path = tracks[n - 1].path.clone();
+                        if path.exists() {
+                            println!(
+                                "  ▶  [{}] {} — {}",
+                                n,
+                                tracks[n - 1].label,
+                                tracks[n - 1].desc
+                            );
+                            play_wav(&path);
+                            last_played = Some(n - 1);
+                        } else {
+                            eprintln!(
+                                "  track {n} not rendered. Run: render {}",
+                                tracks[n - 1].label
+                            );
+                        }
+                    } else {
+                        eprintln!("  no track {n}");
+                    }
+                } else {
+                    eprintln!("  unknown command: {cmd}  (type 'help')");
+                }
+            }
+        }
+    }
+    println!("\n  bye.");
+}
+
 fn cmd_samples(server: &str, out_dir: &PathBuf, model: &str) {
     let phrases = vec![
         ("01_trader1a", "Подойди-ка, надо тебе ситуацию прояснить."),
@@ -1141,6 +1535,9 @@ fn main() {
         }
         Cmd::Analyse { file, vs } => {
             cmd_analyse(&file, vs.as_ref());
+        }
+        Cmd::Mix { text, model } => {
+            cmd_mix(server, &text, &model);
         }
         Cmd::Listen {
             text,
