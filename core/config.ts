@@ -19,13 +19,14 @@ export interface FoniConfig {
   fakeyouApiKey: string;
 
   // Mat — Russian profanity injection
-  matEnabled: boolean;
-  matProb:    number;
-  matStretch: number;
+  matEnabled:      boolean;
+  matProb:         number;
+  matStretch:      number;
+  matCooldownMs:   number; // min ms between injections across chunks
 
-  // Interjections — Russian exclamations
-  interjectEnabled: boolean;
-  interjectProb:    number;
+  interjectEnabled:    boolean;
+  interjectProb:       number;
+  interjectCooldownMs: number;
 
   // RVC — bandit voice
   rvcEnabled: boolean;
@@ -52,12 +53,14 @@ export const DEFAULT_CONFIG: FoniConfig = {
   fakeyouToken: "",
   fakeyouApiKey: "",
 
-  matEnabled: true,
-  matProb:    0.35,
-  matStretch: 0.5,
+  matEnabled:      true,
+  matProb:         0.35,
+  matStretch:      0.5,
+  matCooldownMs:   20_000, // at most once per 20s
 
-  interjectEnabled: true,
-  interjectProb:    0.25,
+  interjectEnabled:    true,
+  interjectProb:       0.25,
+  interjectCooldownMs: 12_000, // at most once per 12s
 
   rvcEnabled: true,
   rvcUrl:     "http://localhost:5050",

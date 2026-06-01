@@ -722,20 +722,41 @@ export function makeITGlossaryMiddleware(): TextMiddleware {
 }
 
 /** Inject Russian mat into ctx.text after downstream runs. */
-export function makeMatMiddleware(prob: number, stretch: number, bias?: WordBias, biasWords?: BiasWordMap | null): TextMiddleware {
+export function makeMatMiddleware(
+  prob: number,
+  stretch: number,
+  bias?: WordBias,
+  biasWords?: BiasWordMap | null,
+  cooldownMs = 20_000,
+): TextMiddleware {
   const diversifier = new WordDiversifier();
+  let lastFiredAt = 0;
   return async (ctx, next) => {
     await next();
+    const now = Date.now();
+    if (now - lastFiredAt < cooldownMs) return;
+    const before = ctx.text;
     ctx.text = injectMat(ctx.text, prob, stretch, diversifier, bias, biasWords);
+    if (ctx.text !== before) lastFiredAt = now;
   };
 }
 
 /** Inject Russian interjections into ctx.text after downstream runs. */
-export function makeInterjectMiddleware(prob: number, bias?: WordBias, biasWords?: BiasWordMap | null): TextMiddleware {
+export function makeInterjectMiddleware(
+  prob: number,
+  bias?: WordBias,
+  biasWords?: BiasWordMap | null,
+  cooldownMs = 12_000,
+): TextMiddleware {
   const diversifier = new WordDiversifier();
+  let lastFiredAt = 0;
   return async (ctx, next) => {
     await next();
+    const now = Date.now();
+    if (now - lastFiredAt < cooldownMs) return;
+    const before = ctx.text;
     ctx.text = injectInterject(ctx.text, prob, diversifier, bias, biasWords);
+    if (ctx.text !== before) lastFiredAt = now;
   };
 }
 
@@ -892,6 +913,15 @@ export class MatTranslator implements Translator {
  * System prompt steers the model to keep IT terms as Russian loanwords
  * (e.g. "deploy" → "деплоить", "commit" → "коммит").
  */
+/** Strip qwen3 /no_think tokens, <think> blocks, and other model artifacts. */
+function scrubModelArtifacts(raw: string): string {
+  return raw
+    .replace(/<think>[\s\S]*?<\/think>/g, "")  // extended thinking blocks
+    .replace(/\/(no_think|think|system|inst)[^\s]*/gi, "")  // leaked control tokens
+    .replace(/^\s*[/\\][a-z_]+\s*/gm, "")  // lines that are just a slash-command
+    .trim();
+}
+
 export class OllamaTranslator implements Translator {
   constructor(
     private readonly ollamaUrl: string = "http://localhost:11434",
@@ -926,7 +956,8 @@ export class OllamaTranslator implements Translator {
       });
       if (!resp.ok) throw new Error(`Ollama ${resp.status}`);
       const { message } = await resp.json() as { message: { content: string } };
-      return message.content.trim() || text;
+      const cleaned = scrubModelArtifacts(message.content);
+      return cleaned || text;
     } catch {
       return text; // last resort passthrough
     }
