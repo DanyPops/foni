@@ -100,7 +100,9 @@ const facadeFactory: FacadeFactory = async (cfg, translator, emotion) => {
     if (await synth.isAvailable()) {
       syncBreaksFrom(cfg.rvcUrl); // fire-and-forget: keeps prosody.ts in sync with Rust
       return new SpeakFacade(translator, synth, new IdentityProcessor(), new SystemPlayer(), {
-        voice: cfg.voice, speed: cfg.speed,
+        // espeak voice must match outputLang — cfg.voice is the input-side voice
+        voice: cfg.outputLang === "ru" ? "ru" : cfg.voice,
+        speed: cfg.speed,
       });
     }
   }
@@ -129,7 +131,8 @@ const facadeFactory: FacadeFactory = async (cfg, translator, emotion) => {
   if (!backend) return null;
   const processor = processorFactory(cfg);
   return new SpeakFacade(translator, backend, processor, new SystemPlayer(), {
-    voice: cfg.voice, speed: cfg.speed,
+    voice: cfg.outputLang === "ru" ? "ru" : cfg.voice,
+    speed: cfg.speed,
   });
 };
 
