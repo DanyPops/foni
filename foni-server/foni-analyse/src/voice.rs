@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct VoiceMetrics {
     /// Harmonics-to-noise ratio in dB. Higher = cleaner voice. Natural speech: 15–25 dB.
     pub hnr_db: f32,

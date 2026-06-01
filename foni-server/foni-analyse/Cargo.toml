@@ -5,15 +5,18 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-hound    = { workspace = true }
-rustfft  = { workspace = true }
-ebur128  = { workspace = true }
-pyin     = { workspace = true }
-ndarray  = { workspace = true }
-serde    = { workspace = true }
-tempfile  = { workspace = true }
-thiserror = { workspace = true }
-serde_json.workspace = true
+hound            = { workspace = true }
+rustfft          = { workspace = true }
+ebur128          = { workspace = true }
+pyin             = { workspace = true }
+pitch-detection  = { workspace = true }
+ndarray          = { workspace = true }
+rayon            = { workspace = true }
+serde            = { workspace = true }
+tempfile         = { workspace = true }
+thiserror        = { workspace = true }
+serde_json       = { workspace = true }
+tracing          = { workspace = true }
 
 [dev-dependencies]
 foni-synth   = { path = "../foni-synth" }
