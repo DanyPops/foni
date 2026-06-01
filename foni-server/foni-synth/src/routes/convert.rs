@@ -420,7 +420,7 @@ pub(crate) fn apply_rms_mix(input_16k: &[f32], output: &mut [f32], output_sr: u3
     let frame_out = output_sr as usize / 2; // 0.5 s frames at output SR
 
     let rms = |s: &[f32], hop: usize| -> Vec<f32> {
-        let n = (s.len() + hop - 1) / hop;
+        let n = s.len().div_ceil(hop);
         (0..n)
             .map(|i| {
                 let sl = &s[i * hop..((i + 1) * hop).min(s.len())];

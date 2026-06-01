@@ -27,6 +27,10 @@ pub struct TargetSpectral {
     pub centroid_hz: f32,
     pub flatness: f32,
     pub zero_crossing_rate: f32,
+    #[serde(default)]
+    pub alpha_ratio_db: f32,
+    #[serde(default)]
+    pub spectral_tilt_db_oct: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +58,8 @@ impl TargetTensor {
                 centroid_hz: a.spectral.centroid_hz,
                 flatness: a.spectral.flatness,
                 zero_crossing_rate: a.spectral.zero_crossing_rate,
+                alpha_ratio_db: a.spectral.alpha_ratio_db,
+                spectral_tilt_db_oct: a.spectral.spectral_tilt_db_oct,
             },
             voice: TargetVoice {
                 f0_mean_hz: a.pitch.f0_mean_hz,
@@ -186,6 +192,20 @@ const METRICS: &[MetricDef] = &[
         actual: |a| a.pitch.f0_stddev_hz,
         unit: " Hz",
         scale: 150.0,
+    },
+    MetricDef {
+        name: "Alpha ratio",
+        target: |t| t.spectral.alpha_ratio_db,
+        actual: |a| a.spectral.alpha_ratio_db,
+        unit: " dB",
+        scale: 15.0,
+    },
+    MetricDef {
+        name: "Spectral tilt",
+        target: |t| t.spectral.spectral_tilt_db_oct,
+        actual: |a| a.spectral.spectral_tilt_db_oct,
+        unit: " dB/oct",
+        scale: 8.0,
     },
 ];
 
