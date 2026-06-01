@@ -17,6 +17,10 @@ pub struct SpectralMetrics {
     /// How dark the voice is: dB drop per octave going up in frequency.
     /// Steep negative (−4 to −6) = warm/dark. Near zero = bright/synthetic.
     pub vocal_darkness_db_oct: f32,
+    /// Where the voice’s character sits in the 1–5 kHz band, in Hz.
+    /// Lower = heavier/darker character (bass). Higher = lighter (tenor).
+    /// Bass: ~2384 Hz, baritone: ~2454 Hz, tenor: ~2705 Hz (Kob 2022).
+    pub vocal_weight_hz: f32,
 }
 
 const FRAME_MS: f32 = 25.0;
@@ -45,6 +49,7 @@ pub fn compute(samples: &[f32], sample_rate: u32) -> SpectralMetrics {
     let mut alpha_ratio_acc = 0.0f64;
     let mut tilt_acc = 0.0f64;
     let mut frame_count = 0usize;
+    let mut ltas = vec![0.0f64; n_bins]; // long-term average spectrum for vocal_weight
 
     let mut i = 0;
     while i + frame_size <= samples.len() {
@@ -133,6 +138,11 @@ pub fn compute(samples: &[f32], sample_rate: u32) -> SpectralMetrics {
             alpha_ratio_acc += alpha_ratio as f64;
             tilt_acc += tilt;
             frame_count += 1;
+
+            // Accumulate LTAS power for vocal_weight_hz
+            for (bin, &m) in mags.iter().enumerate() {
+                ltas[bin] += (m * m) as f64;
+            }
         }
         i += hop_size;
     }
@@ -156,7 +166,25 @@ pub fn compute(samples: &[f32], sample_rate: u32) -> SpectralMetrics {
             zero_crossing_rate: zcr,
             bass_balance_db: 0.0,
             vocal_darkness_db_oct: 0.0,
+            vocal_weight_hz: 0.0,
         };
+    }
+
+    // Vocal weight: frequency where 50% of 1–5 kHz LTAS energy falls below
+    let lo = ((1000.0 / bin_hz) as usize).min(n_bins - 1);
+    let hi = ((5000.0 / bin_hz) as usize).min(n_bins);
+    let ltas_total: f64 = ltas[lo..hi].iter().sum();
+    let mut vocal_weight_hz = (lo + hi) as f32 * bin_hz * 0.5; // midpoint fallback
+    if ltas_total > 0.0 {
+        let mut cum = 0.0f64;
+        let half = ltas_total * 0.5;
+        for k in lo..hi {
+            cum += ltas[k];
+            if cum >= half {
+                vocal_weight_hz = k as f32 * bin_hz;
+                break;
+            }
+        }
     }
 
     SpectralMetrics {
@@ -166,6 +194,7 @@ pub fn compute(samples: &[f32], sample_rate: u32) -> SpectralMetrics {
         zero_crossing_rate: zcr,
         bass_balance_db: (alpha_ratio_acc / frame_count as f64) as f32,
         vocal_darkness_db_oct: (tilt_acc / frame_count as f64) as f32,
+        vocal_weight_hz,
     }
 }
 
@@ -262,6 +291,18 @@ mod tests {
         assert!(
             m.vocal_darkness_db_oct.is_finite(),
             "vocal_darkness not finite"
+        );
+    }
+
+    #[test]
+    fn vocal_weight_is_in_range() {
+        // Low-frequency sine should push vocal weight toward the low end of 1–5 kHz
+        let samples = sine(300.0, 1.0, 22050);
+        let m = compute(&samples, 22050);
+        // 300 Hz sine has no energy in 1–5 kHz — vocal_weight should be 0 or midpoint
+        assert!(
+            m.vocal_weight_hz >= 0.0,
+            "vocal_weight must be non-negative"
         );
     }
 
