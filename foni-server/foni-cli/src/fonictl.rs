@@ -792,6 +792,14 @@ fn cmd_diagnose(server: &str, text: &str, model: &str) {
     }
     pb.finish_and_clear();
 
+    println!("\n   Rendered files:");
+    for s in &rendered {
+        println!(
+            "     fonictl play {}   # {}",
+            s.path.display(),
+            s.desc.split('—').next().unwrap_or("").trim()
+        );
+    }
     println!("\n   Controls: Enter=next  r=replay  p=prev  q=quit\n");
 
     let stdin = std::io::stdin();
