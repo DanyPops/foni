@@ -1940,6 +1940,10 @@ fn main() {
         } => {
             cmd_compare(server, &studio, &out_dir, max_dur, &model, skip_transcribe);
         }
+        Cmd::Tune { .. } => {
+            eprintln!("tune not yet implemented — see FON-TSK-109");
+            std::process::exit(1);
+        }
         Cmd::Corpus { dir, vs } => {
             cmd_corpus(&dir, vs.as_ref());
         }
