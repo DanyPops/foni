@@ -6,17 +6,13 @@
 export interface FoniConfig {
   // Core
   enabled:     boolean;
-  backendPref: "auto" | "silero" | "kokoro" | "fakeyou" | "espeak" | "say";
+  backendPref: "auto" | "espeak" | "say";
   voice:       string;
   speed:       number;
   inputLang:   "en" | "ru";
   outputLang:  "en" | "ru";
 
   // Backend URLs
-  sileroUrl:    string;
-  kokoroUrl:    string;
-  fakeyouToken: string;
-  fakeyouApiKey: string;
 
   // Mat — Russian profanity injection
   matEnabled:      boolean;
@@ -48,10 +44,6 @@ export const DEFAULT_CONFIG: FoniConfig = {
   inputLang:   "en",
   outputLang:  "ru",
 
-  sileroUrl:    "http://localhost:8001",
-  kokoroUrl:    "http://localhost:8880",
-  fakeyouToken: "",
-  fakeyouApiKey: "",
 
   matEnabled:      true,
   matProb:         0.35,

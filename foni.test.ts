@@ -9,7 +9,6 @@ import {
   freshState,
   resolveBacktickRun,
   buildFakeYouHeaders,
-  FAKEYOU_CDN,
 } from "./lib.ts";
 
 // ─── stripMarkdown ────────────────────────────────────────────────────────────
@@ -173,82 +172,10 @@ describe("resolveBacktickRun", () => {
 
 // ─── FakeYou helpers ──────────────────────────────────────────────────────────
 
-describe("buildFakeYouHeaders", () => {
-  it("includes content-type and accept always", () => {
-    const h = buildFakeYouHeaders("");
-    expect(h["Content-Type"]).toBe("application/json");
-    expect(h["Accept"]).toBe("application/json");
-  });
 
-  it("adds authorization when api key provided", () => {
-    const h = buildFakeYouHeaders("my-key");
-    expect(h["Authorization"]).toBe("Bearer my-key");
-  });
-
-  it("omits authorization when api key is empty", () => {
-    const h = buildFakeYouHeaders("");
-    expect(h["Authorization"]).toBeUndefined();
-  });
-});
-
-describe("FAKEYOU_CDN", () => {
-  it("points to google storage", () => {
-    expect(FAKEYOU_CDN).toContain("googleapis.com");
-  });
-});
 
 // ─── synthesizeFakeYou (fetch-mocked) ────────────────────────────────────────
 
-describe("synthesizeFakeYou via fetch mock", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("throws when inference endpoint returns non-ok", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValueOnce({
-        ok: false,
-        status: 429,
-        text: async () => "rate limited",
-      })
-    );
-
-    const { FakeYouBackend } = await import("./backends/fakeyou.ts");
-    const b = new FakeYouBackend("weight_test", "", 0);
-    await expect(b.synthesize("hello", { voice: "en_0", speed: 1 })).rejects.toThrow("429");
-  });
-
-  it("polls until complete_success and downloads audio", async () => {
-    const audioBytes = new Uint8Array([82, 73, 70, 70]); // WAV RIFF header
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ inference_job_token: "JTINF:abc123" }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            state: {
-              status: "complete_success",
-              maybe_public_bucket_wav_audio_path: "/test/audio.wav",
-            },
-          }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          arrayBuffer: async () => audioBytes.buffer,
-        })
-    );
-
-    const { FakeYouBackend } = await import("./backends/fakeyou.ts");
-    const b = new FakeYouBackend("weight_test", "", 0);
-    await expect(b.synthesize("hello", { voice: "en_0", speed: 1 })).resolves.not.toThrow();
-  });
-});
 
 // ─── convertWithRVC (fetch-mocked) ───────────────────────────────────────────
 

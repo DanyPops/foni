@@ -47,7 +47,7 @@ export interface FoniPanelActions {
   checkRvcServer(): Promise<boolean>;
 }
 
-const BACKENDS = ["auto", "silero", "kokoro", "fakeyou", "espeak", "say"] as const;
+const BACKENDS = ["auto", "espeak", "say"] as const;
 
 const PANEL_WIDTH = 52;
 

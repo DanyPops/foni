@@ -5,14 +5,4 @@
 export { stripMarkdown, drainChunks, freshState, resolveBacktickRun } from "./core/stream.ts";
 export type { DrainResult, StreamState } from "./core/stream.ts";
 
-// FakeYou helpers — moved to backends/fakeyou.ts but re-exported for test compat
-export { FAKEYOU_CDN } from "./backends/fakeyou.ts";
 
-export function buildFakeYouHeaders(apiKey: string): Record<string, string> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "application/json",
-  };
-  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-  return headers;
-}

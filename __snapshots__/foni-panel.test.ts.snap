@@ -24,7 +24,7 @@ exports[`FoniPanel render snapshots > RVC enabled with bandit model 1`] = `
 exports[`FoniPanel render snapshots > TTS enabled 1`] = `
 "╭────────────────────── Foni ──────────────────────╮
 │                                                  │
-│ ▸ TTS        [ ON] silero│
+│ ▸ TTS        [ ON] espeak│
 │   Language   [EN]                │
 │   Speed      1.0x  +/- to adjust│
 │   Backend    [auto] space to cycle│
