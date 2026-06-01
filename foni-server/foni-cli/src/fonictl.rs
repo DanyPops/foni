@@ -130,6 +130,24 @@ enum Cmd {
         vs: Option<PathBuf>,
     },
 
+    /// 1:1 studio vs synthetic test harness
+    Compare {
+        /// Directory of studio WAV files (the ground truth)
+        studio: PathBuf,
+        /// Where to write synthetic WAVs (default: /tmp/fonictl_synthetic)
+        #[arg(long, default_value = "/tmp/fonictl_synthetic")]
+        out_dir: PathBuf,
+        /// Only process WAVs shorter than this (seconds) — skips monologues
+        #[arg(long, default_value_t = 8.0)]
+        max_dur: f32,
+        /// espeak voice / RVC model
+        #[arg(short, long, default_value = "bandit")]
+        model: String,
+        /// Skip transcription, use existing .txt files in out_dir
+        #[arg(long)]
+        skip_transcribe: bool,
+    },
+
     /// Acoustic fingerprint across a directory of WAV files — single Rust process
     Corpus {
         /// Directory of WAV files to aggregate
@@ -1477,6 +1495,223 @@ fn cmd_analyse(file: &PathBuf, vs: Option<&PathBuf>) {
 
 /// Aggregate acoustic fingerprint across every WAV in a directory.
 /// Runs in a single process — no subprocess overhead per file.
+fn cmd_compare(
+    server: &str,
+    studio: &PathBuf,
+    out_dir: &PathBuf,
+    max_dur: f32,
+    model: &str,
+    skip_transcribe: bool,
+) {
+    use foni_analyse::{analyse_fast, decode_wav, transcribe};
+    use rayon::prelude::*;
+    use std::sync::Mutex;
+
+    std::fs::create_dir_all(out_dir).expect("cannot create out_dir");
+
+    // 1. Collect studio WAVs filtered by duration.
+    let mut files: Vec<PathBuf> = std::fs::read_dir(studio)
+        .unwrap_or_else(|e| {
+            eprintln!("cannot read studio dir: {e}");
+            std::process::exit(1);
+        })
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("wav"))
+        .filter(|p| {
+            std::fs::read(p)
+                .ok()
+                .and_then(|b| decode_wav(&b).ok())
+                .map(|w| w.samples.len() as f32 / w.sample_rate as f32 <= max_dur)
+                .unwrap_or(false)
+        })
+        .collect();
+    files.sort();
+
+    if files.is_empty() {
+        eprintln!("No WAVs ≤ {max_dur}s in {}", studio.display());
+        return;
+    }
+    println!("\n∷ Compare: {} studio files ≤ {max_dur}s", files.len());
+
+    // 2. Transcribe (or load cached .txt) and synthesize.
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let client = foni_client::FoniClient::new(server);
+
+    let pb = ProgressBar::new(files.len() as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("  [{bar:40}] {pos}/{len}  {msg}")
+            .unwrap(),
+    );
+
+    let mut pairs: Vec<(PathBuf, PathBuf)> = Vec::new(); // (studio, synthetic)
+    let mut skipped = 0usize;
+
+    for path in &files {
+        let stem = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        pb.set_message(stem.clone());
+
+        let txt_path = out_dir.join(format!("{stem}.txt"));
+        let synth_path = out_dir.join(format!("{stem}.wav"));
+
+        // --- Transcribe ---
+        let text = if skip_transcribe && txt_path.exists() {
+            std::fs::read_to_string(&txt_path)
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        } else {
+            let bytes = match std::fs::read(path) {
+                Ok(b) => b,
+                Err(e) => {
+                    pb.println(format!("  skip {stem}: {e}"));
+                    skipped += 1;
+                    pb.inc(1);
+                    continue;
+                }
+            };
+            match transcribe(&bytes, "ru") {
+                Some(t) => {
+                    std::fs::write(&txt_path, &t).ok();
+                    t
+                }
+                None => {
+                    pb.println(format!("  skip {stem}: whisper failed"));
+                    skipped += 1;
+                    pb.inc(1);
+                    continue;
+                }
+            }
+        };
+
+        if text.is_empty() {
+            skipped += 1;
+            pb.inc(1);
+            continue;
+        }
+
+        // --- Synthesize ---
+        if !synth_path.exists() || !skip_transcribe {
+            let req = foni_client::SynthRequest {
+                text: text.clone(),
+                model: Some(model.to_string()),
+                prosody: false,
+                dsp: false, // raw RVC — same conditions as studio (no post-processing)
+                ..foni_client::SynthRequest::new(&text)
+            };
+            match rt.block_on(client.synthesize(&req)) {
+                Ok(wav) => {
+                    std::fs::write(&synth_path, wav.as_bytes()).ok();
+                }
+                Err(e) => {
+                    pb.println(format!("  skip {stem}: synth {e}"));
+                    skipped += 1;
+                    pb.inc(1);
+                    continue;
+                }
+            }
+        }
+
+        pairs.push((path.clone(), synth_path));
+        pb.inc(1);
+    }
+    pb.finish_and_clear();
+    println!("  Pairs: {}  Skipped: {skipped}", pairs.len());
+
+    if pairs.is_empty() {
+        return;
+    }
+
+    // 3. Analyse both sets in parallel.
+    struct Row {
+        rms: f64,
+        crest: f64,
+        centroid: f64,
+        f0: f64,
+        f0_std: f64,
+    }
+    let studio_rows = Mutex::new(Vec::<Row>::new());
+    let synth_rows = Mutex::new(Vec::<Row>::new());
+
+    pairs.par_iter().for_each(|(s_path, y_path)| {
+        let analyse = |p: &PathBuf| -> Option<Row> {
+            let bytes = std::fs::read(p).ok()?;
+            let wav = decode_wav(&bytes).ok()?;
+            let a = analyse_fast(&wav.samples, wav.sample_rate);
+            let (f0, f0s, _) = foni_analyse::fast_f0_stats(&wav.samples, wav.sample_rate);
+            Some(Row {
+                rms: a.loudness.rms_db as f64,
+                crest: a.loudness.crest_factor as f64,
+                centroid: a.spectral.centroid_hz as f64,
+                f0: f0 as f64,
+                f0_std: f0s as f64,
+            })
+        };
+        if let (Some(sr), Some(sy)) = (analyse(s_path), analyse(y_path)) {
+            studio_rows.lock().unwrap().push(sr);
+            synth_rows.lock().unwrap().push(sy);
+        }
+    });
+
+    let sr = studio_rows.into_inner().unwrap();
+    let sy = synth_rows.into_inner().unwrap();
+    let n = sr.len().min(sy.len()) as f64;
+    if n == 0.0 {
+        eprintln!("No analysed pairs.");
+        return;
+    }
+
+    let mean = |rows: &[Row], f: fn(&Row) -> f64| rows.iter().map(|r| f(r)).sum::<f64>() / n;
+
+    let metrics: &[(&str, fn(&Row) -> f64, &str)] = &[
+        ("F0 mean Hz", |r| r.f0, "bass-baritone 80–130 Hz"),
+        ("F0 stddev Hz", |r| r.f0_std, "pitch variation"),
+        (
+            "Spectral centroid Hz",
+            |r| r.centroid,
+            "bass<2400  baritone 2400–2700",
+        ),
+        ("RMS dBFS", |r| r.rms, "studio −≠13–−15 dBFS"),
+        ("Crest factor dB", |r| r.crest, "speech 12–16 dB"),
+    ];
+
+    println!("\n╬══ Studio vs Synthetic ({} matched pairs) ═════════════════════════════════════════════", n as usize);
+    println!(
+        "║ {:<24}  {:>10}  {:>10}  {:>7}  {}",
+        "Metric", "Studio", "Synthetic", "Gap%", "Target"
+    );
+    println!("║ {}", "─".repeat(74));
+
+    for (label, f, target) in metrics {
+        let sv = mean(&sr, *f);
+        let yv = mean(&sy, *f);
+        let gap = if sv.abs() > 0.01 {
+            ((yv - sv).abs() / sv.abs() * 100.0)
+        } else {
+            0.0
+        };
+        let verdict = if gap < 10.0 {
+            "✅"
+        } else if gap < 25.0 {
+            "🟡"
+        } else if gap < 50.0 {
+            "🟠"
+        } else {
+            "🔴"
+        };
+        println!(
+            "║ {:<24}  {:>10.1}  {:>10.1}  {:>6.1}%  {} {}",
+            label, sv, yv, gap, verdict, target
+        );
+    }
+    println!("╚═════════════════════════════════════════════════════════════════════════════");
+    println!("  Synthetic WAVs: {}/", out_dir.display());
+}
+
 fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
     use foni_analyse::{
         analyse, analyse_fast, compute_gap, decode_wav, fast_f0_stats, format_gap_table,
@@ -1678,6 +1913,15 @@ fn main() {
         }
         Cmd::Analyse { file, vs } => {
             cmd_analyse(&file, vs.as_ref());
+        }
+        Cmd::Compare {
+            studio,
+            out_dir,
+            max_dur,
+            model,
+            skip_transcribe,
+        } => {
+            cmd_compare(server, &studio, &out_dir, max_dur, &model, skip_transcribe);
         }
         Cmd::Corpus { dir, vs } => {
             cmd_corpus(&dir, vs.as_ref());

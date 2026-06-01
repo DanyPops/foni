@@ -20,14 +20,12 @@ pub struct WerResult {
 
 /// Transcribe a WAV file using Whisper and compute WER against `reference`.
 /// Returns `None` if Whisper is not installed or fails.
-pub fn compute_wer(wav_bytes: &[u8], reference: &str, language: &str) -> Option<WerResult> {
-    // Write WAV to a temp file (Whisper needs a file path)
+/// Transcribe a WAV file with Whisper. Returns the transcript text, or `None` if
+/// Whisper is unavailable or produces empty output.
+pub fn transcribe(wav_bytes: &[u8], language: &str) -> Option<String> {
     let mut tmp = NamedTempFile::with_suffix(".wav").ok()?;
     tmp.write_all(wav_bytes).ok()?;
     let tmp_path = tmp.path().to_str()?.to_string();
-
-    // Run: whisper --model base --language <lang> --output_format txt <file>
-    // The whisper CLI writes <stem>.txt in the output directory.
     let out_dir = TempDir::new().ok()?;
     let out = Command::new("whisper")
         .args([
@@ -46,8 +44,6 @@ pub fn compute_wer(wav_bytes: &[u8], reference: &str, language: &str) -> Option<
     if !out.status.success() {
         return None;
     }
-
-    // Read the generated .txt file
     let txt_file = out_dir
         .path()
         .join(
@@ -57,18 +53,22 @@ pub fn compute_wer(wav_bytes: &[u8], reference: &str, language: &str) -> Option<
                 .as_ref(),
         )
         .with_extension("txt");
-    let transcript = std::fs::read_to_string(&txt_file).ok()?.trim().to_string();
-    if transcript.is_empty() {
-        return None;
+    let t = std::fs::read_to_string(&txt_file).ok()?.trim().to_string();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
     }
+}
 
+pub fn compute_wer(wav_bytes: &[u8], reference: &str, language: &str) -> Option<WerResult> {
+    let transcript = transcribe(wav_bytes, language)?;
     let (edits, ref_words) = edit_distance_words(reference, &transcript);
     let wer_pct = if ref_words == 0 {
         0.0
     } else {
         edits as f32 / ref_words as f32 * 100.0
     };
-
     Some(WerResult {
         transcript,
         wer_pct,

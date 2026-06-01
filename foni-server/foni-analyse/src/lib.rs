@@ -36,7 +36,7 @@ pub use temporal::TemporalMetrics;
 pub use timeline::{pauses, segment, voiced_segments, Segment, SegmentKind, Timeline};
 pub use voice::VoiceMetrics;
 pub use wav::decode_wav;
-pub use wer::{compute_wer, edit_distance_words, WerResult};
+pub use wer::{compute_wer, edit_distance_words, transcribe, WerResult};
 
 use serde::Serialize;
 
