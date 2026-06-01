@@ -150,63 +150,41 @@ analyse wav:
 
 # ── Tier B scoring (UTMOSv2 MOS + ECAPA speaker similarity) ──────────────────────
 
-# Score a single WAV: UTMOSv2 MOS + ECAPA similarity vs Sidorovich corpus
+# Score a WAV: ViSQOL MOS vs reference + ECAPA speaker sim (ONNX, no container)
 [group('analyse')]
 score wav:
-    podman run --rm \
-        -v {{justfile_directory()}}:/foni:Z \
-        -w /foni \
-        localhost/foni-rvc \
-        bash -c 'pip install -q utmosv2 speechbrain && \
-            python3 rvc/score.py {{wav}} \
-            --reference-dir baseline/stalker/wav/sidorovich/'
+    FONI_SYNTH_URL={{server_url}} {{fonictl}} score {{wav}} \
+        --reference {{reference}} \
+        --ecapa rvc/models/pretrained/ecapa-voxceleb.onnx
 
-# Score all WAVs in a directory, ranked by ECAPA similarity
-[group('analyse')]
-score-corpus dir:
-    podman run --rm \
-        -v {{justfile_directory()}}:/foni:Z \
-        -w /foni \
-        localhost/foni-rvc \
-        bash -c 'pip install -q utmosv2 speechbrain && \
-            python3 rvc/score.py \
-            --dir {{dir}} \
-            --reference-dir baseline/stalker/wav/sidorovich/'
-
-# Score studio corpus to establish Tier B baseline targets
+# Build Sidorovich ECAPA corpus mean + score all studio WAVs
 [group('analyse')]
 score-baseline:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p baseline/stalker/scores
+    FONI_SYNTH_URL={{server_url}} {{fonictl}} score \
+        --dir baseline/stalker/wav/sidorovich/ \
+        --reference {{reference}} \
+        --ecapa rvc/models/pretrained/ecapa-voxceleb.onnx \
+        --save-mean baseline/stalker/scores/sidorovich_ecapa_mean.npy
+
+# Synthesize tuner phrase then score Tier A + B in one shot
+[group('analyse')]
+score-synthesis:
+    FONI_SYNTH_URL={{server_url}} {{fonictl}} score --synthesize \
+        --text "Здравствуй, сталкер. Чего тебе надо?" \
+        --model {{model}} \
+        --reference {{reference}} \
+        --ecapa rvc/models/pretrained/ecapa-voxceleb.onnx
+
+# ── Model setup (one-time) ─────────────────────────────────────────────────────
+
+# Export ECAPA-TDNN speaker encoder to ONNX (one-time, requires speechbrain in container)
+[group('setup')]
+export-ecapa:
     podman run --rm \
         -v {{justfile_directory()}}:/foni:Z \
         -w /foni \
         localhost/foni-rvc \
-        bash -c 'pip install -q utmosv2 speechbrain && \
-            python3 rvc/score.py \
-            --dir baseline/stalker/wav/sidorovich/ \
-            --reference-dir baseline/stalker/wav/sidorovich/ \
-            --save-corpus-mean baseline/stalker/scores/sidorovich_ecapa_mean.npy \
-            > baseline/stalker/scores/sidorovich_tier_b.json && \
-            echo "baseline saved → baseline/stalker/scores/sidorovich_tier_b.json"'
-
-# Synthesize tuner phrase, score it, print all Tier A + Tier B metrics
-[group('analyse')]
-score-synthesis:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    OUT=/tmp/foni_score_synth.wav
-    curl -sf -X POST {{server_url}}/synthesize \
-        -H 'Content-Type: application/json' \
-        -d '{"text":"Здравствуй, сталкер. Чего тебе надо?","model":"{{model}}"}' \
-        | python3 -c 'import sys,base64,json; d=json.load(sys.stdin); open("'$OUT'","wb").write(base64.b64decode(d["audio"]))'
-    echo "\n── Tier A (Rust, fonictl) ──────────────────"
-    {{fonictl}} analyse $OUT --vs {{reference}}
-    echo "\n── Tier B (UTMOSv2 + ECAPA, container) ────"
-    just score $OUT
-
-# ── Model setup (one-time) ─────────────────────────────────────────────────────
+        bash -c 'pip install -q speechbrain && python3 rvc/export_ecapa_onnx.py'
 
 # Export ONNX generator for a model using the foni-rvc container (torch already installed)
 # Usage: just export-model sidorovich   or   just export-model bandit

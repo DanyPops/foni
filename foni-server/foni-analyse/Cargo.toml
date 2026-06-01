@@ -5,7 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+visqol-rs        = "0.3"
 hound            = { workspace = true }
+ort              = { workspace = true }
 rustfft          = { workspace = true }
 ebur128          = { workspace = true }
 pyin             = { workspace = true }

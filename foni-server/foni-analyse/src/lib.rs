@@ -1,5 +1,6 @@
 pub mod alignment;
 pub mod contour;
+pub mod ecapa;
 pub mod gap;
 pub mod loudness;
 pub mod mcd;
@@ -10,6 +11,7 @@ pub mod speaker_sim;
 pub mod spectral;
 pub mod temporal;
 pub mod timeline;
+pub mod visqol;
 pub mod voice;
 pub mod wav;
 pub mod wer;
@@ -70,6 +72,10 @@ pub struct ComparisonResult {
     pub wer_pct: Option<f32>,
     /// Speaker similarity score 0–1. None if not computed.
     pub speaker_sim: Option<f32>,
+    /// ViSQOL MOS-LQO 1–5. None when WAV paths unavailable or files too short.
+    pub visqol_mos: Option<f32>,
+    /// ECAPA-TDNN cosine similarity vs reference [0–1]. None when ONNX absent.
+    pub ecapa_sim: Option<f32>,
 }
 
 /// Compare a synthesis against a reference recording.
@@ -83,6 +89,58 @@ pub fn compare(
     syn_samples: &[f32],
     sample_rate: u32,
     syn_wav_bytes: &[u8],
+) -> ComparisonResult {
+    compare_with_paths(
+        phrase,
+        synthesis,
+        reference,
+        ref_samples,
+        syn_samples,
+        sample_rate,
+        syn_wav_bytes,
+        None,
+        None,
+    )
+}
+
+/// Like `compare` but also runs ViSQOL when file paths are available.
+pub fn compare_with_paths(
+    phrase: &str,
+    synthesis: &AnalysisResult,
+    reference: &AnalysisResult,
+    ref_samples: &[f32],
+    syn_samples: &[f32],
+    sample_rate: u32,
+    syn_wav_bytes: &[u8],
+    ref_path: Option<&str>,
+    syn_path: Option<&str>,
+) -> ComparisonResult {
+    compare_full(
+        phrase,
+        synthesis,
+        reference,
+        ref_samples,
+        syn_samples,
+        sample_rate,
+        syn_wav_bytes,
+        ref_path,
+        syn_path,
+        None,
+    )
+}
+
+/// Full comparison including optional ECAPA session for speaker similarity.
+pub fn compare_full(
+    phrase: &str,
+    synthesis: &AnalysisResult,
+    reference: &AnalysisResult,
+    ref_samples: &[f32],
+    syn_samples: &[f32],
+    sample_rate: u32,
+    syn_wav_bytes: &[u8],
+    ref_path: Option<&str>,
+    syn_path: Option<&str>,
+    ecapa_session: Option<&mut ort::session::Session>,
 ) -> ComparisonResult {
     let tensor = gap::TargetTensor::from_analysis(reference, phrase);
     let gap = gap::compute_gap(phrase, synthesis, &tensor);
@@ -104,6 +162,19 @@ pub fn compare(
         Some(speaker_sim::speaker_similarity(&ref_embed, &syn_embed))
     };
 
+    let visqol_mos = match (ref_path, syn_path) {
+        (Some(r), Some(s)) => visqol::score(r, s),
+        _ => None,
+    };
+
+    let ecapa_sim = ecapa_session.and_then(|sess: &mut ort::session::Session| {
+        let ref_16k = ecapa::to_16k(ref_samples, sample_rate);
+        let syn_16k = ecapa::to_16k(syn_samples, sample_rate);
+        let ref_emb = ecapa::extract(sess, &ref_16k)?;
+        let syn_emb = ecapa::extract(sess, &syn_16k)?;
+        Some(ecapa::cosine_sim(&ref_emb, &syn_emb))
+    });
+
     ComparisonResult {
         gap,
         mcd_db,
@@ -111,6 +182,8 @@ pub fn compare(
         energy_corr,
         wer_pct,
         speaker_sim,
+        visqol_mos,
+        ecapa_sim,
     }
 }
 
