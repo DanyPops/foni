@@ -92,6 +92,9 @@ enum Cmd {
         text: String,
         #[arg(short, long, default_value = "bandit")]
         model: String,
+        /// Load maquette presets from JSON instead of built-in defaults
+        #[arg(long)]
+        from: Option<PathBuf>,
     },
 
     /// Print server health and loaded model
@@ -373,6 +376,37 @@ impl Maquette {
             parts.join("  ")
         }
     }
+}
+
+/// Load maquettes from a JSON file if provided, falling back to built-in defaults.
+/// JSON format: [{"name": "label", "opts": { DSP fields… }}]
+fn load_maquettes(path: Option<&std::path::Path>) -> Vec<Maquette> {
+    let Some(p) = path else {
+        return default_maquettes();
+    };
+    let raw = match std::fs::read_to_string(p) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("  ⚠  cannot read maquettes file {}: {e}", p.display());
+            return default_maquettes();
+        }
+    };
+    let entries: Vec<serde_json::Value> = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("  ⚠  invalid maquettes JSON: {e}");
+            return default_maquettes();
+        }
+    };
+    entries
+        .into_iter()
+        .filter_map(|v| {
+            Some(Maquette {
+                name: v["name"].as_str()?.to_owned(),
+                opts: v["opts"].clone(),
+            })
+        })
+        .collect()
 }
 
 fn default_maquettes() -> Vec<Maquette> {
@@ -1192,11 +1226,13 @@ const MIXER_HELP: &str = r#"
     q / quit               save session and exit
 "#;
 
-fn cmd_mix(server: &str, text: &str, model: &str) {
+fn cmd_mix(server: &str, text: &str, model: &str, from: Option<&std::path::Path>) {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
 
-    // Seed tracks from default maquettes (pre-render if WAV exists).
-    let mut tracks: Vec<tui::state::Track> = default_maquettes()
+    let maquettes = load_maquettes(from);
+
+    // Seed tracks from maquettes (pre-render if WAV exists).
+    let mut tracks: Vec<tui::state::Track> = maquettes
         .into_iter()
         .map(|m| {
             let path =
@@ -1486,8 +1522,8 @@ fn main() {
         Cmd::Analyse { file, vs } => {
             cmd_analyse(&file, vs.as_ref());
         }
-        Cmd::Mix { text, model } => {
-            cmd_mix(server, &text, &model);
+        Cmd::Mix { text, model, from } => {
+            cmd_mix(server, &text, &model, from.as_deref());
         }
         Cmd::Listen {
             text,
