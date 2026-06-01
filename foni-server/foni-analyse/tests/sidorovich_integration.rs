@@ -13,12 +13,12 @@ const TRADER1A: &str = "../../baseline/stalker/wav/sidorovich/trader1a.wav";
 const ESPEAK_WPM: u32 = 150;
 
 // ─── Thresholds ───────────────────────────────────────────────────────────────
-const MCD_CEILING: f32 = 8.0; // raw RMSE ceiling (espeak vs human ~3-6)
-const F0_CORR_FLOOR: f32 = 0.3; // pitch contour correlation floor
-const ENERGY_CORR_FLOOR: f32 = 0.3; // energy envelope correlation floor
+const TIMBRE_DISTANCE_CEILING: f32 = 8.0; // raw RMSE ceiling (espeak vs human ~3-6)
+const PITCH_SHAPE_FLOOR: f32 = 0.3; // pitch contour correlation floor
+const LOUDNESS_SHAPE_FLOOR: f32 = 0.3; // energy envelope correlation floor
 const MEAN_GAP_CEILING: f32 = 60.0; // aggregate gap ceiling
 const WER_CEILING: f32 = 20.0; // intelligibility ceiling (Russian TTS)
-const SPEAKER_SIM_FLOOR: f32 = 0.6; // MFCC-based speaker similarity floor
+const VOICE_MATCH_FLOOR: f32 = 0.6; // MFCC-based voice similarity floor
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -100,16 +100,16 @@ fn sidorovich_multi_vector_comparison() {
     // ── Report ──────────────────────────────────────────────────────────────
     println!("\n══ Sidorovich multi-vector comparison ══════════════════════════");
     println!(
-        "  MCD:          {:.2}           (ceiling {MCD_CEILING})",
-        cmp.mcd_db
+        "  Timbre distance: {:.2}        (ceiling {TIMBRE_DISTANCE_CEILING})",
+        cmp.timbre_distance_db
     );
     println!(
-        "  F0 corr:      {:.3}          (floor   {F0_CORR_FLOOR})",
-        cmp.f0_corr
+        "  Pitch shape:     {:.3}       (floor   {PITCH_SHAPE_FLOOR})",
+        cmp.pitch_shape_match
     );
     println!(
-        "  Energy corr:  {:.3}          (floor   {ENERGY_CORR_FLOOR})",
-        cmp.energy_corr
+        "  Loudness shape:  {:.3}       (floor   {LOUDNESS_SHAPE_FLOOR})",
+        cmp.loudness_shape_match
     );
     println!(
         "  Mean gap:     {:.1}%         (ceiling {MEAN_GAP_CEILING}%)",
@@ -123,9 +123,9 @@ fn sidorovich_multi_vector_comparison() {
     } else {
         println!("  WER:          n/a (whisper unavailable)");
     }
-    if let Some(sim) = cmp.speaker_sim {
+    if let Some(sim) = cmp.voice_match {
         println!(
-            "  Speaker sim:  {:.3} (|{:.3}|)  (floor |{SPEAKER_SIM_FLOOR}|)",
+            "  Voice match:     {:.3} (|{:.3}|) (floor |{VOICE_MATCH_FLOOR}|)",
             sim,
             sim.abs()
         );
@@ -134,19 +134,19 @@ fn sidorovich_multi_vector_comparison() {
 
     // ── Assertions ───────────────────────────────────────────────────────────
     assert!(
-        cmp.mcd_db < MCD_CEILING,
-        "MCD {:.2} exceeds ceiling {MCD_CEILING} — spectral envelope too far from reference",
-        cmp.mcd_db,
+        cmp.timbre_distance_db < TIMBRE_DISTANCE_CEILING,
+        "Timbre distance {:.2} exceeds ceiling {TIMBRE_DISTANCE_CEILING}",
+        cmp.timbre_distance_db,
     );
     assert!(
-        cmp.f0_corr >= F0_CORR_FLOOR,
-        "F0 contour correlation {:.3} below floor {F0_CORR_FLOOR} — pitch shape mismatch",
-        cmp.f0_corr,
+        cmp.pitch_shape_match >= PITCH_SHAPE_FLOOR,
+        "Pitch shape match {:.3} below floor {PITCH_SHAPE_FLOOR}",
+        cmp.pitch_shape_match,
     );
     assert!(
-        cmp.energy_corr >= ENERGY_CORR_FLOOR,
-        "Energy envelope correlation {:.3} below floor {ENERGY_CORR_FLOOR} — stress pattern mismatch",
-        cmp.energy_corr,
+        cmp.loudness_shape_match >= LOUDNESS_SHAPE_FLOOR,
+        "Loudness shape match {:.3} below floor {LOUDNESS_SHAPE_FLOOR}",
+        cmp.loudness_shape_match,
     );
     assert!(
         cmp.gap.mean_gap_pct < MEAN_GAP_CEILING,
@@ -162,12 +162,12 @@ fn sidorovich_multi_vector_comparison() {
             wer
         );
     }
-    if let Some(sim) = cmp.speaker_sim {
+    if let Some(sim) = cmp.voice_match {
         // MFCC-based cosine can be negative (sign is arbitrary in DCT).
         // Use absolute value as the speaker similarity score.
         assert!(
-            sim.abs() >= SPEAKER_SIM_FLOOR,
-            "Speaker similarity |{:.3}| below floor {SPEAKER_SIM_FLOOR}",
+            sim.abs() >= VOICE_MATCH_FLOOR,
+            "Voice match |{:.3}| below floor {VOICE_MATCH_FLOOR}",
             sim,
         );
     }

@@ -52,8 +52,8 @@ fn main() {
         );
         println!("RMS:       {:.1} dBFS", analysis.loudness.rms_db);
         println!("Crest:     {:.1} dB", analysis.loudness.crest_factor);
-        println!("Centroid:  {:.0} Hz", analysis.spectral.centroid_hz);
-        println!("Flatness:  {:.3}", analysis.spectral.flatness);
+        println!("Brightness: {:.0} Hz", analysis.spectral.brightness_hz);
+        println!("Tone purity: {:.3}", analysis.spectral.tone_purity);
         println!("ZCR:       {:.0}/s", analysis.spectral.zero_crossing_rate);
     }
 }

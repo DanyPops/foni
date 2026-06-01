@@ -1514,7 +1514,7 @@ fn cmd_analyse(file: &PathBuf, vs: Option<&PathBuf>) {
         println!("Duration:  {:.2}s", analysis.temporal.duration_secs);
         println!("RMS:       {:.1} dBFS", analysis.loudness.rms_db);
         println!("Crest:     {:.1} dB", analysis.loudness.crest_factor);
-        println!("Centroid:  {:.0} Hz", analysis.spectral.centroid_hz);
+        println!("Brightness: {:.0} Hz", analysis.spectral.brightness_hz);
         println!(
             "Pauses:    {} × {:.0}ms",
             analysis.temporal.pause_count,
@@ -1665,7 +1665,7 @@ fn cmd_compare(
         centroid: f64,
         f0: f64,
         f0_std: f64,
-        visqol_mos: Option<f32>,
+        naturalness: Option<f32>,
     }
     let studio_rows = Mutex::new(Vec::<Row>::new());
     let synth_rows = Mutex::new(Vec::<Row>::new());
@@ -1679,19 +1679,19 @@ fn cmd_compare(
             let row = Row {
                 rms: a.loudness.rms_db as f64,
                 crest: a.loudness.crest_factor as f64,
-                centroid: a.spectral.centroid_hz as f64,
+                centroid: a.spectral.brightness_hz as f64,
                 f0: f0 as f64,
                 f0_std: f0s as f64,
-                visqol_mos: None,
+                naturalness: None,
             };
             Some((row, wav.samples, wav.sample_rate))
         };
         if let (Some((mut sr, _, _)), Some((sy, _, _))) = (analyse(s_path), analyse(y_path)) {
-            let mos = foni_analyse::visqol::score(
+            let score = foni_analyse::naturalness::score(
                 s_path.to_str().unwrap_or(""),
                 y_path.to_str().unwrap_or(""),
             );
-            sr.visqol_mos = mos;
+            sr.naturalness = score;
             studio_rows.lock().unwrap().push(sr);
             synth_rows.lock().unwrap().push(sy);
         }
@@ -1708,10 +1708,10 @@ fn cmd_compare(
     let mean = |rows: &[Row], f: fn(&Row) -> f64| rows.iter().map(|r| f(r)).sum::<f64>() / n;
 
     let metrics: &[(&str, fn(&Row) -> f64, &str)] = &[
-        ("F0 mean Hz", |r| r.f0, "bass-baritone 80–130 Hz"),
-        ("F0 stddev Hz", |r| r.f0_std, "pitch variation"),
+        ("Pitch Hz", |r| r.f0, "bass-baritone 80–130 Hz"),
+        ("Pitch variation Hz", |r| r.f0_std, "pitch variation"),
         (
-            "Spectral centroid Hz",
+            "Brightness Hz",
             |r| r.centroid,
             "bass<2400  baritone 2400–2700",
         ),
@@ -1749,21 +1749,21 @@ fn cmd_compare(
         );
     }
     // ViSQOL MOS-LQO mean across all pairs
-    let mos_scores: Vec<f32> = sr.iter().filter_map(|r| r.visqol_mos).collect();
-    if !mos_scores.is_empty() {
-        let mean_mos = mos_scores.iter().sum::<f32>() / mos_scores.len() as f32;
-        let verdict = if mean_mos > 4.0 {
+    let naturalness_scores: Vec<f32> = sr.iter().filter_map(|r| r.naturalness).collect();
+    if !naturalness_scores.is_empty() {
+        let mean_nat = naturalness_scores.iter().sum::<f32>() / naturalness_scores.len() as f32;
+        let verdict = if mean_nat > 4.0 {
             "✅"
-        } else if mean_mos > 3.5 {
+        } else if mean_nat > 3.5 {
             "🟡"
-        } else if mean_mos > 3.0 {
+        } else if mean_nat > 3.0 {
             "🟠"
         } else {
             "🔴"
         };
         println!(
             "║ {:<24}  {:>10}  {:>10.2}  {:>7}  {}",
-            "ViSQOL MOS-LQO", "5.0", mean_mos, "", verdict
+            "Naturalness (1–5)", "5.0", mean_nat, "", verdict
         );
     }
     println!("╚═════════════════════════════════════════════════════════════════════════════");
@@ -1977,7 +1977,7 @@ fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
                     let row = Row {
                         rms: r.loudness.rms_db as f64,
                         crest: r.loudness.crest_factor as f64,
-                        centroid: r.spectral.centroid_hz as f64,
+                        centroid: r.spectral.brightness_hz as f64,
                         f0: f0 as f64,
                         f0_std: f0_std as f64,
                         voiced: vr as f64,
@@ -2029,15 +2029,15 @@ fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
     println!("╬══ Sidorovich corpus fingerprint ({n} files) ══════════════════════════════════╗");
     println!("║                                                                               ║");
     println!(
-        "║  F0 mean:            {:>7.1} Hz    target bass-baritone: 80–130 Hz          ║",
+        "║  Pitch:              {:>7.1} Hz    target bass-baritone: 80–130 Hz          ║",
         f0
     );
     println!(
-        "║  F0 stddev:          {:>7.1} Hz    pitch variation (higher = more expressive)║",
+        "║  Pitch variation:    {:>7.1} Hz    higher = more expressive                 ║",
         f0_std
     );
     println!(
-        "║  Spectral centroid:  {:>7.0} Hz    bass<2400  baritone 2400–2700 Hz         ║",
+        "║  Brightness:         {:>7.0} Hz    bass<2400  baritone 2400–2700 Hz         ║",
         centroid
     );
     println!(

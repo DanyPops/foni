@@ -1,18 +1,18 @@
 pub mod alignment;
 pub mod contour;
-pub mod ecapa;
 pub mod gap;
 pub mod loudness;
 pub mod mcd;
 pub mod mfcc;
+pub mod naturalness;
 pub mod pitch;
 pub mod report;
 pub mod speaker_sim;
 pub mod spectral;
 pub mod temporal;
 pub mod timeline;
-pub mod visqol;
 pub mod voice;
+pub mod voice_id;
 pub mod wav;
 pub mod wer;
 
@@ -57,25 +57,28 @@ pub struct AnalysisResult {
     pub energy_envelope: Vec<f32>,
 }
 
-/// Multi-vector comparison result: aggregate gap + spectral distance + contour + intelligibility.
+/// How close does the synthesis sound to the studio reference?
+/// All scores: higher = better match.
 #[derive(Debug, Clone, Serialize)]
 pub struct ComparisonResult {
-    /// 9-metric aggregate gap scorer.
+    /// Per-metric gap table — shows which acoustic dimensions are off and by how much.
     pub gap: GapResult,
-    /// Mel-Cepstral Distortion in dB. < 6dB = good, < 4dB = excellent.
-    pub mcd_db: f32,
-    /// F0 contour Pearson correlation after DTW alignment. 1.0 = perfect match.
-    pub f0_corr: f32,
-    /// Energy envelope Pearson correlation after DTW alignment.
-    pub energy_corr: f32,
-    /// Word Error Rate (%) via Whisper round-trip. None if not available.
+    /// Timbre distance in dB — how different the voice texture sounds. < 6 = good, < 4 = excellent.
+    pub timbre_distance_db: f32,
+    /// How closely the pitch shape (rise/fall pattern) matches the reference. 1.0 = identical.
+    pub pitch_shape_match: f32,
+    /// How closely the loudness envelope matches. 1.0 = identical.
+    pub loudness_shape_match: f32,
+    /// Word Error Rate (%) — how much of the text was understood correctly.
     pub wer_pct: Option<f32>,
-    /// Speaker similarity score 0–1. None if not computed.
-    pub speaker_sim: Option<f32>,
-    /// ViSQOL MOS-LQO 1–5. None when WAV paths unavailable or files too short.
-    pub visqol_mos: Option<f32>,
-    /// ECAPA-TDNN cosine similarity vs reference [0–1]. None when ONNX absent.
-    pub ecapa_sim: Option<f32>,
+    /// Does it sound like the same person? 0–1, from voice texture (MFCC-based).
+    pub voice_match: Option<f32>,
+    /// How natural does it sound? 1–5 scale (like a human listener rating).
+    /// Computed by Google ViSQOL comparing synthesis against studio recording.
+    pub naturalness: Option<f32>,
+    /// Does it sound like Sidorovich? 0–1, from neural voice fingerprint.
+    /// Requires the voice ID model — run `just setup-voice-id` once.
+    pub sounds_like: Option<f32>,
 }
 
 /// Compare a synthesis against a reference recording.
@@ -144,8 +147,8 @@ pub fn compare_full(
 ) -> ComparisonResult {
     let tensor = gap::TargetTensor::from_analysis(reference, phrase);
     let gap = gap::compute_gap(phrase, synthesis, &tensor);
-    let mcd_db = mcd::compute_mcd(ref_samples, syn_samples, sample_rate);
-    let (f0_corr, energy_corr) = contour::compute_contour_correlations(
+    let timbre_distance_db = mcd::compute_mcd(ref_samples, syn_samples, sample_rate);
+    let (pitch_shape_match, loudness_shape_match) = contour::compute_contour_correlations(
         &reference.f0_contour,
         &reference.energy_envelope,
         &synthesis.f0_contour,
@@ -156,34 +159,32 @@ pub fn compare_full(
     } else {
         wer::compute_wer(syn_wav_bytes, phrase, "ru").map(|r| r.wer_pct)
     };
-    let speaker_sim = {
+    let voice_match = {
         let ref_embed = speaker_sim::embed(ref_samples, sample_rate, "reference");
         let syn_embed = speaker_sim::embed(syn_samples, sample_rate, "synthesis");
         Some(speaker_sim::speaker_similarity(&ref_embed, &syn_embed))
     };
-
-    let visqol_mos = match (ref_path, syn_path) {
-        (Some(r), Some(s)) => visqol::score(r, s),
+    let naturalness = match (ref_path, syn_path) {
+        (Some(r), Some(s)) => naturalness::score(r, s),
         _ => None,
     };
-
-    let ecapa_sim = ecapa_session.and_then(|sess: &mut ort::session::Session| {
-        let ref_16k = ecapa::to_16k(ref_samples, sample_rate);
-        let syn_16k = ecapa::to_16k(syn_samples, sample_rate);
-        let ref_emb = ecapa::extract(sess, &ref_16k)?;
-        let syn_emb = ecapa::extract(sess, &syn_16k)?;
-        Some(ecapa::cosine_sim(&ref_emb, &syn_emb))
+    let sounds_like = ecapa_session.and_then(|sess: &mut ort::session::Session| {
+        let ref_16k = voice_id::to_16k(ref_samples, sample_rate);
+        let syn_16k = voice_id::to_16k(syn_samples, sample_rate);
+        let ref_emb = voice_id::extract(sess, &ref_16k)?;
+        let syn_emb = voice_id::extract(sess, &syn_16k)?;
+        Some(voice_id::cosine_sim(&ref_emb, &syn_emb))
     });
 
     ComparisonResult {
         gap,
-        mcd_db,
-        f0_corr,
-        energy_corr,
+        timbre_distance_db,
+        pitch_shape_match,
+        loudness_shape_match,
         wer_pct,
-        speaker_sim,
-        visqol_mos,
-        ecapa_sim,
+        voice_match,
+        naturalness,
+        sounds_like,
     }
 }
 

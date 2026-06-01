@@ -150,36 +150,36 @@ analyse wav:
 
 # ── Tier B scoring (UTMOSv2 MOS + ECAPA speaker similarity) ──────────────────────
 
-# Score a WAV: ViSQOL MOS vs reference + ECAPA speaker sim (ONNX, no container)
+# Check a WAV against studio reference — naturalness score + voice match
 [group('analyse')]
-score wav:
+check wav:
     FONI_SYNTH_URL={{server_url}} {{fonictl}} score {{wav}} \
         --reference {{reference}} \
-        --ecapa rvc/models/pretrained/ecapa-voxceleb.onnx
+        --voice-id rvc/models/pretrained/ecapa-voxceleb.onnx
 
-# Build Sidorovich ECAPA corpus mean + score all studio WAVs
+# Learn Sidorovich — build voice fingerprint from all studio recordings (run once)
 [group('analyse')]
-score-baseline:
+learn-sidorovich:
     FONI_SYNTH_URL={{server_url}} {{fonictl}} score \
         --dir baseline/stalker/wav/sidorovich/ \
         --reference {{reference}} \
-        --ecapa rvc/models/pretrained/ecapa-voxceleb.onnx \
-        --save-mean baseline/stalker/scores/sidorovich_ecapa_mean.npy
+        --voice-id rvc/models/pretrained/ecapa-voxceleb.onnx \
+        --save-mean baseline/stalker/scores/sidorovich_voice_mean.npy
 
-# Synthesize tuner phrase then score Tier A + B in one shot
+# Full voice report — synthesize a phrase and show all quality numbers
 [group('analyse')]
-score-synthesis:
+voice-report:
     FONI_SYNTH_URL={{server_url}} {{fonictl}} score --synthesize \
         --text "Здравствуй, сталкер. Чего тебе надо?" \
         --model {{model}} \
         --reference {{reference}} \
-        --ecapa rvc/models/pretrained/ecapa-voxceleb.onnx
+        --voice-id rvc/models/pretrained/ecapa-voxceleb.onnx
 
 # ── Model setup (one-time) ─────────────────────────────────────────────────────
 
-# Export ECAPA-TDNN speaker encoder to ONNX (one-time, requires speechbrain in container)
+# Set up the voice identity model — needed once before running `just check` or `just voice-report`
 [group('setup')]
-export-ecapa:
+setup-voice-id:
     podman run --rm \
         -v {{justfile_directory()}}:/foni:Z \
         -w /foni \

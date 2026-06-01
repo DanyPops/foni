@@ -171,16 +171,18 @@ pub struct LoudnessResult {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SpectralResult {
-    pub centroid_hz: f32,
-    pub flatness: f32,
+    pub brightness_hz: f32,
+    pub tone_purity: f32,
     pub zero_crossing_rate: f32,
+    pub bass_balance_db: f32,
+    pub vocal_darkness_db_oct: f32,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct PitchResult {
-    pub f0_mean_hz: f32,
-    pub f0_stddev_hz: f32,
-    pub voiced_ratio: f32,
+    pub pitch_hz: f32,
+    pub pitch_variation_hz: f32,
+    pub voice_presence: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
