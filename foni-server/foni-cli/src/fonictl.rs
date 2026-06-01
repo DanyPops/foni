@@ -134,7 +134,8 @@ enum Cmd {
     },
 
     /// Batch A/B/C/N tuning — run all presets through the compare pipeline, rank by gap
-    /// Play maquette presets sequentially, hear reference then synthetic, rate each
+    /// Play maquette presets sequentially, hear reference then synthetic, rate each.
+    /// With --auto N: run coordinate descent to find better DSP settings automatically.
     Tune {
         /// Phrase to synthesize for each preset
         #[arg(default_value = "Подойди-ка, надо тебе ситуацию прояснить.")]
@@ -145,8 +146,14 @@ enum Cmd {
         /// Reference WAV to play before each preset (A/B)
         #[arg(long)]
         reference: Option<PathBuf>,
-        #[arg(short, long, default_value = "bandit")]
+        #[arg(short, long, default_value = "sidorovich")]
         model: String,
+        /// Run N iterations of automatic knob search, save top-3 presets
+        #[arg(long)]
+        auto: Option<usize>,
+        /// Reference WAV for gap analysis during auto-tuning
+        #[arg(long)]
+        vs: Option<PathBuf>,
     },
 
     /// 1:1 studio vs synthetic test harness
@@ -1923,6 +1930,256 @@ fn print_tune_results(results: &[(String, u8, String)]) {
     println!("╚════════════════════════════════════════════");
 }
 
+fn cmd_tune_auto(
+    server: &str,
+    phrase: &str,
+    presets_path: &PathBuf,
+    model: &str,
+    n_iter: usize,
+    vs: Option<&std::path::Path>,
+    reference: Option<&std::path::Path>,
+) {
+    use foni_analyse::{analyse, compute_gap, decode_wav, format_gap_table, TargetTensor};
+    use std::io::Write;
+
+    // Gap score weights — brightness is the biggest problem, then loudness and voice presence
+    const W_BRIGHTNESS: f32 = 0.35;
+    const W_LOUDNESS: f32 = 0.25;
+    const W_PRESENCE: f32 = 0.15;
+    const W_DARKNESS: f32 = 0.15;
+    const W_BASS: f32 = 0.10;
+
+    // Load reference for gap computation
+    let ref_path = vs.or(reference);
+    let tensor = ref_path.and_then(|p| {
+        let bytes = std::fs::read(p).ok()?;
+        let wav = decode_wav(&bytes).ok()?;
+        let analysis = analyse(&wav.samples, wav.sample_rate);
+        Some(TargetTensor::from_analysis(
+            &analysis,
+            &p.display().to_string(),
+        ))
+    });
+
+    let tensor = match tensor {
+        Some(t) => t,
+        None => {
+            eprintln!("  ✗ --vs <reference.wav> required for auto-tuning");
+            return;
+        }
+    };
+
+    // Synthesize the base audio once (RVC only, no DSP)
+    print!("  Synthesizing base (RVC only)… ");
+    std::io::stdout().flush().ok();
+    let base = match synth_request(
+        server,
+        phrase,
+        model,
+        "ru",
+        150,
+        false,
+        serde_json::json!({}),
+    ) {
+        Ok(b) => {
+            println!("ok ({} kB)", b.len() / 1024);
+            b
+        }
+        Err(e) => {
+            eprintln!("\n  ✗ {e}");
+            return;
+        }
+    };
+
+    #[derive(Clone)]
+    struct Knobs {
+        tilt_low_db: f32,
+        tilt_high_db: f32,
+        rms_lufs: f32,
+        compression: f32,
+        presence_db: f32,
+    }
+
+    impl Knobs {
+        fn to_opts(&self) -> serde_json::Value {
+            serde_json::json!({
+                "tiltLowDb": self.tilt_low_db,
+                "tiltHighDb": self.tilt_high_db,
+                "rmsTargetLufs": self.rms_lufs,
+                "compressionRatio": self.compression,
+                "presenceDb": self.presence_db,
+                "vibratoDepth": 0.0,
+            })
+        }
+    }
+
+    let gap_score = |knobs: &Knobs| -> Option<f32> {
+        let wav = process_request(server, &base, knobs.to_opts()).ok()?;
+        let tmp = std::env::temp_dir().join("fonictl_auto_tune.wav");
+        std::fs::write(&tmp, &wav).ok()?;
+        let decoded = decode_wav(&wav).ok()?;
+        let analysis = analyse(&decoded.samples, decoded.sample_rate);
+        let gap = compute_gap("auto", &analysis, &tensor);
+
+        // Weighted gap score — pull from named metrics
+        let metric = |name: &str| {
+            gap.rows
+                .iter()
+                .find(|r| r.metric == name)
+                .map(|r| r.gap_pct)
+                .unwrap_or(50.0)
+        };
+        let score = metric("Brightness") * W_BRIGHTNESS
+            + metric("Loudness") * W_LOUDNESS
+            + metric("Voice presence") * W_PRESENCE
+            + metric("Vocal darkness") * W_DARKNESS
+            + metric("Bass balance") * W_BASS;
+        Some(score)
+    };
+
+    // Start from a neutral preset (or first from file)
+    let maquettes = load_maquettes(Some(presets_path));
+    let start_opts = maquettes
+        .first()
+        .map(|m| m.opts.clone())
+        .unwrap_or_default();
+    let mut best = Knobs {
+        tilt_low_db: start_opts
+            .get("tiltLowDb")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(8.0) as f32,
+        tilt_high_db: start_opts
+            .get("tiltHighDb")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(-6.0) as f32,
+        rms_lufs: start_opts
+            .get("rmsTargetLufs")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(-16.0) as f32,
+        compression: start_opts
+            .get("compressionRatio")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(4.0) as f32,
+        presence_db: start_opts
+            .get("presenceDb")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32,
+    };
+
+    let mut best_score = gap_score(&best).unwrap_or(100.0);
+
+    println!("\n  Starting gap score: {best_score:.1}%");
+    println!("  Running {n_iter} iterations of coordinate descent…");
+    println!();
+
+    let steps: &[(&str, &dyn Fn(&mut Knobs, f32), f32, f32, f32)] = &[
+        ("tiltLowDb", &|k, d| k.tilt_low_db += d, 1.0, 0.0, 20.0),
+        ("tiltHighDb", &|k, d| k.tilt_high_db += d, 1.0, -20.0, 0.0),
+        ("rmsTargetLufs", &|k, d| k.rms_lufs += d, 0.5, -22.0, -8.0),
+        (
+            "compressionRatio",
+            &|k, d| k.compression += d,
+            0.5,
+            1.0,
+            10.0,
+        ),
+        ("presenceDb", &|k, d| k.presence_db += d, 0.5, -6.0, 6.0),
+    ];
+
+    let mut history: Vec<(Knobs, f32)> = vec![(best.clone(), best_score)];
+
+    for iter in 0..n_iter {
+        let mut changed = false;
+        let mut best_knob = String::new();
+
+        for (name, apply, step, lo, hi) in steps {
+            for &delta in &[*step, -*step] {
+                let mut candidate = best.clone();
+                apply(&mut candidate, delta);
+                // Clamp to bounds
+                candidate.tilt_low_db = candidate.tilt_low_db.clamp(0.0, 20.0);
+                candidate.tilt_high_db = candidate.tilt_high_db.clamp(-20.0, 0.0);
+                candidate.rms_lufs = candidate.rms_lufs.clamp(-22.0, -8.0);
+                candidate.compression = candidate.compression.clamp(1.0, 10.0);
+                candidate.presence_db = candidate.presence_db.clamp(-6.0, 6.0);
+                // Enforce bounds per knob
+                let clamped = match *name {
+                    "tiltLowDb" => candidate.tilt_low_db >= *lo && candidate.tilt_low_db <= *hi,
+                    "tiltHighDb" => candidate.tilt_high_db >= *lo && candidate.tilt_high_db <= *hi,
+                    "rmsTargetLufs" => candidate.rms_lufs >= *lo && candidate.rms_lufs <= *hi,
+                    "compressionRatio" => {
+                        candidate.compression >= *lo && candidate.compression <= *hi
+                    }
+                    "presenceDb" => candidate.presence_db >= *lo && candidate.presence_db <= *hi,
+                    _ => true,
+                };
+                if !clamped {
+                    continue;
+                }
+
+                if let Some(score) = gap_score(&candidate) {
+                    if score < best_score {
+                        best_score = score;
+                        best = candidate;
+                        best_knob = format!("{name}={delta:+.1}");
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        history.push((best.clone(), best_score));
+        let mark = if changed {
+            format!("← {best_knob}")
+        } else {
+            "(no improvement)".to_string()
+        };
+        println!(
+            "  [{:>2}/{}]  gap {best_score:5.1}%  {mark}",
+            iter + 1,
+            n_iter
+        );
+
+        if !changed && iter > 3 {
+            println!("  Converged early at iteration {}.", iter + 1);
+            break;
+        }
+    }
+
+    // Save top-3 unique configs to presets file
+    history.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    history.dedup_by(|a, b| (a.1 - b.1).abs() < 0.1);
+    let top3: Vec<_> = history.into_iter().take(3).collect();
+
+    let mut maquettes = load_maquettes(Some(presets_path));
+    for (i, (knobs, score)) in top3.iter().enumerate() {
+        let name = format!("auto-{} ({:.1}%)", i + 1, score);
+        let opts = knobs.to_opts();
+        if let Some(existing) = maquettes.iter_mut().find(|m| m.name.starts_with("auto-")) {
+            existing.name = name;
+            existing.opts = opts;
+        } else {
+            maquettes.push(Maquette { name, opts });
+        }
+    }
+
+    let json = serde_json::to_string_pretty(&maquettes).unwrap_or_default();
+    if std::fs::write(presets_path, &json).is_ok() {
+        println!(
+            "\n  Top-3 saved to {}  →  run `just tune` to listen",
+            presets_path.display()
+        );
+    }
+
+    println!("\n  Best knobs:");
+    println!("    tiltLowDb:        {:.1}", top3[0].0.tilt_low_db);
+    println!("    tiltHighDb:       {:.1}", top3[0].0.tilt_high_db);
+    println!("    rmsTargetLufs:    {:.1}", top3[0].0.rms_lufs);
+    println!("    compressionRatio: {:.1}", top3[0].0.compression);
+    println!("    presenceDb:       {:.1}", top3[0].0.presence_db);
+    println!("    Final gap score:  {:.1}%", top3[0].1);
+}
+
 fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
     use foni_analyse::{
         analyse, analyse_fast, compute_gap, decode_wav, fast_f0_stats, format_gap_table,
@@ -2139,8 +2396,22 @@ fn main() {
             presets,
             reference,
             model,
+            auto,
+            vs,
         } => {
-            cmd_tune(server, &text, &presets, reference.as_deref(), &model);
+            if let Some(n_iter) = auto {
+                cmd_tune_auto(
+                    server,
+                    &text,
+                    &presets,
+                    &model,
+                    n_iter,
+                    vs.as_deref(),
+                    reference.as_deref(),
+                );
+            } else {
+                cmd_tune(server, &text, &presets, reference.as_deref(), &model);
+            }
         }
         Cmd::Corpus { dir, vs } => {
             cmd_corpus(&dir, vs.as_ref());

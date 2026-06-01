@@ -31,6 +31,8 @@ pub struct TargetSpectral {
     pub bass_balance_db: f32,
     #[serde(default)]
     pub vocal_darkness_db_oct: f32,
+    #[serde(default)]
+    pub vocal_weight_hz: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +40,8 @@ pub struct TargetVoice {
     pub pitch_hz: f32,
     pub pitch_variation_hz: f32,
     pub voice_presence: f32,
+    #[serde(default)]
+    pub breathiness_db: f32,
 }
 
 impl TargetTensor {
@@ -60,11 +64,13 @@ impl TargetTensor {
                 zero_crossing_rate: a.spectral.zero_crossing_rate,
                 bass_balance_db: a.spectral.bass_balance_db,
                 vocal_darkness_db_oct: a.spectral.vocal_darkness_db_oct,
+                vocal_weight_hz: a.spectral.vocal_weight_hz,
             },
             voice: TargetVoice {
                 pitch_hz: a.pitch.pitch_hz,
                 pitch_variation_hz: a.pitch.pitch_variation_hz,
                 voice_presence: a.pitch.voice_presence,
+                breathiness_db: a.voice.breathiness_db,
             },
         }
     }
@@ -206,6 +212,20 @@ const METRICS: &[MetricDef] = &[
         actual: |a| a.spectral.vocal_darkness_db_oct,
         unit: " dB/oct",
         scale: 8.0,
+    },
+    MetricDef {
+        name: "Vocal weight",
+        target: |t| t.spectral.vocal_weight_hz,
+        actual: |a| a.spectral.vocal_weight_hz,
+        unit: " Hz",
+        scale: 500.0,
+    },
+    MetricDef {
+        name: "Breathiness",
+        target: |t| t.voice.breathiness_db,
+        actual: |a| a.voice.breathiness_db,
+        unit: " dB",
+        scale: 10.0,
     },
 ];
 

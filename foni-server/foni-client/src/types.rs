@@ -176,6 +176,7 @@ pub struct SpectralResult {
     pub zero_crossing_rate: f32,
     pub bass_balance_db: f32,
     pub vocal_darkness_db_oct: f32,
+    pub vocal_weight_hz: f32,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -183,6 +184,12 @@ pub struct PitchResult {
     pub pitch_hz: f32,
     pub pitch_variation_hz: f32,
     pub voice_presence: f32,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct VoiceResult {
+    pub hnr_db: f32,
+    pub breathiness_db: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]

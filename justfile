@@ -112,6 +112,16 @@ tune:
         --reference {{reference}} \
         -m {{model}}
 
+# Auto-tune N iterations — coordinate descent over DSP knobs, saves top-3 to foni-maquettes.json
+# Then run `just tune` to listen to the results
+[group('tune')]
+auto iterations="20":
+    FONI_SYNTH_URL={{server_url}} {{fonictl}} tune \
+        --auto {{iterations}} \
+        --presets {{presets}} \
+        --vs {{reference}} \
+        -m {{model}}
+
 # Interactive ratatui mixer TUI (needs a real terminal)
 [group('tune')]
 mix:

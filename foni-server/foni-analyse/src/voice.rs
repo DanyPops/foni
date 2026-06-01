@@ -2,14 +2,17 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct VoiceMetrics {
-    /// Harmonics-to-noise ratio in dB. Higher = cleaner voice. Natural speech: 15–25 dB.
+    /// How clean the voice sounds: signal vs noise ratio in dB. Higher = cleaner. Natural speech: 15–25 dB.
     pub hnr_db: f32,
-    /// Cepstral peak prominence — periodicity strength. Higher = more periodic.
+    /// How periodic the voice is. Higher = more regular, more voiced.
     pub cpp: f32,
-    /// Cycle-to-cycle F0 period perturbation (%). Natural speech: < 1%.
+    /// Cycle-to-cycle pitch wobble (%). Natural speech: < 1%. High = shaky/unsteady.
     pub jitter: f32,
-    /// Cycle-to-cycle amplitude perturbation (%). Natural speech: < 5%.
+    /// Cycle-to-cycle volume wobble (%). Natural speech: < 5%. High = trembling.
     pub shimmer: f32,
+    /// How airy/breathy the voice sounds in dB. Positive = breathy, negative = pressed/synthetic.
+    /// Sidorovich is gruff — expect low-to-mid positive values (~2–8 dB).
+    pub breathiness_db: f32,
 }
 
 const FRAME_MS: f32 = 25.0;
@@ -26,6 +29,7 @@ pub fn compute(samples: &[f32], sample_rate: u32) -> VoiceMetrics {
             cpp: 0.0,
             jitter: 0.0,
             shimmer: 0.0,
+            breathiness_db: 0.0,
         };
     }
 
@@ -34,6 +38,7 @@ pub fn compute(samples: &[f32], sample_rate: u32) -> VoiceMetrics {
         cpp: compute_cpp(samples, sample_rate, frame_size),
         jitter: compute_jitter(samples, sample_rate),
         shimmer: compute_shimmer(samples, sample_rate),
+        breathiness_db: compute_breathiness(samples, sample_rate, frame_size),
     }
 }
 
@@ -246,6 +251,82 @@ fn compute_shimmer(samples: &[f32], sample_rate: u32) -> f32 {
     (sum_diff / (amps.len() - 1) as f32) / mean
 }
 
+/// Amplitude at a single frequency via Goertzel — O(N), no full FFT needed.
+fn goertzel(samples: &[f32], freq_hz: f32, sample_rate: u32) -> f32 {
+    use std::f32::consts::PI;
+    let omega = 2.0 * PI * freq_hz / sample_rate as f32;
+    let coeff = 2.0 * omega.cos();
+    let (mut s0, mut s1, mut s2) = (0.0f32, 0.0f32, 0.0f32);
+    for &x in samples {
+        s2 = s1;
+        s1 = s0;
+        s0 = coeff * s1 - s2 + x;
+    }
+    (s0 * s0 + s1 * s1 - coeff * s0 * s1).max(0.0).sqrt()
+}
+
+fn compute_breathiness(samples: &[f32], sample_rate: u32, frame_size: usize) -> f32 {
+    let sr = sample_rate as usize;
+    let hop = (sample_rate as f32 * HOP_MS / 1000.0) as usize;
+    let min_lag = sr / 500; // 500 Hz max F0
+    let max_lag = sr / 80; // 80 Hz min F0
+
+    let mut breathiness_sum = 0.0f64;
+    let mut count = 0usize;
+    let mut i = 0;
+
+    while i + frame_size <= samples.len() {
+        let frame = &samples[i..i + frame_size];
+        let rms = (frame.iter().map(|&s| s * s).sum::<f32>() / frame_size as f32).sqrt();
+        if rms < SILENCE_THR {
+            i += hop;
+            continue;
+        }
+
+        // Find F0 via autocorrelation peak
+        let r0: f64 = frame.iter().map(|&s| (s as f64).powi(2)).sum();
+        if r0 < 1e-12 {
+            i += hop;
+            continue;
+        }
+
+        let mut best_lag = 0usize;
+        let mut best_r = 0.0f64;
+        for lag in min_lag..=max_lag.min(frame_size - 1) {
+            let r: f64 = frame[..frame_size - lag]
+                .iter()
+                .zip(&frame[lag..])
+                .map(|(&a, &b)| a as f64 * b as f64)
+                .sum();
+            if r > best_r {
+                best_r = r;
+                best_lag = lag;
+            }
+        }
+
+        if best_lag == 0 || best_r <= 0.0 {
+            i += hop;
+            continue;
+        }
+
+        let f0 = sample_rate as f32 / best_lag as f32;
+        let h1 = goertzel(frame, f0, sample_rate);
+        let h2 = goertzel(frame, f0 * 2.0, sample_rate);
+
+        if h1 > 1e-8 && h2 > 1e-8 {
+            breathiness_sum += 20.0 * (h1 as f64 / h2 as f64).log10();
+            count += 1;
+        }
+        i += hop;
+    }
+
+    if count == 0 {
+        0.0
+    } else {
+        (breathiness_sum / count as f64) as f32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,5 +379,17 @@ mod tests {
         assert_eq!(m.hnr_db, 0.0);
         assert_eq!(m.jitter, 0.0);
         assert_eq!(m.shimmer, 0.0);
+        assert_eq!(m.breathiness_db, 0.0);
+    }
+
+    #[test]
+    fn pure_sine_breathiness_is_finite() {
+        // A clean sine has a dominant H1 — breathiness should be positive (H1 > H2)
+        let samples = sine(200.0, 1.0, 22050);
+        let m = compute(&samples, 22050);
+        assert!(
+            m.breathiness_db.is_finite(),
+            "breathiness_db should be finite for a pure sine"
+        );
     }
 }
