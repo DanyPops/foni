@@ -19,7 +19,7 @@
   },
   "controller": {
     "enabled":    true,
-    "damping":    0.6,
+    "damping":    0.9,
     "_doc_targets": "Computed from baseline/stalker/wav/sidorovich/trader1a.wav",
     "targets": {
       "brightness_hz":        2288.0,
@@ -29,17 +29,19 @@
     },
     "_doc_sensitivity": "Measured via fonictl calibrate. Row = knob, Col = metric.",
     "sensitivity": {
-      "brightness_per_tilt_high":   92.0,
-      "loudness_per_rms_lufs":       0.975,
-      "bass_balance_per_tilt_low":   0.21,
-      "bass_balance_per_presence":  -0.36,
-      "darkness_per_tilt_high":      0.073
+      "brightness_per_tilt_high":    92.0,
+      "brightness_per_de_harsh":     0.16,
+      "loudness_per_rms_lufs":        0.975,
+      "bass_balance_per_tilt_low":    0.21,
+      "bass_balance_per_presence":   -0.36,
+      "darkness_per_tilt_high":       0.073
     },
     "ranges": {
       "tilt_low_db":     [-4.0, 16.0],
-      "tilt_high_db":    [-18.0, 0.0],
+      "tilt_high_db":    [-24.0, 0.0],
       "rms_target_lufs": [-22.0, -4.0],
-      "presence_db":     [-6.0, 6.0]
+      "presence_db":     [-6.0, 6.0],
+      "de_harsh_db":     [-12.0, 0.0]
     }
   }
 }

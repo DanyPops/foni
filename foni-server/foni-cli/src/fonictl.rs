@@ -2329,6 +2329,11 @@ fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str) {
             key: "compressionRatio",
             step: 2.0,
         },
+        Knob {
+            name: "deHarshDb",
+            key: "deHarshDb",
+            step: -6.0,
+        },
     ];
 
     struct Metric {
