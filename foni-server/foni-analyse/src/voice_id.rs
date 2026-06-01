@@ -1,23 +1,22 @@
-//! ECAPA-TDNN speaker embedding via ONNX Runtime.
+//! Voice identity — does the synthesis sound like the right person?
 //!
-//! The model file is exported once via `just export-ecapa` and stored at
-//! `rvc/models/pretrained/ecapa-voxceleb.onnx`.
+//! Extracts a 192-number voice fingerprint from any WAV and compares it against
+//! a reference (e.g. Sidorovich studio recordings). Returns a similarity score
+//! from 0.0 (completely different) to 1.0 (identical voice).
 //!
-//! Input:  raw waveform `[1, T]` float32 at 16 kHz mono
-//! Output: speaker embedding `[1, 192]` (L2-normalised before cosine comparison)
-//!
-//! If the ONNX file is absent, all functions return `None` gracefully so the
-//! rest of the pipeline continues with MFCC-based similarity instead.
+//! Powered by ECAPA-TDNN, a neural speaker recognition model. The model file
+//! is exported once via `just setup-voice-id` and stored locally. If the file
+//! is absent, all functions return `None` and the pipeline continues without it.
 
 use ort::session::Session;
 use ort::value::Tensor;
 use std::path::Path;
 
-/// 192-dimensional ECAPA-TDNN speaker embedding.
-pub type EcapaEmbedding = [f32; 192];
+/// A voice fingerprint: 192 numbers that encode a speaker's unique characteristics.
+pub type VoiceFingerprint = [f32; 192];
 
-/// Compute cosine similarity between two L2-normalised embeddings. Returns [−1, 1].
-pub fn cosine_sim(a: &EcapaEmbedding, b: &EcapaEmbedding) -> f32 {
+/// How similar are two voice fingerprints? Returns 0.0 (nothing alike) to 1.0 (same voice).
+pub fn cosine_sim(a: &VoiceFingerprint, b: &VoiceFingerprint) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let mag_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let mag_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -27,7 +26,7 @@ pub fn cosine_sim(a: &EcapaEmbedding, b: &EcapaEmbedding) -> f32 {
     (dot / (mag_a * mag_b)).clamp(-1.0, 1.0)
 }
 
-/// Load ECAPA-TDNN ONNX session from disk. Returns `None` if file is absent.
+/// Load the voice ID model from disk. Returns `None` if not yet set up (run `just setup-voice-id`).
 pub fn load_session(onnx_path: &Path) -> Option<Session> {
     if !onnx_path.exists() {
         return None;
@@ -35,9 +34,9 @@ pub fn load_session(onnx_path: &Path) -> Option<Session> {
     Session::builder().ok()?.commit_from_file(onnx_path).ok()
 }
 
-/// Extract a speaker embedding from 16 kHz mono samples.
-/// Returns `None` if inference fails or input is too short (<100 ms).
-pub fn extract(session: &mut Session, samples_16k: &[f32]) -> Option<EcapaEmbedding> {
+/// Compute a voice fingerprint from 16 kHz mono audio samples.
+/// Returns `None` if the audio is too short (<100 ms) or inference fails.
+pub fn extract(session: &mut Session, samples_16k: &[f32]) -> Option<VoiceFingerprint> {
     let t = samples_16k.len();
     if t < 1600 {
         return None;
@@ -64,7 +63,7 @@ pub fn extract(session: &mut Session, samples_16k: &[f32]) -> Option<EcapaEmbedd
     Some(out)
 }
 
-/// Resample to 16 kHz via linear interpolation.
+/// Resample audio to 16 kHz, which the voice ID model expects.
 pub fn to_16k(samples: &[f32], src_rate: u32) -> Vec<f32> {
     if src_rate == 16000 {
         return samples.to_vec();
@@ -82,28 +81,31 @@ pub fn to_16k(samples: &[f32], src_rate: u32) -> Vec<f32> {
         .collect()
 }
 
-/// Compute a corpus-mean embedding from a set of (samples, sample_rate) pairs.
-/// The result is L2-normalised and can be used directly with `cosine_sim`.
-pub fn corpus_mean(session: &mut Session, all_samples: &[(&[f32], u32)]) -> Option<EcapaEmbedding> {
-    let mut embeds: Vec<EcapaEmbedding> = Vec::new();
+/// Average the voice fingerprints from multiple recordings into one reference.
+/// Pass a set of studio recordings to get the "true Sidorovich" fingerprint.
+pub fn corpus_mean(
+    session: &mut Session,
+    all_samples: &[(&[f32], u32)],
+) -> Option<VoiceFingerprint> {
+    let mut prints: Vec<VoiceFingerprint> = Vec::new();
     for (s, sr) in all_samples {
         let s16 = to_16k(s, *sr);
-        if let Some(emb) = extract(session, &s16) {
-            embeds.push(emb);
+        if let Some(fp) = extract(session, &s16) {
+            prints.push(fp);
         }
     }
 
-    if embeds.is_empty() {
+    if prints.is_empty() {
         return None;
     }
 
     let mut mean = [0f32; 192];
-    for emb in &embeds {
+    for emb in &prints {
         for (m, &v) in mean.iter_mut().zip(emb) {
             *m += v;
         }
     }
-    let n = embeds.len() as f32;
+    let n = prints.len() as f32;
     for m in mean.iter_mut() {
         *m /= n;
     }
@@ -121,13 +123,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cosine_sim_identical() {
+    fn same_fingerprint_scores_one() {
         let v = [0.5f32; 192];
         assert!((cosine_sim(&v, &v) - 1.0).abs() < 1e-5);
     }
 
     #[test]
-    fn cosine_sim_orthogonal() {
+    fn different_fingerprints_score_near_zero() {
         let mut a = [0f32; 192];
         let mut b = [0f32; 192];
         a[0] = 1.0;
@@ -150,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn load_session_absent_returns_none() {
-        assert!(load_session(Path::new("/nonexistent/ecapa.onnx")).is_none());
+    fn missing_model_file_returns_none() {
+        assert!(load_session(Path::new("/nonexistent/voice-id.onnx")).is_none());
     }
 }

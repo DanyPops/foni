@@ -3,20 +3,20 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SpectralMetrics {
-    /// Weighted mean frequency in Hz — perceptual brightness.
-    pub centroid_hz: f32,
-    /// Weighted std dev around centroid in Hz.
+    /// How bright or thin the voice sounds — higher Hz = brighter/thinner.
+    pub brightness_hz: f32,
+    /// Spread of energy around the brightness centre — wider = richer sound.
     pub bandwidth_hz: f32,
-    /// Wiener entropy: 0.0 = pure tone, 1.0 = white noise.
-    pub flatness: f32,
-    /// Sign changes per second — high for noise/fricatives, low for voiced.
+    /// How pure the tone is: 0.0 = clean sine, 1.0 = pure noise.
+    pub tone_purity: f32,
+    /// Sign changes per second — a texture proxy, high for fricatives.
     pub zero_crossing_rate: f32,
-    /// 10·log10(E_<1kHz / E_>1kHz). Higher = more bass energy.
-    /// Deep baritone: +5 to +10 dB. Bright/tinny: negative values.
-    pub alpha_ratio_db: f32,
-    /// Linear regression slope of log(power) vs log(freq) in dB/octave.
-    /// Steep negative = dark/warm. Near zero = bright/unnatural.
-    pub spectral_tilt_db_oct: f32,
+    /// Bass vs treble energy balance in dB. Positive = more bass (deep voice).
+    /// Deep baritone target: +5 to +10 dB. Negative = thin/bright.
+    pub bass_balance_db: f32,
+    /// How dark the voice is: dB drop per octave going up in frequency.
+    /// Steep negative (−4 to −6) = warm/dark. Near zero = bright/synthetic.
+    pub vocal_darkness_db_oct: f32,
 }
 
 const FRAME_MS: f32 = 25.0;
@@ -150,22 +150,22 @@ pub fn compute(samples: &[f32], sample_rate: u32) -> SpectralMetrics {
 
     if frame_count == 0 {
         return SpectralMetrics {
-            centroid_hz: 0.0,
+            brightness_hz: 0.0,
             bandwidth_hz: 0.0,
-            flatness: 0.0,
+            tone_purity: 0.0,
             zero_crossing_rate: zcr,
-            alpha_ratio_db: 0.0,
-            spectral_tilt_db_oct: 0.0,
+            bass_balance_db: 0.0,
+            vocal_darkness_db_oct: 0.0,
         };
     }
 
     SpectralMetrics {
-        centroid_hz: (centroid_acc / frame_count as f64) as f32,
+        brightness_hz: (centroid_acc / frame_count as f64) as f32,
         bandwidth_hz: (bandwidth_acc / frame_count as f64) as f32,
-        flatness: (flatness_acc / frame_count as f64) as f32,
+        tone_purity: (flatness_acc / frame_count as f64) as f32,
         zero_crossing_rate: zcr,
-        alpha_ratio_db: (alpha_ratio_acc / frame_count as f64) as f32,
-        spectral_tilt_db_oct: (tilt_acc / frame_count as f64) as f32,
+        bass_balance_db: (alpha_ratio_acc / frame_count as f64) as f32,
+        vocal_darkness_db_oct: (tilt_acc / frame_count as f64) as f32,
     }
 }
 
@@ -194,21 +194,21 @@ mod tests {
         let samples = sine(1000.0, 0.5, 22050);
         let m = compute(&samples, 22050);
         assert!(
-            (m.centroid_hz - 1000.0).abs() < 50.0,
-            "centroid={}",
-            m.centroid_hz
+            (m.brightness_hz - 1000.0).abs() < 50.0,
+            "brightness={}",
+            m.brightness_hz
         );
     }
 
     #[test]
-    fn pure_tone_has_low_flatness() {
+    fn pure_tone_has_low_tone_purity() {
         let samples = sine(440.0, 0.5, 22050);
         let m = compute(&samples, 22050);
-        assert!(m.flatness < 0.05, "flatness={}", m.flatness);
+        assert!(m.tone_purity < 0.05, "tone_purity={}", m.tone_purity);
     }
 
     #[test]
-    fn white_noise_has_high_flatness() {
+    fn white_noise_has_high_tone_purity() {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         // deterministic pseudo-noise
@@ -220,21 +220,29 @@ mod tests {
             })
             .collect();
         let m = compute(&samples, 22050);
-        assert!(m.flatness > 0.5, "flatness={}", m.flatness);
+        assert!(m.tone_purity > 0.5, "tone_purity={}", m.tone_purity);
     }
 
     #[test]
     fn low_freq_signal_has_positive_alpha_ratio() {
         let samples = sine(300.0, 0.5, 22050);
         let m = compute(&samples, 22050);
-        assert!(m.alpha_ratio_db > 5.0, "alpha_ratio={}", m.alpha_ratio_db);
+        assert!(
+            m.bass_balance_db > 5.0,
+            "bass_balance={}",
+            m.bass_balance_db
+        );
     }
 
     #[test]
     fn high_freq_signal_has_negative_alpha_ratio() {
         let samples = sine(4000.0, 0.5, 22050);
         let m = compute(&samples, 22050);
-        assert!(m.alpha_ratio_db < -5.0, "alpha_ratio={}", m.alpha_ratio_db);
+        assert!(
+            m.bass_balance_db < -5.0,
+            "bass_balance={}",
+            m.bass_balance_db
+        );
     }
 
     #[test]
@@ -251,7 +259,10 @@ mod tests {
         let m = compute(&samples, 22050);
         // White noise power ∝ f^0 → tilt ≈ 0 dB/oct; pink noise is -3 dB/oct
         // Pure noise should be near 0; just verify it's computed (finite)
-        assert!(m.spectral_tilt_db_oct.is_finite(), "tilt not finite");
+        assert!(
+            m.vocal_darkness_db_oct.is_finite(),
+            "vocal_darkness not finite"
+        );
     }
 
     #[test]

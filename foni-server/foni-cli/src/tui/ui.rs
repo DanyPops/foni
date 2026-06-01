@@ -273,8 +273,8 @@ fn render_analyse(f: &mut Frame, area: Rect, app: &MixerApp) {
         " {} — RMS {:.1} dBFS  |  F0 {:.0} Hz  |  Voiced {:.0}%  |  Dur {:.2}s",
         track.label,
         a.analysis.loudness.rms_db,
-        a.analysis.pitch.f0_mean_hz,
-        a.analysis.pitch.voiced_ratio * 100.0,
+        a.analysis.pitch.pitch_hz,
+        a.analysis.pitch.voice_presence * 100.0,
         a.analysis.temporal.duration_secs,
     );
     f.render_widget(

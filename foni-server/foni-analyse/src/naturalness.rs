@@ -1,8 +1,10 @@
-//! ViSQOL v3.1 speech quality scoring — full-reference MOS-LQO.
+//! Naturalness scoring — how much does the synthesis sound like real speech?
 //!
-//! Requires a studio reference WAV and the degraded (synthesised) WAV.
-//! Returns MOS-LQO in [1.0, 5.0]; higher is better.
-//! Score < 3.0 = clearly degraded; > 4.0 = near-transparent.
+//! Uses Google ViSQOL v3.1: provide a studio reference WAV and the synthesised
+//! WAV, get back a score from 1.0 (very degraded) to 5.0 (indistinguishable).
+//! Think of it as an automated human listener rating.
+//!
+//! < 3.0 = clearly synthetic; 3.5–4.0 = acceptable; > 4.0 = near-transparent.
 //!
 //! Source: <https://github.com/google/visqol>
 

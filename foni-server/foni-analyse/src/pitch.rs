@@ -7,14 +7,16 @@ const FRAME_LENGTH: usize = 2048;
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct PitchMetrics {
-    /// Mean F0 across voiced frames in Hz. 0.0 when no voiced frames detected.
-    pub f0_mean_hz: f32,
-    /// Standard deviation of F0 in Hz — pitch variation. 0.0 = robotic monotone.
-    pub f0_stddev_hz: f32,
-    /// F0 slope in semitones/second — intonation direction.
-    pub f0_slope_semi: f32,
-    /// Fraction of frames classified as voiced.
-    pub voiced_ratio: f32,
+    /// Average fundamental frequency in Hz. 0.0 when silence detected.
+    /// Sidorovich target: 80–110 Hz (deep bass-baritone).
+    pub pitch_hz: f32,
+    /// How much the pitch wanders — 0.0 = robotic monotone, high = expressive.
+    pub pitch_variation_hz: f32,
+    /// Pitch trend in semitones/second — positive = rising, negative = falling.
+    pub pitch_slope_semi: f32,
+    /// Fraction of the clip that is voiced speech (0.0–1.0).
+    /// Low values mean lots of silence or noise between words.
+    pub voice_presence: f32,
 }
 
 /// Run pyin and return both aggregate metrics and per-frame F0 contour.
@@ -23,10 +25,10 @@ pub fn compute_with_contour(samples: &[f32], sample_rate: u32) -> (PitchMetrics,
     if samples.len() < FRAME_LENGTH {
         return (
             PitchMetrics {
-                f0_mean_hz: 0.0,
-                f0_stddev_hz: 0.0,
-                f0_slope_semi: 0.0,
-                voiced_ratio: 0.0,
+                pitch_hz: 0.0,
+                pitch_variation_hz: 0.0,
+                pitch_slope_semi: 0.0,
+                voice_presence: 0.0,
             },
             vec![],
         );
@@ -55,10 +57,10 @@ fn metrics_from_pyin(f0: &[f64], voiced_flag: &[bool], sample_rate: u32) -> Pitc
     let total_frames = voiced_flag.len();
     if total_frames == 0 {
         return PitchMetrics {
-            f0_mean_hz: 0.0,
-            f0_stddev_hz: 0.0,
-            f0_slope_semi: 0.0,
-            voiced_ratio: 0.0,
+            pitch_hz: 0.0,
+            pitch_variation_hz: 0.0,
+            pitch_slope_semi: 0.0,
+            voice_presence: 0.0,
         };
     }
     let voiced: Vec<f64> = f0
@@ -68,14 +70,14 @@ fn metrics_from_pyin(f0: &[f64], voiced_flag: &[bool], sample_rate: u32) -> Pitc
         .map(|(&f, _)| f)
         .filter(|f| f.is_finite())
         .collect();
-    let voiced_ratio = voiced_flag.iter().filter(|&&v| v).count() as f32 / total_frames as f32;
+    let voice_presence = voiced_flag.iter().filter(|&&v| v).count() as f32 / total_frames as f32;
 
     if voiced.is_empty() {
         return PitchMetrics {
-            f0_mean_hz: 0.0,
-            f0_stddev_hz: 0.0,
-            f0_slope_semi: 0.0,
-            voiced_ratio,
+            pitch_hz: 0.0,
+            pitch_variation_hz: 0.0,
+            pitch_slope_semi: 0.0,
+            voice_presence,
         };
     }
 
@@ -103,16 +105,16 @@ fn metrics_from_pyin(f0: &[f64], voiced_flag: &[bool], sample_rate: u32) -> Pitc
     };
 
     PitchMetrics {
-        f0_mean_hz: mean as f32,
-        f0_stddev_hz: stddev as f32,
-        f0_slope_semi: slope_semi as f32,
-        voiced_ratio,
+        pitch_hz: mean as f32,
+        pitch_variation_hz: stddev as f32,
+        pitch_slope_semi: slope_semi as f32,
+        voice_presence,
     }
 }
 
 /// Fast F0 estimation via McLeod Pitch Method (MPM).
 /// ~50 ms per file vs pyin's ~1400 ms — suitable for batch corpus analysis.
-/// Returns (f0_mean_hz, f0_stddev_hz, voiced_ratio); no per-frame contour.
+/// Returns (pitch_hz, pitch_variation_hz, voice_presence); no per-frame contour.
 pub fn fast_f0_stats(samples: &[f32], sample_rate: u32) -> (f32, f32, f32) {
     use pitch_detection::detector::mcleod::McLeodDetector;
     use pitch_detection::detector::PitchDetector;
@@ -148,9 +150,9 @@ pub fn fast_f0_stats(samples: &[f32], sample_rate: u32) -> (f32, f32, f32) {
 
     let mean = f0s.iter().sum::<f32>() / f0s.len() as f32;
     let var = f0s.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / f0s.len() as f32;
-    let voiced_ratio = f0s.len() as f32 / total_frames.max(1) as f32;
+    let voice_presence = f0s.len() as f32 / total_frames.max(1) as f32;
 
-    (mean, var.sqrt(), voiced_ratio)
+    (mean, var.sqrt(), voice_presence)
 }
 
 #[cfg(test)]
@@ -169,39 +171,42 @@ mod tests {
     fn pure_sine_f0_near_frequency() {
         let samples = sine(220.0, 1.0, 22050);
         let m = compute(&samples, 22050);
-        assert!(m.f0_mean_hz > 0.0, "expected voiced output");
+        assert!(m.pitch_hz > 0.0, "expected voiced output");
         assert!(
-            (m.f0_mean_hz - 220.0).abs() < 30.0,
-            "f0_mean_hz={} expected ~220",
-            m.f0_mean_hz
+            (m.pitch_hz - 220.0).abs() < 30.0,
+            "pitch_hz={} expected ~220",
+            m.pitch_hz
         );
     }
 
     #[test]
-    fn pure_sine_high_voiced_ratio() {
+    fn pure_sine_high_voice_presence() {
         let samples = sine(440.0, 1.0, 22050);
         let m = compute(&samples, 22050);
-        assert!(m.voiced_ratio > 0.8, "voiced_ratio={}", m.voiced_ratio);
+        assert!(
+            m.voice_presence > 0.8,
+            "voice_presence={}",
+            m.voice_presence
+        );
     }
 
     #[test]
-    fn silence_has_zero_voiced_ratio() {
+    fn silence_has_zero_voice_presence() {
         let samples = vec![0.0f32; 22050];
         let m = compute(&samples, 22050);
-        assert_eq!(m.voiced_ratio, 0.0);
-        assert_eq!(m.f0_mean_hz, 0.0);
+        assert_eq!(m.voice_presence, 0.0);
+        assert_eq!(m.pitch_hz, 0.0);
     }
 
     #[test]
-    fn pure_sine_low_stddev() {
-        // Monotone sine = near-zero F0 variation
+    fn pure_sine_low_pitch_variation() {
         let samples = sine(300.0, 2.0, 22050);
         let m = compute(&samples, 22050);
-        if m.f0_mean_hz > 0.0 {
+        if m.pitch_hz > 0.0 {
             assert!(
-                m.f0_stddev_hz < 20.0,
-                "stddev={} — expected low for pure tone",
-                m.f0_stddev_hz
+                m.pitch_variation_hz < 20.0,
+                "pitch_variation={} — expected low for pure tone",
+                m.pitch_variation_hz
             );
         }
     }

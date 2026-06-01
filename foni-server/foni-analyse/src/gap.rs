@@ -24,20 +24,20 @@ pub struct TargetTemporal {
 pub struct TargetSpectral {
     pub rms_db: f32,
     pub crest_factor: f32,
-    pub centroid_hz: f32,
-    pub flatness: f32,
+    pub brightness_hz: f32,
+    pub tone_purity: f32,
     pub zero_crossing_rate: f32,
     #[serde(default)]
-    pub alpha_ratio_db: f32,
+    pub bass_balance_db: f32,
     #[serde(default)]
-    pub spectral_tilt_db_oct: f32,
+    pub vocal_darkness_db_oct: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetVoice {
-    pub f0_mean_hz: f32,
-    pub f0_stddev_hz: f32,
-    pub voiced_ratio: f32,
+    pub pitch_hz: f32,
+    pub pitch_variation_hz: f32,
+    pub voice_presence: f32,
 }
 
 impl TargetTensor {
@@ -55,16 +55,16 @@ impl TargetTensor {
             spectral: TargetSpectral {
                 rms_db: a.loudness.rms_db,
                 crest_factor: a.loudness.crest_factor,
-                centroid_hz: a.spectral.centroid_hz,
-                flatness: a.spectral.flatness,
+                brightness_hz: a.spectral.brightness_hz,
+                tone_purity: a.spectral.tone_purity,
                 zero_crossing_rate: a.spectral.zero_crossing_rate,
-                alpha_ratio_db: a.spectral.alpha_ratio_db,
-                spectral_tilt_db_oct: a.spectral.spectral_tilt_db_oct,
+                bass_balance_db: a.spectral.bass_balance_db,
+                vocal_darkness_db_oct: a.spectral.vocal_darkness_db_oct,
             },
             voice: TargetVoice {
-                f0_mean_hz: a.pitch.f0_mean_hz,
-                f0_stddev_hz: a.pitch.f0_stddev_hz,
-                voiced_ratio: a.pitch.voiced_ratio,
+                pitch_hz: a.pitch.pitch_hz,
+                pitch_variation_hz: a.pitch.pitch_variation_hz,
+                voice_presence: a.pitch.voice_presence,
             },
         }
     }
@@ -131,35 +131,35 @@ struct MetricDef {
 
 const METRICS: &[MetricDef] = &[
     MetricDef {
-        name: "RMS level",
+        name: "Loudness",
         target: |t| t.spectral.rms_db,
         actual: |a| a.loudness.rms_db,
         unit: " dBFS",
         scale: 10.0,
     },
     MetricDef {
-        name: "Crest factor",
+        name: "Dynamic range",
         target: |t| t.spectral.crest_factor,
         actual: |a| a.loudness.crest_factor,
         unit: " dB",
         scale: 10.0,
     },
     MetricDef {
-        name: "Centroid",
-        target: |t| t.spectral.centroid_hz,
-        actual: |a| a.spectral.centroid_hz,
+        name: "Brightness",
+        target: |t| t.spectral.brightness_hz,
+        actual: |a| a.spectral.brightness_hz,
         unit: " Hz",
         scale: 1000.0,
     },
     MetricDef {
-        name: "Spectral flatness",
-        target: |t| t.spectral.flatness,
-        actual: |a| a.spectral.flatness,
+        name: "Tone purity",
+        target: |t| t.spectral.tone_purity,
+        actual: |a| a.spectral.tone_purity,
         unit: "",
         scale: 0.5,
     },
     MetricDef {
-        name: "Zero crossing rate",
+        name: "Noise texture",
         target: |t| t.spectral.zero_crossing_rate,
         actual: |a| a.spectral.zero_crossing_rate,
         unit: " /s",
@@ -180,30 +180,30 @@ const METRICS: &[MetricDef] = &[
         scale: 50.0,
     },
     MetricDef {
-        name: "Voiced ratio",
-        target: |t| t.voice.voiced_ratio,
-        actual: |a| a.pitch.voiced_ratio,
+        name: "Voice presence",
+        target: |t| t.voice.voice_presence,
+        actual: |a| a.pitch.voice_presence,
         unit: "",
         scale: 0.5,
     },
     MetricDef {
-        name: "F0 stdDev",
-        target: |t| t.voice.f0_stddev_hz,
-        actual: |a| a.pitch.f0_stddev_hz,
+        name: "Pitch variation",
+        target: |t| t.voice.pitch_variation_hz,
+        actual: |a| a.pitch.pitch_variation_hz,
         unit: " Hz",
         scale: 150.0,
     },
     MetricDef {
-        name: "Alpha ratio",
-        target: |t| t.spectral.alpha_ratio_db,
-        actual: |a| a.spectral.alpha_ratio_db,
+        name: "Bass balance",
+        target: |t| t.spectral.bass_balance_db,
+        actual: |a| a.spectral.bass_balance_db,
         unit: " dB",
         scale: 15.0,
     },
     MetricDef {
-        name: "Spectral tilt",
-        target: |t| t.spectral.spectral_tilt_db_oct,
-        actual: |a| a.spectral.spectral_tilt_db_oct,
+        name: "Vocal darkness",
+        target: |t| t.spectral.vocal_darkness_db_oct,
+        actual: |a| a.spectral.vocal_darkness_db_oct,
         unit: " dB/oct",
         scale: 8.0,
     },
