@@ -3,7 +3,7 @@
 
 server_url  := env("FONI_SYNTH_URL",  "http://localhost:5050")
 models_dir  := env("RVC_MODELS_DIR",  "rvc/models")
-model       := env("FONI_MODEL",       "bandit")
+model       := env("FONI_MODEL",       "sidorovich")
 pool_size   := env("FONI_POOL_SIZE",   "4")
 fonictl     := "foni-server/target/debug/fonictl"
 reference   := "baseline/stalker/wav/sidorovich/trader1a.wav"
@@ -150,30 +150,35 @@ analyse wav:
 
 # ── Model setup (one-time) ─────────────────────────────────────────────────────
 
-# Create persistent Python env for model export tools (run once, ~2GB)
-[group('setup')]
-setup-python:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    VENV=rvc/.venv
-    if [ ! -d "$VENV" ]; then
-        echo "Creating venv at $VENV..."
-        uv venv --python 3.12 "$VENV"
-    fi
-    echo "Installing deps (torch + onnx + faiss-cpu)..."
-    uv pip install --python "$VENV/bin/python" -r rvc/requirements.txt
-    echo "✓ Python env ready: $VENV"
-
-# Export ONNX generator for a model (run setup-python first)
-# Usage: just export-model bandit   or   just export-model sidorovich
+# Export ONNX generator for a model using the foni-rvc container (torch already installed)
+# Usage: just export-model sidorovich   or   just export-model bandit
 [group('setup')]
 export-model model:
-    rvc/.venv/bin/python rvc/export_onnx.py {{model}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    RVC_SRC=/tmp/rvc-onnx-source
+    if [ ! -d "$RVC_SRC" ]; then
+        echo "Cloning RVC source..."
+        git clone --depth=1 --filter=blob:none --sparse \
+            https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI \
+            "$RVC_SRC"
+        cd "$RVC_SRC" && git sparse-checkout set infer/lib/infer_pack
+    fi
+    podman run --rm \
+        -v {{justfile_directory()}}:/foni:Z \
+        -v "$RVC_SRC:$RVC_SRC:Z" \
+        -w /foni \
+        localhost/foni-rvc \
+        bash -c 'pip install -q onnx==1.15.0 onnxruntime==1.17.3 && python3 rvc/export_onnx.py {{model}}'
 
-# Export FAISS voice index vectors to .npy (requires setup-python)
+# Export FAISS voice index vectors to .npy using foni-rvc container
 [group('setup')]
 export-index:
-    rvc/.venv/bin/python rvc/export_voice_index.py
+    podman run --rm \
+        -v {{justfile_directory()}}:/foni:Z \
+        -w /foni \
+        localhost/foni-rvc \
+        python3 rvc/export_voice_index.py
 
 # ── Git ────────────────────────────────────────────────────────────────────────
 
