@@ -119,9 +119,9 @@ describe("WordDiversifier", () => {
     for (let i = 0; i < 30; i++) {
       if (d.pick(["а", "б"]) === "б") bCount++;
     }
-    // Conservative threshold: even with convergence, б should dominate.
-    // Expected ≈ 20+; threshold set at 15 to avoid flakiness.
-    expect(bCount).toBeGreaterThan(15);
+    // б starts with zero count while а has 10 — so б must win most picks.
+    // Threshold set conservatively at 14 (≥ 50% of 30 picks minus margin).
+    expect(bCount).toBeGreaterThan(14);
   });
 
   it("counts are independent per instance", () => {

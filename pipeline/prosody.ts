@@ -229,30 +229,4 @@ export function isSsml(text: string): boolean {
   return text.trimStart().startsWith("<speak");
 }
 
-// ─── TTSBackend wrapper ───────────────────────────────────────────────────────
 
-import type { TTSBackend, SynthOptions } from "./interfaces.ts";
-
-/**
- * Wraps any TTSBackend, annotating text with SSML prosody before synthesis.
- *
- * Usage:
- *   new ProsodyBackend(new EspeakBackend("ru"))
- */
-export class ProsodyBackend implements TTSBackend {
-  readonly name: string;
-
-  constructor(
-    private readonly inner:       TTSBackend,
-    private readonly prosodyOpts: ProsodyOptions = {},
-  ) {
-    this.name = inner.name;
-  }
-
-  isAvailable(): Promise<boolean> { return this.inner.isAvailable(); }
-
-  async synthesize(text: string, opts: SynthOptions): Promise<Buffer> {
-    const ssml = isSsml(text) ? text : annotateProsody(text, this.prosodyOpts);
-    return this.inner.synthesize(ssml, opts);
-  }
-}
