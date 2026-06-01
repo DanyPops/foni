@@ -87,6 +87,33 @@ fn cache_key(req: &SynthRequest, model: &str) -> [u8; 32] {
     if let Some(ref rng) = req.range {
         h.update(rng.as_bytes());
     }
+    // DSP opts — hash every field so different configs never collide.
+    let o = &req.opts;
+    for v in [
+        o.rms_target_lufs,
+        o.compression_ratio,
+        o.compression_attack_ms,
+        o.compression_release_ms,
+        o.compression_threshold_db,
+        o.compression_makeup_db,
+        o.tilt_low_db,
+        o.tilt_high_db,
+        o.vibrato_freq,
+        o.vibrato_depth,
+        o.highpass_freq,
+        o.presence_db,
+        o.de_ess_db,
+        o.warmth_boost_db,
+        o.warmth_freq,
+        o.air_boost_db,
+        o.air_freq,
+        o.reverb_ms,
+        o.reverb_decay,
+        o.pad_secs,
+        o.fade_secs,
+    ] {
+        h.update(v.map(f32::to_le_bytes).unwrap_or([0xff; 4]));
+    }
     h.finalize().into()
 }
 

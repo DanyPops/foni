@@ -97,6 +97,9 @@ enum Cmd {
         /// Compare DSP variants (baseline/warm/punchy/bright) instead of pipeline stages
         #[arg(long)]
         dsp: bool,
+        /// Synthesize RVC base once, then fan out through DSP isolation variants to find noise sources
+        #[arg(long)]
+        diagnose: bool,
         /// Play reference original before each stage (needs baseline/stalker/wav/sidorovich/trader1a.wav)
         #[arg(long)]
         vs: bool,
@@ -155,6 +158,33 @@ fn synth_request(
     }
 
     resp.bytes().map(|b| b.to_vec()).map_err(|e| e.to_string())
+}
+
+/// POST /process — apply DSP to an existing WAV (base64 round-trip).
+fn process_request(server: &str, wav: &[u8], opts: serde_json::Value) -> Result<Vec<u8>, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    let body = serde_json::json!({
+        "audio_data": B64.encode(wav),
+        "opts":       opts,
+    });
+    let resp = reqwest::blocking::Client::new()
+        .post(format!("{server}/process"))
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .map_err(|e| format!("/process request: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "HTTP {}: {}",
+            resp.status(),
+            resp.text().unwrap_or_default()
+        ));
+    }
+    let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let b64 = data["audio_data"]
+        .as_str()
+        .ok_or("no audio_data in response")?;
+    B64.decode(b64).map_err(|e| e.to_string())
 }
 
 fn get_json(server: &str, path: &str) -> Result<serde_json::Value, String> {
@@ -622,6 +652,156 @@ fn cmd_studio(server: &str, text: &str, model: &str, from: Option<&std::path::Pa
     }
 }
 
+/// Synthesize RVC base once, then apply isolation DSP configs via /process.
+/// Each stage removes one effect to identify noise sources.
+fn cmd_diagnose(server: &str, text: &str, model: &str) {
+    use std::io::{BufRead, Write};
+
+    println!("\n⚠  Diagnose — isolating noise sources");
+    println!("   Phrase: «{text}»");
+    println!("   Step 1: synthesizing RVC base (no DSP) …");
+
+    // Synthesize RVC without DSP once — this is the base for all variants.
+    let rvc_wav = match synth_request(server, text, model, "ru", 150, false, serde_json::json!({}))
+    {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("  ❌ RVC synthesis failed: {e}");
+            return;
+        }
+    };
+    println!("   Base: {} kB", rvc_wav.len() / 1024);
+
+    let full: serde_json::Value = serde_json::json!({
+        "rmsTargetLufs": -8, "compressionRatio": 4, "compressionMakeupDb": 5,
+        "tiltLowDb": 10,  "tiltHighDb": -8,
+        "vibratoFreq": 6, "vibratoDepth": 0.003,
+        "reverbMs": 8,    "reverbDecay": 0.04
+    });
+
+    let mut stages: Vec<(&str, &str, serde_json::Value)> = vec![
+        // label, description, opts
+        (
+            "a_rvc_raw",
+            "RVC only — no DSP at all",
+            serde_json::json!({
+                "compressionRatio": 1.0, "compressionMakeupDb": 0.0,
+                "tiltLowDb": 0.0, "tiltHighDb": 0.0,
+                "vibratoDepth": 0.0, "reverbMs": 0.0, "reverbDecay": 0.0,
+                "rmsTargetLufs": 0.0, "normalize": false
+            }),
+        ),
+        (
+            "b_novibrato",
+            "DSP full — vibrato OFF   ← if wobble disappears: vibrato is culprit",
+            {
+                let mut v = full.clone();
+                v["vibratoDepth"] = 0.0.into();
+                v
+            },
+        ),
+        (
+            "c_nocomp",
+            "DSP — vibrato OFF + compressor OFF   ← buzz from dynamics?",
+            {
+                let mut v = full.clone();
+                v["vibratoDepth"] = 0.0.into();
+                v["compressionRatio"] = 1.0.into();
+                v["compressionMakeupDb"] = 0.0.into();
+                v
+            },
+        ),
+        (
+            "d_notilt",
+            "DSP — vibrato OFF + tilt OFF   ← buzz from spectral tilt?",
+            {
+                let mut v = full.clone();
+                v["vibratoDepth"] = 0.0.into();
+                v["tiltLowDb"] = 0.0.into();
+                v["tiltHighDb"] = 0.0.into();
+                v
+            },
+        ),
+        ("e_noreverb", "DSP — vibrato OFF + reverb OFF", {
+            let mut v = full.clone();
+            v["vibratoDepth"] = 0.0.into();
+            v["reverbMs"] = 0.0.into();
+            v["reverbDecay"] = 0.0.into();
+            v
+        }),
+        (
+            "f_full_dsp",
+            "Full DSP (current state) — all effects ON",
+            full.clone(),
+        ),
+    ];
+
+    // Render all via /process
+    println!(
+        "   Step 2: applying {} DSP configs via /process …",
+        stages.len()
+    );
+    let pb = ProgressBar::new(stages.len() as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{bar:30}] {pos}/{len}")
+            .unwrap(),
+    );
+
+    struct Stage {
+        label: String,
+        desc: String,
+        path: std::path::PathBuf,
+    }
+    let mut rendered: Vec<Stage> = Vec::new();
+
+    for (label, desc, opts) in &stages {
+        match process_request(server, &rvc_wav, opts.clone()) {
+            Ok(wav) => {
+                let path = std::env::temp_dir().join(format!("fonictl_diag_{label}.wav"));
+                std::fs::write(&path, &wav).unwrap();
+                rendered.push(Stage {
+                    label: label.to_string(),
+                    desc: desc.to_string(),
+                    path,
+                });
+            }
+            Err(e) => pb.println(format!("  ❌ {label}: {e}")),
+        }
+        pb.inc(1);
+    }
+    pb.finish_and_clear();
+
+    println!("\n   Controls: Enter=next  r=replay  p=prev  q=quit\n");
+
+    let stdin = std::io::stdin();
+    let mut i = 0usize;
+    loop {
+        if i >= rendered.len() {
+            break;
+        }
+        let s = &rendered[i];
+        println!("▶  [{}/{}] {}", i + 1, rendered.len(), s.label);
+        println!("   {}", s.desc);
+        play_wav(&s.path);
+        print!("   > ");
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        stdin.lock().read_line(&mut line).ok();
+        match line.trim() {
+            "q" | "quit" => break,
+            "r" | "replay" => {}
+            "p" | "prev" => {
+                i = i.saturating_sub(1);
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    println!("\n  done.");
+}
+
 fn cmd_listen(server: &str, text: &str, model: &str, dsp_variants: bool, play_ref: bool) {
     use std::io::{BufRead, Write};
 
@@ -938,9 +1118,14 @@ fn main() {
             text,
             model,
             dsp,
+            diagnose,
             vs,
         } => {
-            cmd_listen(server, &text, &model, dsp, vs);
+            if diagnose {
+                cmd_diagnose(server, &text, &model);
+            } else {
+                cmd_listen(server, &text, &model, dsp, vs);
+            }
         }
     }
 }
