@@ -484,8 +484,8 @@ pub async fn convert(
     }
 
     // Hold the session pool lock for the duration of inference.
-    let mut pool_guard = state.0.sessions.lock().await;
-    let pool = pool_guard.as_mut().expect("sessions loaded above");
+    let mut pool_guard = state.0.sessions.acquire().await;
+    let pool = pool_guard.session.as_mut().expect("sessions loaded above");
 
     macro_rules! stage {
         ($label:expr, $expr:expr) => {

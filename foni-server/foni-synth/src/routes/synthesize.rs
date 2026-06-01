@@ -171,6 +171,7 @@ pub async fn synthesize(
     State(state): State<AppState>,
     Json(req): Json<SynthRequest>,
 ) -> Result<Response, (StatusCode, String)> {
+    let t_start = std::time::Instant::now();
     let model_name = {
         let guard = state.0.current_model.read().await;
         req.model
@@ -185,6 +186,8 @@ pub async fn synthesize(
         let mut cache = state.0.wav_cache.lock().await;
         if let Some(cached) = cache.get(&key) {
             tracing::debug!("cache hit for {:?}", &req.text[..req.text.len().min(30)]);
+            use std::sync::atomic::Ordering;
+            state.0.sessions.cache_hits.fetch_add(1, Ordering::Relaxed);
             return wav_response(cached.clone());
         }
     }
@@ -222,8 +225,8 @@ pub async fn synthesize(
     }
 
     let mut audio_out = {
-        let mut pool_guard = state.0.sessions.lock().await;
-        let pool = pool_guard.as_mut().expect("sessions loaded above");
+        let mut pool_guard = state.0.sessions.acquire().await;
+        let pool = pool_guard.session.as_mut().expect("sessions loaded above");
 
         let phone = run_contentvec(&audio_16k, &mut pool.contentvec).map_err(|e| {
             (
@@ -273,6 +276,11 @@ pub async fn synthesize(
         cache.put(key, final_wav.clone());
         tracing::debug!("cached synthesis ({} entries)", cache.len());
     }
+
+    let ms = t_start.elapsed().as_millis() as u64;
+    state.0.sessions.release_active();
+    state.0.sessions.record_latency(ms).await;
+    tracing::debug!(synthesis_ms = ms);
 
     wav_response(final_wav)
 }

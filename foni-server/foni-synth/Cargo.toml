@@ -29,3 +29,4 @@ foni-analyse = { path = "../foni-analyse" }
 
 [dev-dependencies]
 reqwest      = { workspace = true }
+futures      = "0.3"

@@ -1,12 +1,12 @@
-/// Lazy ONNX session loader.
-///
-/// Called the first time `/convert` runs, or explicitly from `POST /models/:name`.
-/// All three models are kept alive in `AppState::sessions` for the server lifetime.
+//! ONNX session pool loader.
+//!
+//! `ensure()` fills every slot in the pool with loaded sessions for `model_name`.
+//! Already-loaded slots with the same model are skipped.
 use std::path::{Path, PathBuf};
 
 use ort::session::Session;
 
-use crate::state::{AppState, OnnxPool};
+use crate::state::{AppState, OnnxSession};
 
 fn load(path: &Path) -> Result<Session, String> {
     Session::builder()
@@ -29,16 +29,11 @@ fn pretrained(models_dir: &Path, filename: &str) -> Option<PathBuf> {
     None
 }
 
-/// Ensure sessions are loaded for `model_name`, loading from disk if needed.
-/// Re-loads only if the model name changed.
-/// Returns `Err` with a human-readable message if any model file is missing.
+/// Fill every pool slot with sessions for `model_name`.
+/// Slots already loaded for the same model are left untouched.
 pub async fn ensure(state: &AppState, model_name: &str) -> Result<(), String> {
-    let mut guard = state.0.sessions.lock().await;
-
-    if let Some(pool) = &*guard {
-        if pool.model_name == model_name {
-            return Ok(());
-        }
+    if state.0.sessions.all_loaded(model_name).await {
+        return Ok(());
     }
 
     let dir = &state.0.models_dir;
@@ -55,17 +50,31 @@ pub async fn ensure(state: &AppState, model_name: &str) -> Result<(), String> {
         ));
     }
 
-    tracing::info!("loading ONNX sessions for model '{model_name}'");
-    let contentvec = load(&cv_path)?;
-    let rmvpe = load(&rmvpe_path)?;
-    let generator = load(&gen_path)?;
-    tracing::info!("ONNX sessions ready");
+    let pool = &state.0.sessions;
+    let size = pool.size;
+    tracing::info!("loading ONNX sessions for model '{model_name}' (pool_size={size})");
 
-    *guard = Some(OnnxPool {
-        contentvec,
-        rmvpe,
-        generator,
-        model_name: model_name.to_string(),
-    });
+    for (i, slot) in pool.slots.iter().enumerate() {
+        let mut guard = slot.lock().await;
+        if guard
+            .as_ref()
+            .map(|s| s.model_name == model_name)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        tracing::debug!("loading slot {i}/{size}");
+        let contentvec = load(&cv_path)?;
+        let rmvpe = load(&rmvpe_path)?;
+        let generator = load(&gen_path)?;
+        *guard = Some(OnnxSession {
+            contentvec,
+            rmvpe,
+            generator,
+            model_name: model_name.to_string(),
+        });
+    }
+
+    tracing::info!("ONNX sessions ready (pool_size={size})");
     Ok(())
 }
