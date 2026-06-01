@@ -55,15 +55,26 @@ def _patch_attentions(src: Path) -> None:
     f.write_text(text)
 
 
+def _ensure_rvc_source() -> None:
+    """Clone the minimal RVC source tree if not present."""
+    import subprocess
+    if RVC_SOURCE.exists():
+        return
+    print("Cloning RVC source (sparse, depth=1)...")
+    subprocess.run([
+        "git", "clone", "--depth=1", "--filter=blob:none", "--sparse",
+        "https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI",
+        str(RVC_SOURCE),
+    ], check=True)
+    subprocess.run(
+        ["git", "sparse-checkout", "set", "infer/lib/infer_pack"],
+        cwd=str(RVC_SOURCE), check=True,
+    )
+    print("  RVC source ready.")
+
+
 def export_generator(model_name: str) -> Path:
-    if not RVC_SOURCE.exists():
-        raise FileNotFoundError(
-            f"RVC source not found at {RVC_SOURCE}\n"
-            "Run: git clone --depth=1 --sparse "
-            "https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI "
-            "/tmp/rvc-onnx-source && "
-            "cd /tmp/rvc-onnx-source && git sparse-checkout set tools infer/lib/infer_pack"
-        )
+    _ensure_rvc_source()
 
     sys.path.insert(0, str(RVC_SOURCE))
     _patch_attentions(RVC_SOURCE)
@@ -107,7 +118,16 @@ def export_generator(model_name: str) -> Path:
     out_dir.mkdir(exist_ok=True)
     out_path = out_dir / "generator.onnx"
 
-    print("Exporting ONNX (legacy TorchScript path)...")
+    print("Exporting ONNX (TorchScript path, takes ~60s)...")
+    import threading, itertools, time
+    done = threading.Event()
+    def spin():
+        for c in itertools.cycle("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"):
+            if done.is_set(): break
+            print(f"  {c} exporting...", end="\r", flush=True)
+            time.sleep(0.1)
+    t = threading.Thread(target=spin, daemon=True)
+    t.start()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         torch.onnx.export(
@@ -119,6 +139,7 @@ def export_generator(model_name: str) -> Path:
             dynamo=False,
         )
 
+    done.set(); t.join()
     size_mb = os.path.getsize(out_path) / 1024 / 1024
     print(f"  Written: {out_path}  ({size_mb:.1f} MB)")
 
