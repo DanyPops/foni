@@ -34,7 +34,7 @@ enum Cmd {
         #[arg(short, long)]
         out: Option<PathBuf>,
         /// Model name
-        #[arg(short, long, default_value = "bandit")]
+        #[arg(short, long, default_value = "sidorovich")]
         model: String,
         /// espeak voice
         #[arg(long, default_value = "ru")]
@@ -69,7 +69,7 @@ enum Cmd {
         /// Phrase to synthesize for all maquettes
         #[arg(default_value = "Подойди-ка, надо тебе ситуацию прояснить.")]
         text: String,
-        #[arg(short, long, default_value = "bandit")]
+        #[arg(short, long, default_value = "sidorovich")]
         model: String,
         /// Load maquettes from a JSON file instead of starting with defaults
         #[arg(long)]
@@ -81,7 +81,7 @@ enum Cmd {
         /// Output directory
         #[arg(short, long, default_value = "samples")]
         out_dir: PathBuf,
-        #[arg(short, long, default_value = "bandit")]
+        #[arg(short, long, default_value = "sidorovich")]
         model: String,
     },
 
@@ -90,7 +90,7 @@ enum Cmd {
         /// Phrase to mix
         #[arg(default_value = "Подойди-ка, надо тебе ситуацию прояснить.")]
         text: String,
-        #[arg(short, long, default_value = "bandit")]
+        #[arg(short, long, default_value = "sidorovich")]
         model: String,
         /// Load maquette presets from JSON instead of built-in defaults
         #[arg(long)]
@@ -109,7 +109,7 @@ enum Cmd {
         #[arg(default_value = "Подойди-ка, надо тебе ситуацию прояснить.")]
         text: String,
         /// Model name
-        #[arg(short, long, default_value = "bandit")]
+        #[arg(short, long, default_value = "sidorovich")]
         model: String,
         /// Compare DSP variants (baseline/warm/punchy/bright) instead of pipeline stages
         #[arg(long)]
@@ -120,6 +120,21 @@ enum Cmd {
         /// Play reference original before each stage (needs baseline/stalker/wav/sidorovich/trader1a.wav)
         #[arg(long)]
         vs: bool,
+    },
+
+    /// Apply DSP processing to a WAV file and write the result
+    Process {
+        /// Input WAV file
+        file: PathBuf,
+        /// Output WAV file (default: overwrites input with .processed.wav suffix)
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// DSP options as JSON object, e.g. '{"tiltLowDb":8,"rmsTargetLufs":-14}'
+        #[arg(long, default_value = "{}")]
+        opts: String,
+        /// Also analyse result vs reference WAV
+        #[arg(long)]
+        vs: Option<PathBuf>,
     },
 
     /// Play a WAV file via system player
@@ -167,7 +182,7 @@ enum Cmd {
         #[arg(long, default_value_t = 8.0)]
         max_dur: f32,
         /// espeak voice / RVC model
-        #[arg(short, long, default_value = "bandit")]
+        #[arg(short, long, default_value = "sidorovich")]
         model: String,
         /// Skip transcription, use existing .txt files in out_dir
         #[arg(long)]
@@ -926,6 +941,67 @@ fn cmd_diagnose(server: &str, text: &str, model: &str) {
         }
     }
     println!("\n  done.");
+}
+
+fn cmd_process(
+    server: &str,
+    file: &PathBuf,
+    out: Option<&PathBuf>,
+    opts_str: &str,
+    vs: Option<&PathBuf>,
+) {
+    use foni_analyse::{analyse, compute_gap, decode_wav, format_gap_table, TargetTensor};
+
+    let bytes = match std::fs::read(file) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("cannot read {}: {e}", file.display());
+            return;
+        }
+    };
+    let opts: serde_json::Value = match serde_json::from_str(opts_str) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("invalid --opts JSON: {e}");
+            return;
+        }
+    };
+
+    let result = match process_request(server, &bytes, opts) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("process failed: {e}");
+            return;
+        }
+    };
+
+    let out_path = out.cloned().unwrap_or_else(|| {
+        let stem = file.file_stem().unwrap_or_default().to_string_lossy();
+        file.with_file_name(format!("{stem}.processed.wav"))
+    });
+
+    if let Err(e) = std::fs::write(&out_path, &result) {
+        eprintln!("cannot write {}: {e}", out_path.display());
+        return;
+    }
+    println!("{}", out_path.display());
+
+    if let Some(ref_path) = vs {
+        let ref_bytes = match std::fs::read(ref_path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("cannot read reference: {e}");
+                return;
+            }
+        };
+        let ref_wav = decode_wav(&ref_bytes).expect("reference WAV");
+        let syn_wav = decode_wav(&result).expect("processed WAV");
+        let ref_analysis = analyse(&ref_wav.samples, ref_wav.sample_rate);
+        let syn_analysis = analyse(&syn_wav.samples, syn_wav.sample_rate);
+        let tensor = TargetTensor::from_analysis(&ref_analysis, &ref_path.display().to_string());
+        let gap = compute_gap(&out_path.display().to_string(), &syn_analysis, &tensor);
+        println!("{}", format_gap_table(&gap));
+    }
 }
 
 fn cmd_listen(server: &str, text: &str, model: &str, dsp_variants: bool, play_ref: bool) {
@@ -2375,6 +2451,14 @@ fn main() {
         }
         Cmd::Status => {
             cmd_status(server);
+        }
+        Cmd::Process {
+            file,
+            out,
+            opts,
+            vs,
+        } => {
+            cmd_process(server, &file, out.as_ref(), &opts, vs.as_ref());
         }
         Cmd::Play { file } => {
             play_wav(&file);
