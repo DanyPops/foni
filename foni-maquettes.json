@@ -1,66 +1,67 @@
 [
   {
-    "name": "clean",
+    "name": "deep",
     "opts": {
-      "rmsTargetLufs":        -13.0,
-      "compressionRatio":      1.5,
-      "compressionMakeupDb":   1.0,
+      "rmsTargetLufs":         -16.0,
+      "compressionRatio":       2.0,
+      "compressionMakeupDb":    2.0,
       "compressionThresholdDb": -18.0,
-      "tiltLowDb":             0.0,
-      "tiltHighDb":            0.0,
-      "vibratoDepth":          0.0,
-      "vibratoFreq":           0.0,
-      "reverbMs":              0.0,
-      "reverbDecay":           0.0,
-      "deEssDb":               2.0
+      "tiltLowDb":              14.0,
+      "tiltHighDb":            -12.0,
+      "presenceDb":             0.0,
+      "deEssDb":                4.0,
+      "vibratoDepth":           0.0,
+      "vibratoFreq":            0.0,
+      "reverbMs":               6.0,
+      "reverbDecay":            0.03
     }
   },
   {
     "name": "warm",
     "opts": {
-      "rmsTargetLufs":        -13.0,
-      "compressionRatio":      2.0,
-      "compressionMakeupDb":   2.0,
+      "rmsTargetLufs":         -16.0,
+      "compressionRatio":       2.0,
+      "compressionMakeupDb":    2.0,
       "compressionThresholdDb": -18.0,
-      "tiltLowDb":             3.0,
-      "tiltHighDb":           -2.0,
-      "vibratoDepth":          0.0,
-      "vibratoFreq":           0.0,
-      "reverbMs":              6.0,
-      "reverbDecay":           0.03,
-      "deEssDb":               3.0
+      "tiltLowDb":             10.0,
+      "tiltHighDb":            -8.0,
+      "presenceDb":             0.0,
+      "deEssDb":                3.0,
+      "vibratoDepth":           0.0,
+      "vibratoFreq":            0.0,
+      "reverbMs":               4.0,
+      "reverbDecay":            0.02
     }
   },
   {
-    "name": "presence",
+    "name": "neutral",
     "opts": {
-      "rmsTargetLufs":        -13.0,
-      "compressionRatio":      2.5,
-      "compressionMakeupDb":   2.5,
-      "compressionThresholdDb": -18.0,
-      "tiltLowDb":             2.0,
-      "tiltHighDb":           -2.0,
-      "presenceDb":            2.0,
-      "vibratoDepth":          0.0,
-      "vibratoFreq":           0.0,
-      "reverbMs":              4.0,
-      "reverbDecay":           0.02,
-      "deEssDb":               3.0
+      "rmsTargetLufs":         -16.0,
+      "compressionRatio":       1.5,
+      "compressionMakeupDb":    1.0,
+      "tiltLowDb":              6.0,
+      "tiltHighDb":            -4.0,
+      "presenceDb":             0.0,
+      "deEssDb":                2.0,
+      "vibratoDepth":           0.0,
+      "vibratoFreq":            0.0,
+      "reverbMs":               0.0,
+      "reverbDecay":            0.0
     }
   },
   {
     "name": "raw",
     "opts": {
-      "rmsTargetLufs":        -13.0,
-      "compressionRatio":      1.0,
-      "compressionMakeupDb":   0.0,
-      "tiltLowDb":             0.0,
-      "tiltHighDb":            0.0,
-      "vibratoDepth":          0.0,
-      "vibratoFreq":           0.0,
-      "reverbMs":              0.0,
-      "reverbDecay":           0.0,
-      "deEssDb":               0.0
+      "rmsTargetLufs":         -16.0,
+      "compressionRatio":       1.0,
+      "compressionMakeupDb":    0.0,
+      "tiltLowDb":              0.0,
+      "tiltHighDb":             0.0,
+      "vibratoDepth":           0.0,
+      "vibratoFreq":            0.0,
+      "reverbMs":               0.0,
+      "reverbDecay":            0.0,
+      "deEssDb":                0.0
     }
   }
 ]
