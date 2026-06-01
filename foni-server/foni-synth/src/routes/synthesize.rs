@@ -64,7 +64,7 @@ fn default_voice() -> String {
     "ru".into()
 }
 fn default_speed() -> u32 {
-    150
+    135
 }
 fn default_true() -> bool {
     true

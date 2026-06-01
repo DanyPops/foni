@@ -40,7 +40,7 @@ export const DEFAULT_CONFIG: FoniConfig = {
   enabled:     true,
   backendPref: "espeak",
   voice:       "en_0",
-  speed:       1.15,
+  speed:       1.0,
   inputLang:   "en",
   outputLang:  "ru",
 

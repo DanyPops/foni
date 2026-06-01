@@ -56,7 +56,7 @@ const translatorFactory: TranslatorFactory = (cfg, emotion) => {
   return new PipelineTranslator(stack, cfg.outputLang);
 };
 
-const RATE_NEUTRAL  = 100;
+const RATE_NEUTRAL  = 93;
 
 function lerpRound(a: number, b: number, t: number): number {
   return Math.round(a + t * (b - a));
