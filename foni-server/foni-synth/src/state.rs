@@ -9,7 +9,7 @@ use std::{
 use lru::LruCache;
 use tokio::sync::{Mutex, RwLock, Semaphore, SemaphorePermit};
 
-use crate::config::ServerConfig;
+use crate::config::ResolvedConfig;
 use crate::voice_index::VoiceIndex;
 
 // ── ONNX session (one inference context) ─────────────────────────────────────
@@ -169,10 +169,12 @@ pub struct Inner {
     pub sessions: SharedSessionPool,
     pub wav_cache: WavCache,
     pub voice_index: RwLock<Option<VoiceIndex>>,
+    pub controller_enabled: std::sync::atomic::AtomicBool,
+    pub controller_config: RwLock<crate::dsp::controller::ControllerConfig>,
 }
 
 impl AppState {
-    pub fn from_config(cfg: ServerConfig) -> Self {
+    pub fn from_config(cfg: ResolvedConfig) -> Self {
         let pool_size = std::env::var("FONI_POOL_SIZE")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
@@ -190,6 +192,8 @@ impl AppState {
                 std::num::NonZeroUsize::new(WAV_CACHE_CAPACITY).unwrap(),
             ))),
             voice_index: RwLock::new(None),
+            controller_enabled: std::sync::atomic::AtomicBool::new(cfg.controller.enabled),
+            controller_config: RwLock::new(cfg.controller),
         }))
     }
 

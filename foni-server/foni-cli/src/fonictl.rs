@@ -197,6 +197,19 @@ enum Cmd {
         #[arg(long)]
         vs: Option<PathBuf>,
     },
+
+    /// Measure how each DSP knob affects each acoustic metric — print the sensitivity matrix
+    Calibrate {
+        /// Phrase to synthesize for calibration
+        #[arg(default_value = "Подойди-ка, надо тебе ситуацию прояснить.")]
+        text: String,
+        /// Reference WAV for target metrics
+        #[arg(long)]
+        vs: PathBuf,
+        /// RVC model name
+        #[arg(short, long, default_value = "sidorovich")]
+        model: String,
+    },
 }
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -2256,6 +2269,180 @@ fn cmd_tune_auto(
     println!("    Final gap score:  {:.1}%", top3[0].1);
 }
 
+fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str) {
+    use foni_analyse::{analyse_fast, decode_wav};
+    use std::io::Write;
+
+    let ref_bytes = std::fs::read(ref_path).expect("cannot read reference WAV");
+    let ref_wav = decode_wav(&ref_bytes).expect("reference WAV");
+    let ref_a = analyse_fast(&ref_wav.samples, ref_wav.sample_rate);
+
+    print!("  Synthesizing base (RVC, no DSP)\u{2026} ");
+    std::io::stdout().flush().ok();
+    let base = match synth_request(
+        server,
+        phrase,
+        model,
+        "ru",
+        150,
+        false,
+        serde_json::json!({}),
+    ) {
+        Ok(b) => {
+            println!("ok ({} kB)", b.len() / 1024);
+            b
+        }
+        Err(e) => {
+            eprintln!("\n  \u{2717} {e}");
+            return;
+        }
+    };
+
+    struct Knob {
+        name: &'static str,
+        key: &'static str,
+        step: f32,
+    }
+    let knobs = [
+        Knob {
+            name: "tiltLowDb",
+            key: "tiltLowDb",
+            step: 6.0,
+        },
+        Knob {
+            name: "tiltHighDb",
+            key: "tiltHighDb",
+            step: -6.0,
+        },
+        Knob {
+            name: "rmsTargetLufs",
+            key: "rmsTargetLufs",
+            step: 4.0,
+        },
+        Knob {
+            name: "presenceDb",
+            key: "presenceDb",
+            step: 4.0,
+        },
+        Knob {
+            name: "compressionRatio",
+            key: "compressionRatio",
+            step: 2.0,
+        },
+    ];
+
+    struct Metric {
+        name: &'static str,
+        extract: fn(&foni_analyse::AnalysisResult) -> f32,
+    }
+    let metrics = [
+        Metric {
+            name: "brightness_hz",
+            extract: |a| a.spectral.brightness_hz,
+        },
+        Metric {
+            name: "loudness_db",
+            extract: |a| a.loudness.rms_db,
+        },
+        Metric {
+            name: "bass_balance_db",
+            extract: |a| a.spectral.bass_balance_db,
+        },
+        Metric {
+            name: "vocal_darkness_db_oct",
+            extract: |a| a.spectral.vocal_darkness_db_oct,
+        },
+        Metric {
+            name: "breathiness_db",
+            extract: |a| a.voice.breathiness_db,
+        },
+    ];
+
+    // Measure baseline (all knobs at zero / neutral)
+    let neutral = serde_json::json!({
+        "tiltLowDb": 0, "tiltHighDb": 0, "rmsTargetLufs": -16,
+        "compressionRatio": 1, "presenceDb": 0, "deEssDb": 0, "vibratoDepth": 0
+    });
+    let base_wav = process_request(server, &base, neutral.clone()).expect("baseline DSP");
+    let base_decoded = decode_wav(&base_wav).expect("baseline WAV");
+    let base_a = analyse_fast(&base_decoded.samples, base_decoded.sample_rate);
+    let base_vals: Vec<f32> = metrics.iter().map(|m| (m.extract)(&base_a)).collect();
+
+    println!(
+        "\n  Sweeping {} knobs \u{00d7} {} metrics\u{2026}\n",
+        knobs.len(),
+        metrics.len()
+    );
+
+    // Header
+    print!("  {:>20}", "");
+    for m in &metrics {
+        print!("  {:>12}", m.name.split('_').next().unwrap_or(m.name));
+    }
+    println!();
+    println!(
+        "  {:>20}  {}",
+        "(baseline)",
+        base_vals
+            .iter()
+            .map(|v| format!("{:>12.2}", v))
+            .collect::<Vec<_>>()
+            .join("  ")
+    );
+    println!();
+
+    // Sensitivity: \u{2202}metric / \u{2202}knob
+    let mut matrix: Vec<Vec<f32>> = Vec::new();
+
+    for knob in &knobs {
+        let mut perturbed = neutral.clone();
+        perturbed[knob.key] = serde_json::json!(knob.step);
+        // For rmsTargetLufs, baseline is -16, step is +4 \u{2192} -12
+        if knob.key == "rmsTargetLufs" {
+            perturbed[knob.key] = serde_json::json!(-16.0 + knob.step);
+        }
+
+        let wav = process_request(server, &base, perturbed).expect("perturbed DSP");
+        let decoded = decode_wav(&wav).expect("perturbed WAV");
+        let a = analyse_fast(&decoded.samples, decoded.sample_rate);
+        let vals: Vec<f32> = metrics.iter().map(|m| (m.extract)(&a)).collect();
+
+        let sensitivities: Vec<f32> = vals
+            .iter()
+            .zip(&base_vals)
+            .map(|(v, b)| (v - b) / knob.step.abs())
+            .collect();
+
+        print!("  {:>20}", format!("{}={:+.0}", knob.name, knob.step));
+        for s in &sensitivities {
+            print!("  {:>12.3}", s);
+        }
+        println!();
+
+        matrix.push(sensitivities);
+    }
+
+    // Print as Rust const for controller.rs
+    println!("\n  \u{2500}\u{2500} Rust const for dsp/controller.rs \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n");
+    println!("  // Rows: tiltLowDb, tiltHighDb, rmsTargetLufs, presenceDb, compressionRatio");
+    println!("  // Cols: brightness_hz, loudness_db, bass_balance_db, vocal_darkness_db_oct, breathiness_db");
+    println!(
+        "  const SENSITIVITY: [[f32; {}]; {}] = [",
+        metrics.len(),
+        knobs.len()
+    );
+    for (i, row) in matrix.iter().enumerate() {
+        println!("      {:?}, // {}", row, knobs[i].name);
+    }
+    println!("  ];");
+
+    // Target values from reference
+    println!("\n  // Target values from reference WAV");
+    let ref_fast = analyse_fast(&ref_wav.samples, ref_wav.sample_rate);
+    let targets: Vec<f32> = metrics.iter().map(|m| (m.extract)(&ref_fast)).collect();
+    println!("  const TARGET: [f32; {}] = {:?};", metrics.len(), targets);
+}
+
 fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
     use foni_analyse::{
         analyse, analyse_fast, compute_gap, decode_wav, fast_f0_stats, format_gap_table,
@@ -2499,6 +2686,9 @@ fn main() {
         }
         Cmd::Corpus { dir, vs } => {
             cmd_corpus(&dir, vs.as_ref());
+        }
+        Cmd::Calibrate { text, vs, model } => {
+            cmd_calibrate(server, &text, &vs, &model);
         }
         Cmd::Mix {
             text,

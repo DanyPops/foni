@@ -1,5 +1,6 @@
 pub mod analyse;
 pub mod breath;
+pub mod controller;
 pub mod convert;
 pub mod metrics;
 pub mod models;

@@ -1,7 +1,7 @@
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct SpectralMetrics {
     /// How bright or thin the voice sounds — higher Hz = brighter/thinner.
     pub brightness_hz: f32,
