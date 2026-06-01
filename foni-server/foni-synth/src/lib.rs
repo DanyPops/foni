@@ -14,7 +14,7 @@ use axum::{
 };
 
 /// Build the production router with explicit config. Used by main().
-pub async fn build_router_with(cfg: config::ServerConfig) -> Router {
+pub async fn build_router_with(cfg: config::ResolvedConfig) -> Router {
     build_router_from_state(state::AppState::from_config(cfg))
 }
 
@@ -38,5 +38,9 @@ fn build_router_from_state(state: state::AppState) -> Router {
         .route("/analyse", post(routes::analyse::analyse))
         .route("/process", post(routes::process::process))
         .route("/breath", post(routes::breath::breath))
+        .route(
+            "/controller",
+            get(routes::controller::get_controller).post(routes::controller::set_controller),
+        )
         .with_state(state)
 }

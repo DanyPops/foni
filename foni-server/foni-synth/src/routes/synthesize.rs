@@ -263,11 +263,26 @@ pub async fn synthesize(
         )
     })?;
 
-    // Optional DSP chain (/process).
+    // DSP chain — with reactive controller if enabled.
+    // The controller measures the raw RVC output and corrects DSP params to match
+    // the Sidorovich studio target. Falls back to defaults if controller is disabled.
     let final_wav = if req.dsp {
-        let (opts, _pad) = req.opts.into_smoothing();
+        let (base_opts, _pad) = req.opts.into_smoothing();
+        let controller_enabled = state
+            .0
+            .controller_enabled
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let controller_cfg = state.0.controller_config.read().await.clone();
         tokio::task::spawn_blocking(move || {
             wav::roundtrip(&rvc_wav, |samples, sr| {
+                let opts = if controller_enabled {
+                    let analysis = foni_analyse::analyse_fast(samples, sr);
+                    let (corrected, _snapshot) =
+                        dsp::controller::correct(&analysis, &base_opts, &controller_cfg);
+                    corrected
+                } else {
+                    base_opts
+                };
                 *samples = dsp::apply(std::mem::take(samples), sr, &opts);
             })
         })

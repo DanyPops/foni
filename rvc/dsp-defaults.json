@@ -1,0 +1,45 @@
+{
+  "_doc": "DSP chain defaults — loaded at startup. Controller adjusts from these.",
+  "dsp": {
+    "tiltLowDb":              0.0,
+    "tiltHighDb":             0.0,
+    "rmsTargetLufs":        -16.0,
+    "compressionRatio":       2.0,
+    "compressionAttackMs":   10.0,
+    "compressionReleaseMs":  80.0,
+    "compressionThresholdDb":-12.0,
+    "compressionMakeupDb":    2.0,
+    "presenceDb":             0.0,
+    "deEssDb":                2.0,
+    "vibratoFreq":            0.0,
+    "vibratoDepth":           0.0,
+    "highpassFreq":          80.0,
+    "reverbMs":               6.0,
+    "reverbDecay":            0.03
+  },
+  "controller": {
+    "enabled":    true,
+    "damping":    0.6,
+    "_doc_targets": "Computed from baseline/stalker/wav/sidorovich/trader1a.wav",
+    "targets": {
+      "brightness_hz":        2288.0,
+      "loudness_db":         -13.5,
+      "bass_balance_db":       2.8,
+      "vocal_darkness_db_oct":-6.4
+    },
+    "_doc_sensitivity": "Measured via fonictl calibrate. Row = knob, Col = metric.",
+    "sensitivity": {
+      "brightness_per_tilt_high":   92.0,
+      "loudness_per_rms_lufs":       0.975,
+      "bass_balance_per_tilt_low":   0.21,
+      "bass_balance_per_presence":  -0.36,
+      "darkness_per_tilt_high":      0.073
+    },
+    "ranges": {
+      "tilt_low_db":     [-4.0, 16.0],
+      "tilt_high_db":    [-18.0, 0.0],
+      "rms_target_lufs": [-22.0, -4.0],
+      "presence_db":     [-6.0, 6.0]
+    }
+  }
+}

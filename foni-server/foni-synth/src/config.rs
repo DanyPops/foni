@@ -1,137 +1,116 @@
-/// foni-rvc.yaml parser + environment-variable override layer.
-///
-/// Resolution order (highest wins):
-///   1. Environment variables   (RVC_MODELS_DIR, FONI_SYNTH_ADDR, …)
-///   2. foni-rvc.yaml           (searched in CWD, then repo-root rvc/)
-///   3. Built-in defaults       (project-relative rvc/models, port 5050)
+//! Single config load point for the entire server.
+//!
+//! Resolution order (highest wins):
+//!   1. Environment variables   (`FONI_` prefix, e.g. `FONI_CONTROLLER.DAMPING=0.5`)
+//!   2. `rvc/dsp-defaults.json` (controller targets, sensitivity, ranges)
+//!   3. `rvc/foni-rvc.yaml`     (model, params)
+//!   4. Built-in defaults
+
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use figment::providers::{Env, Format, Json, Serialized, Yaml};
+use figment::Figment;
+use serde::{Deserialize, Serialize};
 
+use crate::dsp::controller::ControllerConfig;
 use crate::state::RvcParams;
 
-#[derive(Debug, Deserialize, Default)]
-struct YamlConfig {
-    model: Option<String>,
-    models_dir: Option<String>,
-    #[serde(default)]
-    params: YamlParams,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct YamlParams {
-    f0method: Option<String>,
-    f0up_key: Option<i32>,
-    index_rate: Option<f32>,
-    filter_radius: Option<u32>,
-    rms_mix_rate: Option<f32>,
-    protect: Option<f32>,
-}
-
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(default)]
 pub struct ServerConfig {
+    pub models_dir: String,
+    pub model: Option<String>,
+    #[serde(default)]
+    pub params: RvcParams,
+    pub controller: ControllerConfig,
+    pub addr: String,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            models_dir: default_models_dir().to_string_lossy().into_owned(),
+            model: None,
+            params: RvcParams::default(),
+            controller: ControllerConfig::default(),
+            addr: "0.0.0.0:5050".into(),
+        }
+    }
+}
+
+/// The resolved config with typed paths.
+pub struct ResolvedConfig {
     pub models_dir: PathBuf,
     pub initial_model: Option<String>,
     pub params: RvcParams,
-    /// Bind address, e.g. "0.0.0.0:5050".
+    pub controller: ControllerConfig,
     pub addr: String,
 }
 
 impl ServerConfig {
-    pub fn load() -> Self {
-        let yaml = load_yaml();
+    pub fn load() -> ResolvedConfig {
+        let figment = Figment::new()
+            .merge(Serialized::defaults(ServerConfig::default()))
+            .merge(Yaml::file(find_yaml()))
+            .merge(Json::file(find_json()))
+            .merge(Env::prefixed("FONI_").split("_"));
 
-        // models_dir: env > yaml > workspace-relative default
+        let cfg: ServerConfig = figment.extract().unwrap_or_else(|e| {
+            tracing::warn!("config extraction error: {e} — using defaults");
+            ServerConfig::default()
+        });
+
         let models_dir = std::env::var("RVC_MODELS_DIR")
-            .ok()
-            .or_else(|| yaml.models_dir.clone())
             .map(PathBuf::from)
-            .unwrap_or_else(Self::default_models_dir);
+            .unwrap_or_else(|_| PathBuf::from(&cfg.models_dir));
 
-        // initial model: env > yaml
-        let initial_model = std::env::var("RVC_MODEL").ok().or(yaml.model);
+        let initial_model = std::env::var("RVC_MODEL").ok().or(cfg.model);
+        let addr = std::env::var("FONI_SYNTH_ADDR").unwrap_or(cfg.addr);
 
-        // params: merge yaml over defaults, env vars take precedence
-        let mut params = RvcParams::default();
-        if let Some(v) = yaml.params.f0method {
-            params.f0method = v;
-        }
-        if let Some(v) = yaml.params.f0up_key {
-            params.f0up_key = v;
-        }
-        if let Some(v) = yaml.params.index_rate {
-            params.index_rate = v;
-        }
-        if let Some(v) = yaml.params.filter_radius {
-            params.filter_radius = v;
-        }
-        if let Some(v) = yaml.params.rms_mix_rate {
-            params.rms_mix_rate = v;
-        }
-        if let Some(v) = yaml.params.protect {
-            params.protect = v;
-        }
+        tracing::info!(
+            "config: models_dir={}, model={:?}, controller.enabled={}, addr={}",
+            models_dir.display(),
+            initial_model,
+            cfg.controller.enabled,
+            addr
+        );
 
-        let addr = std::env::var("FONI_SYNTH_ADDR").unwrap_or_else(|_| "0.0.0.0:5050".into());
-
-        Self {
+        ResolvedConfig {
             models_dir,
             initial_model,
-            params,
+            params: cfg.params,
+            controller: cfg.controller,
             addr,
         }
     }
-
-    /// Locate the project's rvc/models directory relative to the binary's CWD.
-    /// Walks up until it finds a directory containing rvc/models/.
-    fn default_models_dir() -> PathBuf {
-        let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        for _ in 0..6 {
-            let candidate = dir.join("rvc").join("models");
-            if candidate.is_dir() {
-                return candidate;
-            }
-            if !dir.pop() {
-                break;
-            }
-        }
-        // Last-resort container path (kept for Docker deployments)
-        PathBuf::from("/app/rvc_models")
-    }
 }
 
-fn load_yaml() -> YamlConfig {
-    for candidate in yaml_search_paths() {
-        if let Ok(text) = std::fs::read_to_string(&candidate) {
-            match serde_yaml::from_str::<YamlConfig>(&text) {
-                Ok(cfg) => {
-                    tracing::info!("loaded config from {}", candidate.display());
-                    return cfg;
-                }
-                Err(e) => {
-                    tracing::warn!("bad foni-rvc.yaml at {}: {e}", candidate.display());
-                }
-            }
-        }
-    }
-    tracing::info!("no foni-rvc.yaml found — using defaults");
-    YamlConfig::default()
+fn find_yaml() -> PathBuf {
+    search_up("rvc/foni-rvc.yaml")
+        .or_else(|| search_up("foni-rvc.yaml"))
+        .unwrap_or_else(|| PathBuf::from("foni-rvc.yaml"))
 }
 
-/// Candidate locations for foni-rvc.yaml, in priority order.
-fn yaml_search_paths() -> Vec<PathBuf> {
-    let mut paths = vec![
-        PathBuf::from("foni-rvc.yaml"),
-        PathBuf::from("rvc/foni-rvc.yaml"),
-    ];
-    // Walk up from CWD
-    if let Ok(mut dir) = std::env::current_dir() {
-        for _ in 0..6 {
-            paths.push(dir.join("rvc").join("foni-rvc.yaml"));
-            paths.push(dir.join("foni-rvc.yaml"));
-            if !dir.pop() {
-                break;
-            }
+fn find_json() -> PathBuf {
+    search_up("rvc/dsp-defaults.json")
+        .or_else(|| search_up("dsp-defaults.json"))
+        .unwrap_or_else(|| PathBuf::from("dsp-defaults.json"))
+}
+
+fn search_up(name: &str) -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    for _ in 0..6 {
+        let path = dir.join(name);
+        if path.exists() {
+            return Some(path);
+        }
+        if !dir.pop() {
+            break;
         }
     }
-    paths
+    None
+}
+
+fn default_models_dir() -> PathBuf {
+    search_up("rvc/models").unwrap_or_else(|| PathBuf::from("/app/rvc_models"))
 }

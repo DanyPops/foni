@@ -6,7 +6,7 @@ const SILENCE_THRESHOLD: f32 = 0.01;
 /// Minimum silent segment duration to count as a pause.
 const PAUSE_MIN_SECS: f32 = 0.1;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct TemporalMetrics {
     /// Total duration in seconds.
     pub duration_secs: f32,

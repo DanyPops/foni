@@ -14,7 +14,7 @@ pub fn energy_envelope(samples: &[f32], sample_rate: u32) -> Vec<f32> {
         .collect()
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct LoudnessMetrics {
     /// RMS level in dBFS.
     pub rms_db: f32,
