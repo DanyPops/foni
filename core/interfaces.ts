@@ -52,6 +52,7 @@ export type ProcessorFactory = (config: FoniConfig) => AudioProcessor;
 export interface FacadePort {
   readonly backendName: string;
   speak(text: string, log?: (msg: string) => void): Promise<void>;
+  synthesizeOnly(text: string): Promise<void>;
   stop(): void;
   swapTranslator(t: Translator): void;
   swapProcessor(p: AudioProcessor): void;
