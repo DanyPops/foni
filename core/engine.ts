@@ -164,7 +164,8 @@ export class FoniEngine {
     if (!this.config.rvcEnabled || this.config.outputLang !== "ru") return;
     const f = await this.ensureFacade();
     if (!f) return;
-    await Promise.all(PREWARM_RU.map(p => f.speak(p).catch(() => {})));
+    // Synthesize into cache without playing — speak() plays audio, which is unwanted here.
+    await Promise.all(PREWARM_RU.map(p => f.synthesizeOnly(p).catch(() => {})));
   }
 
   // ── Observability ───────────────────────────────────────────────────────────

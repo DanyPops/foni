@@ -217,4 +217,16 @@ export class SpeakFacade implements FacadePort {
 
     return played;
   }
+
+  /** Translate + synthesize + cache without playing. Used for cache warming. */
+  async synthesizeOnly(rawText: string): Promise<void> {
+    const clean = stripMarkdown(rawText).trim();
+    if (clean.length < MIN_SPEAKABLE_LENGTH) return;
+    const text = await this.translator.translate(clean);
+    const key  = this.buildCacheKey(text);
+    if (this.cache.get(key)) return;
+    const audio     = await this.backend.synthesize(text, this.opts);
+    const processed = await this.processor.process(audio);
+    this.cache.set(key, processed);
+  }
 }
