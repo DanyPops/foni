@@ -5,6 +5,26 @@ mod tui;
 
 use std::{path::PathBuf, process::Command};
 
+fn data_dir() -> PathBuf {
+    std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| home().join(".local/share"))
+        .join("foni")
+}
+
+fn cache_dir() -> PathBuf {
+    std::env::var("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| home().join(".cache"))
+        .join("foni")
+}
+
+fn home() -> PathBuf {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+}
+
 use clap::{Parser, Subcommand};
 use dialoguer::{theme::ColorfulTheme, Input, Select};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -178,9 +198,9 @@ enum Cmd {
     Compare {
         /// Directory of studio WAV files (the ground truth)
         studio: PathBuf,
-        /// Where to write synthetic WAVs (default: /tmp/fonictl_synthetic)
-        #[arg(long, default_value = "/tmp/fonictl_synthetic")]
-        out_dir: PathBuf,
+        /// Where to write synthetic WAVs (default: ~/.cache/foni/compare/)
+        #[arg(long)]
+        out_dir: Option<PathBuf>,
         /// Only process WAVs shorter than this (seconds) — skips monologues
         #[arg(long, default_value_t = 8.0)]
         max_dur: f32,
@@ -212,6 +232,26 @@ enum Cmd {
         /// RVC model name
         #[arg(short, long, default_value = "sidorovich")]
         model: String,
+    },
+
+    /// Save current model's scores as the baseline to beat before retraining
+    Snapshot {
+        /// Model name
+        #[arg(default_value = "sidorovich")]
+        model: String,
+        /// Reference WAV
+        #[arg(long)]
+        vs: PathBuf,
+    },
+
+    /// Compare new model against saved baseline — auto pass/fail
+    CompareModels {
+        /// Model name (loads baseline from ~/.local/share/foni/baselines/<name>.json)
+        #[arg(default_value = "sidorovich")]
+        model: String,
+        /// Reference WAV
+        #[arg(long)]
+        vs: PathBuf,
     },
 
     /// Sweep a knob through multiple values, show comparison table
@@ -2671,6 +2711,295 @@ fn cmd_diff(server: &str, knob: &str, value: f32, phrase: &str, ref_path: &PathB
     );
 }
 
+const SNAPSHOT_PHRASES: &[&str] = &[
+    "Подойди-ка, надо тебе ситуацию прояснить.",
+    "Здравствуй, сталкер. Чего тебе надо?",
+    "Осторожно. Здесь аномалии, не зевай.",
+    "Деплой прошёл успешно, коммиты запушены.",
+    "Удачи, браток. На Зоне удача нужна.",
+];
+
+fn cmd_snapshot(server: &str, model: &str, ref_path: &PathBuf) {
+    use foni_analyse::{analyse, compute_gap, decode_wav, spectral_timeline, TargetTensor};
+    use std::io::Write;
+
+    let ref_bytes = std::fs::read(ref_path).expect("cannot read reference");
+    let ref_wav = decode_wav(&ref_bytes).expect("reference WAV");
+    let ref_an = analyse(&ref_wav.samples, ref_wav.sample_rate);
+    let tensor = TargetTensor::from_analysis(&ref_an, "ref");
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+
+    for (i, phrase) in SNAPSHOT_PHRASES.iter().enumerate() {
+        eprint!(
+            "  [{}/{}] {}\u{2026} ",
+            i + 1,
+            SNAPSHOT_PHRASES.len(),
+            phrase.chars().take(25).collect::<String>()
+        );
+        std::io::stderr().flush().ok();
+        let wav = match synth_request(
+            server,
+            phrase,
+            model,
+            "ru",
+            135,
+            false,
+            serde_json::json!({}),
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("skip: {e}");
+                continue;
+            }
+        };
+        let decoded = decode_wav(&wav).expect("synth WAV");
+        let an = analyse(&decoded.samples, decoded.sample_rate);
+        let gap = compute_gap(phrase, &an, &tensor);
+        let tl = spectral_timeline::compare(
+            &ref_wav.samples,
+            &decoded.samples,
+            ref_wav.sample_rate,
+            &ref_an.f0_contour,
+            &an.f0_contour,
+            &ref_an.energy_envelope,
+            &an.energy_envelope,
+        );
+        eprintln!(
+            "gap {:.1}%  LSD {:.1} dB",
+            gap.mean_gap_pct, tl.spectral_gap
+        );
+        results.push(serde_json::json!({
+            "phrase": phrase,
+            "mean_gap": gap.mean_gap_pct,
+            "spectral_gap": tl.spectral_gap,
+            "pitch_match": tl.pitch_match,
+            "energy_match": tl.energy_match,
+            "brightness": an.spectral.brightness_hz,
+            "voice_presence": an.pitch.voice_presence,
+            "worst_frame": tl.worst_frames.first().map(|f| f.1).unwrap_or(0.0),
+        }));
+    }
+
+    let n = results.len() as f32;
+    let avg = |key: &str| {
+        results
+            .iter()
+            .map(|r| r[key].as_f64().unwrap_or(0.0) as f32)
+            .sum::<f32>()
+            / n
+    };
+    let snapshot = serde_json::json!({
+        "model": model,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "phrases": results,
+        "aggregate": {
+            "mean_gap": avg("mean_gap"),
+            "spectral_gap": avg("spectral_gap"),
+            "pitch_match": avg("pitch_match"),
+            "brightness": avg("brightness"),
+            "voice_presence": avg("voice_presence"),
+            "worst_frame": avg("worst_frame"),
+        },
+    });
+
+    let dir = data_dir().join("baselines");
+    std::fs::create_dir_all(&dir).expect("create baselines dir");
+    let path = dir.join(format!("{model}.json"));
+    std::fs::write(&path, serde_json::to_string_pretty(&snapshot).unwrap())
+        .expect("write snapshot");
+    eprintln!("\n  Baseline saved \u{2192} {}", path.display());
+    eprintln!(
+        "  Mean gap: {:.1}%  LSD: {:.1} dB",
+        avg("mean_gap"),
+        avg("spectral_gap")
+    );
+}
+
+fn cmd_compare_models(server: &str, model: &str, ref_path: &PathBuf) {
+    use foni_analyse::{analyse, compute_gap, decode_wav, spectral_timeline, TargetTensor};
+    use owo_colors::OwoColorize;
+    use std::io::Write;
+    use tabled::{settings::Style, Table, Tabled};
+
+    let baseline_path = data_dir().join("baselines").join(format!("{model}.json"));
+    let baseline: serde_json::Value = match std::fs::read_to_string(&baseline_path) {
+        Ok(s) => serde_json::from_str(&s).expect("parse baseline"),
+        Err(_) => {
+            eprintln!("  No baseline found at {}", baseline_path.display());
+            eprintln!("  Run: fonictl snapshot {model} --vs <reference.wav>");
+            return;
+        }
+    };
+
+    let ref_bytes = std::fs::read(ref_path).expect("cannot read reference");
+    let ref_wav = decode_wav(&ref_bytes).expect("reference WAV");
+    let ref_an = analyse(&ref_wav.samples, ref_wav.sample_rate);
+    let tensor = TargetTensor::from_analysis(&ref_an, "ref");
+
+    let old_agg = &baseline["aggregate"];
+    let mut new_gaps = Vec::new();
+    let mut new_lsds = Vec::new();
+    let mut new_presences = Vec::new();
+    let mut new_brightnesses = Vec::new();
+    let mut new_worst_frames = Vec::new();
+
+    for (i, phrase) in SNAPSHOT_PHRASES.iter().enumerate() {
+        eprint!("  [{}/{}] ", i + 1, SNAPSHOT_PHRASES.len());
+        std::io::stderr().flush().ok();
+        let wav = match synth_request(
+            server,
+            phrase,
+            model,
+            "ru",
+            135,
+            false,
+            serde_json::json!({}),
+        ) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("skip: {e}");
+                continue;
+            }
+        };
+        let decoded = decode_wav(&wav).expect("synth WAV");
+        let an = analyse(&decoded.samples, decoded.sample_rate);
+        let gap = compute_gap(phrase, &an, &tensor);
+        let tl = spectral_timeline::compare(
+            &ref_wav.samples,
+            &decoded.samples,
+            ref_wav.sample_rate,
+            &ref_an.f0_contour,
+            &an.f0_contour,
+            &ref_an.energy_envelope,
+            &an.energy_envelope,
+        );
+        eprintln!("gap {:.1}%", gap.mean_gap_pct);
+        new_gaps.push(gap.mean_gap_pct);
+        new_lsds.push(tl.spectral_gap);
+        new_presences.push(an.pitch.voice_presence);
+        new_brightnesses.push(an.spectral.brightness_hz);
+        new_worst_frames.push(tl.worst_frames.first().map(|f| f.1).unwrap_or(0.0));
+    }
+
+    let n = new_gaps.len() as f32;
+    let new_gap = new_gaps.iter().sum::<f32>() / n;
+    let new_lsd = new_lsds.iter().sum::<f32>() / n;
+    let new_pres = new_presences.iter().sum::<f32>() / n;
+    let new_bright = new_brightnesses.iter().sum::<f32>() / n;
+    let new_worst = new_worst_frames.iter().cloned().fold(0.0f32, f32::max);
+
+    let old_gap = old_agg["mean_gap"].as_f64().unwrap_or(100.0) as f32;
+    let old_lsd = old_agg["spectral_gap"].as_f64().unwrap_or(100.0) as f32;
+    let old_pres = old_agg["voice_presence"].as_f64().unwrap_or(0.0) as f32;
+    let old_bright = old_agg["brightness"].as_f64().unwrap_or(5000.0) as f32;
+    let old_worst = old_agg["worst_frame"].as_f64().unwrap_or(100.0) as f32;
+
+    #[derive(Tabled)]
+    struct Row {
+        #[tabled(rename = "Metric")]
+        metric: &'static str,
+        #[tabled(rename = "Old model")]
+        old: String,
+        #[tabled(rename = "New model")]
+        new: String,
+        #[tabled(rename = "Delta")]
+        delta: String,
+        #[tabled(rename = "Pass?")]
+        pass: String,
+    }
+
+    let arrow = |old: f32, new: f32, lower_is_better: bool| -> (String, bool) {
+        let d = new - old;
+        let better = if lower_is_better { d < 0.0 } else { d > 0.0 };
+        let s = if better {
+            format!("{d:+.1}").green().to_string()
+        } else {
+            format!("{d:+.1}").red().to_string()
+        };
+        let ok = better || d.abs() < 2.0;
+        (s, ok)
+    };
+
+    let (d1, p1) = arrow(old_gap, new_gap, true);
+    let (d2, p2) = arrow(old_lsd, new_lsd, true);
+    let (d3, p3) = arrow(old_pres, new_pres, false);
+    let (d4, p4) = arrow(old_bright, new_bright, true);
+    let (d5, p5) = arrow(old_worst, new_worst, true);
+
+    let rows = vec![
+        Row {
+            metric: "Mean gap",
+            old: format!("{old_gap:.1}%"),
+            new: format!("{new_gap:.1}%"),
+            delta: d1,
+            pass: if p1 {
+                "\u{2705}".into()
+            } else {
+                "\u{274c}".into()
+            },
+        },
+        Row {
+            metric: "Spectral gap",
+            old: format!("{old_lsd:.1} dB"),
+            new: format!("{new_lsd:.1} dB"),
+            delta: d2,
+            pass: if p2 {
+                "\u{2705}".into()
+            } else {
+                "\u{274c}".into()
+            },
+        },
+        Row {
+            metric: "Voice presence",
+            old: format!("{old_pres:.2}"),
+            new: format!("{new_pres:.2}"),
+            delta: d3,
+            pass: if p3 {
+                "\u{2705}".into()
+            } else {
+                "\u{274c}".into()
+            },
+        },
+        Row {
+            metric: "Brightness",
+            old: format!("{old_bright:.0} Hz"),
+            new: format!("{new_bright:.0} Hz"),
+            delta: d4,
+            pass: if p4 {
+                "\u{2705}".into()
+            } else {
+                "\u{274c}".into()
+            },
+        },
+        Row {
+            metric: "Worst frame",
+            old: format!("{old_worst:.1} dB"),
+            new: format!("{new_worst:.1} dB"),
+            delta: d5,
+            pass: if p5 {
+                "\u{2705}".into()
+            } else {
+                "\u{274c}".into()
+            },
+        },
+    ];
+
+    let all_pass = p1 && p2 && p3 && p4 && p5;
+    println!("{}", Table::new(&rows).with(Style::rounded()));
+    if all_pass {
+        eprintln!(
+            "\n  {} New model is better. Ship it.",
+            "PASS".green().bold()
+        );
+    } else {
+        eprintln!(
+            "\n  {} New model regressed on one or more metrics. Keep the old one.",
+            "FAIL".red().bold()
+        );
+    }
+}
+
 fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str) {
     use foni_analyse::{analyse_fast, decode_wav};
     use std::io::Write;
@@ -3097,7 +3426,8 @@ fn main() {
             model,
             skip_transcribe,
         } => {
-            cmd_compare(server, &studio, &out_dir, max_dur, &model, skip_transcribe);
+            let out = out_dir.unwrap_or_else(|| cache_dir().join("compare"));
+            cmd_compare(server, &studio, &out, max_dur, &model, skip_transcribe);
         }
         Cmd::Tune {
             text,
@@ -3123,6 +3453,12 @@ fn main() {
         }
         Cmd::Corpus { dir, vs } => {
             cmd_corpus(&dir, vs.as_ref());
+        }
+        Cmd::Snapshot { model, vs } => {
+            cmd_snapshot(server, &model, &vs);
+        }
+        Cmd::CompareModels { model, vs } => {
+            cmd_compare_models(server, &model, &vs);
         }
         Cmd::Calibrate { text, vs, model } => {
             cmd_calibrate(server, &text, &vs, &model);
