@@ -31,6 +31,7 @@ pub struct CreatePodOpts {
     pub container_disk_gb: u32,
     pub name: String,
     pub ports: String,
+    pub docker_args: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,6 +240,157 @@ impl RunPodProvider {
         self.rest_get("/pods")
     }
 
+    /// GET /pods/{id} — single pod details (IP, ports, status).
+    pub fn get_pod(&self, pod_id: &str) -> Result<serde_json::Value, String> {
+        self.rest_get(&format!("/pods/{pod_id}"))
+    }
+
+    /// Wait for pod to reach RUNNING status with a public IP.
+    pub fn wait_for_pod(
+        &self,
+        pod_id: &str,
+        timeout_secs: u64,
+    ) -> Result<serde_json::Value, String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        loop {
+            let pod = self.get_pod(pod_id)?;
+            let status = pod["desiredStatus"].as_str().unwrap_or("");
+            let ip = pod["publicIp"].as_str().unwrap_or("");
+            let has_ssh = pod["portMappings"]
+                .as_object()
+                .map(|m| m.contains_key("22"))
+                .unwrap_or(false);
+
+            if status == "RUNNING" && !ip.is_empty() && has_ssh {
+                eprintln!();
+                return Ok(pod);
+            }
+            if std::time::Instant::now() > deadline {
+                return Err(format!(
+                    "Pod {pod_id} not ready after {timeout_secs}s (status={status}, ip={ip})"
+                ));
+            }
+            eprint!("\r  Waiting for pod... {status}  ");
+            std::io::Write::flush(&mut std::io::stderr()).ok();
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        }
+    }
+}
+
+// ── Pod SSH/SCP helpers ─────────────────────────────────────────────────────
+
+/// SSH connection info extracted from a pod.
+#[derive(Debug, Clone)]
+pub struct PodSsh {
+    pub ip: String,
+    pub port: u16,
+}
+
+impl PodSsh {
+    /// Extract SSH connection info from pod JSON.
+    pub fn from_pod(pod: &serde_json::Value) -> Result<Self, String> {
+        let ip = pod["publicIp"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or("pod has no public IP")?
+            .to_string();
+        let port = pod["portMappings"]["22"]
+            .as_u64()
+            .ok_or("pod has no SSH port mapping")? as u16;
+        Ok(Self { ip, port })
+    }
+
+    fn ssh_opts(&self) -> Vec<String> {
+        vec![
+            "-o".into(),
+            "StrictHostKeyChecking=no".into(),
+            "-o".into(),
+            "UserKnownHostsFile=/dev/null".into(),
+            "-o".into(),
+            "LogLevel=ERROR".into(),
+            "-p".into(),
+            self.port.to_string(),
+        ]
+    }
+
+    /// Run a command on the pod via SSH. Streams stdout/stderr.
+    pub fn run(&self, cmd: &str) -> Result<(), String> {
+        eprintln!("  \u{25b6} {}", cmd);
+        let status = std::process::Command::new("ssh")
+            .args(self.ssh_opts())
+            .arg(format!("root@{}", self.ip))
+            .arg(cmd)
+            .status()
+            .map_err(|e| format!("ssh: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "ssh command failed: exit {}",
+                status.code().unwrap_or(-1)
+            ))
+        }
+    }
+
+    /// Upload a local file or directory to the pod.
+    pub fn upload(&self, local: &str, remote: &str) -> Result<(), String> {
+        eprintln!("  \u{2191} {local} \u{2192} {remote}");
+        let mut args = self.ssh_opts();
+        if std::path::Path::new(local).is_dir() {
+            args.push("-r".into());
+        }
+        args.push(local.into());
+        args.push(format!("root@{}:{}", self.ip, remote));
+        let status = std::process::Command::new("scp")
+            .args(&args)
+            .status()
+            .map_err(|e| format!("scp upload: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "scp upload failed: exit {}",
+                status.code().unwrap_or(-1)
+            ))
+        }
+    }
+
+    /// Download a file from the pod to local path.
+    pub fn download(&self, remote: &str, local: &str) -> Result<(), String> {
+        eprintln!("  \u{2193} {remote} \u{2192} {local}");
+        let mut args = self.ssh_opts();
+        args.push(format!("root@{}:{}", self.ip, remote));
+        args.push(local.into());
+        let status = std::process::Command::new("scp")
+            .args(&args)
+            .status()
+            .map_err(|e| format!("scp download: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "scp download failed: exit {}",
+                status.code().unwrap_or(-1)
+            ))
+        }
+    }
+
+    /// Wait until SSH is reachable.
+    pub fn wait_for_ssh(&self, timeout_secs: u64) -> Result<(), String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        loop {
+            if self.run("true").is_ok() {
+                return Ok(());
+            }
+            if std::time::Instant::now() > deadline {
+                return Err("SSH not reachable".into());
+            }
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        }
+    }
+}
+
+impl RunPodProvider {
     /// DELETE on REST API.
     pub fn rest_delete(&self, path: &str) -> Result<(), String> {
         self.client
@@ -296,6 +448,12 @@ impl CloudProvider for RunPodProvider {
     }
 
     fn create_pod(&self, opts: CreatePodOpts) -> Result<Pod, String> {
+        let docker_args = if opts.docker_args.is_empty() {
+            String::new()
+        } else {
+            let escaped = opts.docker_args.replace('"', r#"\""#);
+            format!(r#", dockerArgs: "{escaped}""#)
+        };
         let query = format!(
             r#"mutation {{ podFindAndDeployOnDemand(input: {{
                 cloudType: COMMUNITY, gpuCount: 1,
@@ -306,6 +464,7 @@ impl CloudProvider for RunPodProvider {
                 imageName: "{image}",
                 ports: "{ports}",
                 volumeMountPath: "/workspace"
+                {docker_args}
             }}) {{ id costPerHr desiredStatus machine {{ gpuDisplayName }} }} }}"#,
             vol = opts.volume_gb,
             disk = opts.container_disk_gb,
@@ -709,6 +868,7 @@ mod tests {
                 container_disk_gb: 20,
                 name: "test-pod".into(),
                 ports: "22/tcp".into(),
+                docker_args: String::new(),
             })
             .unwrap();
         assert!(pod.id.contains("test-pod"));
