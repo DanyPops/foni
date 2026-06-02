@@ -172,6 +172,9 @@ pub struct Inner {
     pub dsp_enabled: std::sync::atomic::AtomicBool,
     pub controller_enabled: std::sync::atomic::AtomicBool,
     pub controller_config: RwLock<crate::dsp::controller::ControllerConfig>,
+    pub espeak_config: RwLock<crate::config::EspeakConfig>,
+    pub breaks_config: RwLock<crate::config::BreaksConfig>,
+    pub dsp_defaults: RwLock<crate::config::DspDefaults>,
 }
 
 impl AppState {
@@ -196,6 +199,9 @@ impl AppState {
             dsp_enabled: std::sync::atomic::AtomicBool::new(true),
             controller_enabled: std::sync::atomic::AtomicBool::new(cfg.controller.enabled),
             controller_config: RwLock::new(cfg.controller),
+            espeak_config: RwLock::new(cfg.espeak),
+            breaks_config: RwLock::new(cfg.breaks),
+            dsp_defaults: RwLock::new(cfg.dsp),
         }))
     }
 

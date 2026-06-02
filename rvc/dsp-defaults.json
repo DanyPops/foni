@@ -1,5 +1,23 @@
 {
-  "_doc": "DSP chain defaults — loaded at startup. Controller adjusts from these.",
+  "_doc": "All tunable knobs. Loaded once at startup. Hot-swap via POST /controller {reload:true}.",
+
+  "espeak": {
+    "speed":    135,
+    "voice":    "ru",
+    "rate_pct": 93
+  },
+
+  "breaks": {
+    "comma":       150,
+    "semicolon":   220,
+    "colon":       180,
+    "dash":        200,
+    "ellipsis":    420,
+    "period":      320,
+    "exclamation": 300,
+    "question":    350
+  },
+
   "dsp": {
     "tiltLowDb":              0.0,
     "tiltHighDb":             0.0,
@@ -11,11 +29,22 @@
     "compressionMakeupDb":    2.0,
     "presenceDb":             0.0,
     "deEssDb":                2.0,
+    "deHarshDb":             -2.0,
+    "deHarshFreq":         3500.0,
+    "deHarshQ":               0.7,
     "vibratoFreq":            0.0,
     "vibratoDepth":           0.0,
     "highpassFreq":          80.0,
+    "warmthBoostDb":          0.0,
+    "warmthFreq":           200.0,
+    "airBoostDb":             0.0,
+    "airFreq":             8000.0,
     "reverbMs":               6.0,
-    "reverbDecay":            0.03
+    "reverbDecay":            0.03,
+    "reverbInGain":           0.8,
+    "reverbOutGain":          0.88,
+    "fadeSecs":               0.04,
+    "limiterDb":             -1.0
   },
   "controller": {
     "enabled":    true,
