@@ -2848,6 +2848,8 @@ fn cmd_train(
     eprintln!();
 
     // Build provider
+    let endpoint_id =
+        std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "foni-rvc-train".into());
     let provider: Box<dyn CloudProvider> = if dry_run {
         Box::new(cloud::MockProvider::new())
     } else {
@@ -2894,7 +2896,7 @@ fn cmd_train(
     let t_start = std::time::Instant::now();
     eprintln!("  [4/7] Submitting training job\u{2026}");
     let job = match provider.submit_job(
-        "foni-rvc-train",
+        &endpoint_id,
         serde_json::json!({
             "model_name": model,
             "epochs": epochs,
@@ -2915,7 +2917,7 @@ fn cmd_train(
     // Step 5: Stream progress
     eprintln!("  [5/7] Training\u{2026}");
     let mut final_loss = 0.0f64;
-    provider.stream_progress("foni-rvc-train", &job.id, &mut |chunk| {
+    provider.stream_progress(&endpoint_id, &job.id, &mut |chunk| {
         let epoch = chunk["epoch"].as_u64().unwrap_or(0);
         let total = chunk["total_epochs"].as_u64().unwrap_or(1);
         let loss = chunk["loss"].as_f64().unwrap_or(0.0);
@@ -2927,7 +2929,7 @@ fn cmd_train(
     eprintln!();
 
     // Wait for completion
-    let status = provider.job_status("foni-rvc-train", &job.id);
+    let status = provider.job_status(&endpoint_id, &job.id);
     let finished_at = chrono::Utc::now().to_rfc3339();
     let elapsed = t_start.elapsed();
     let duration_min = elapsed.as_secs_f64() / 60.0;
