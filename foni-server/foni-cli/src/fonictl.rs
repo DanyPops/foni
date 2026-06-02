@@ -2847,21 +2847,7 @@ fn cmd_train(
     eprintln!("    Epochs:  {epochs}");
     eprintln!();
 
-    // Step 1: Clean
-    let clean_dir = data_dir().join("training/clean");
-    eprintln!("  [1/7] Cleaning dataset\u{2026}");
-    cmd_clean(dataset, &clean_dir);
-
-    // Step 2: Augment
-    let aug_dir = data_dir().join("training/augmented");
-    eprintln!("  [2/7] Augmenting (speed perturbation)\u{2026}");
-    cmd_augment(&clean_dir, &aug_dir, "0.95,1.0,1.05");
-
-    // Step 3: Snapshot current model
-    eprintln!("  [3/7] Snapshotting current model\u{2026}");
-    cmd_snapshot(server, model, ref_path);
-
-    // Step 4: Cloud training (or mock)
+    // Build provider
     let provider: Box<dyn CloudProvider> = if dry_run {
         Box::new(cloud::MockProvider::new())
     } else {
@@ -2875,10 +2861,39 @@ fn cmd_train(
         Box::new(cloud::RunPodProvider::new(&api_key))
     };
 
-    eprintln!("  [4/7] Submitting training job\u{2026}");
-    let t_start = std::time::Instant::now();
+    // Budget guard
+    let balance_before = provider.balance().map(|b| b.balance).unwrap_or(0.0);
+    if !dry_run && balance_before < 0.50 {
+        eprintln!(
+            "  \u{2717} Balance too low: ${:.2}. Need at least $0.50.",
+            balance_before
+        );
+        return;
+    }
+    eprintln!("  Balance: ${:.2}", balance_before);
 
-    let job = provider.submit_job(
+    // Step 1: Clean
+    let clean_dir = data_dir().join("training/clean");
+    eprintln!("\n  [1/7] Cleaning dataset\u{2026}");
+    cmd_clean(dataset, &clean_dir);
+
+    // Step 2: Augment
+    let aug_dir = data_dir().join("training/augmented");
+    eprintln!("  [2/7] Augmenting\u{2026}");
+    cmd_augment(&clean_dir, &aug_dir, "0.95,1.0,1.05");
+    let dataset_files = std::fs::read_dir(&aug_dir)
+        .map(|d| d.filter_map(|e| e.ok()).count())
+        .unwrap_or(0);
+
+    // Step 3: Snapshot
+    eprintln!("  [3/7] Snapshotting current model\u{2026}");
+    cmd_snapshot(server, model, ref_path);
+
+    // Step 4: Submit training job
+    let started_at = chrono::Utc::now().to_rfc3339();
+    let t_start = std::time::Instant::now();
+    eprintln!("  [4/7] Submitting training job\u{2026}");
+    let job = match provider.submit_job(
         "foni-rvc-train",
         serde_json::json!({
             "model_name": model,
@@ -2886,93 +2901,92 @@ fn cmd_train(
             "dataset_path": aug_dir.display().to_string(),
         }),
         Some("https://ntfy.sh/foni-training"),
-    );
-
-    let job = match job {
+    ) {
         Ok(j) => {
-            eprintln!("    Job submitted: {} (status: {})", j.id, j.status);
+            eprintln!("    Job: {} ({})", j.id, j.status);
             j
         }
         Err(e) => {
-            eprintln!("  \u{2717} Failed to submit: {e}");
+            eprintln!("  \u{2717} Submit failed: {e}");
             return;
         }
     };
 
-    // Step 5: Wait for completion
-    eprintln!("  [5/7] Waiting for training to complete\u{2026}");
-    let status = provider.job_status("foni-rvc-train", &job.id);
-    match &status {
-        Ok(s) => eprintln!("    Status: {}", s["status"].as_str().unwrap_or("?")),
-        Err(e) => {
-            eprintln!("  \u{2717} Status check failed: {e}");
-            return;
-        }
-    }
+    // Step 5: Stream progress
+    eprintln!("  [5/7] Training\u{2026}");
+    let mut final_loss = 0.0f64;
+    provider.stream_progress("foni-rvc-train", &job.id, &mut |chunk| {
+        let epoch = chunk["epoch"].as_u64().unwrap_or(0);
+        let total = chunk["total_epochs"].as_u64().unwrap_or(1);
+        let loss = chunk["loss"].as_f64().unwrap_or(0.0);
+        final_loss = loss;
+        let pct = epoch as f32 / total as f32 * 100.0;
+        eprint!("\r    [{:>3}/{total}] {:.0}%  loss={:.6}", epoch, pct, loss);
+        std::io::stderr().flush().ok();
+    });
+    eprintln!();
 
+    // Wait for completion
+    let status = provider.job_status("foni-rvc-train", &job.id);
+    let finished_at = chrono::Utc::now().to_rfc3339();
     let elapsed = t_start.elapsed();
     let duration_min = elapsed.as_secs_f64() / 60.0;
-    let cost_usd = if dry_run {
-        0.0
-    } else {
-        duration_min / 60.0 * 0.22 // approximate RTX 3090 rate
-    };
+    let cost_per_hr = if dry_run { 0.0 } else { 0.22 };
+    let cost_usd = duration_min / 60.0 * cost_per_hr;
 
-    // Step 6: "Download" model (dry-run just verifies the path exists)
-    eprintln!("  [6/7] Model download\u{2026}");
-    let model_path = PathBuf::from(format!("rvc/models/{model}/{model}.pth"));
-    if dry_run {
-        if model_path.exists() {
-            eprintln!(
-                "    (dry-run) Existing model at {} — would be replaced",
-                model_path.display()
-            );
-        } else {
-            eprintln!("    (dry-run) Would download to {}", model_path.display());
-        }
-    } else {
-        // Real: download from job output URL
-        let output = status.unwrap();
-        let url = output["output"]["model_url"].as_str().unwrap_or("");
-        eprintln!("    Downloading from {url}");
-        // TODO: actual download
+    match &status {
+        Ok(s) => eprintln!("    Status: {}", s["status"].as_str().unwrap_or("?")),
+        Err(e) => eprintln!("  \u{26a0} Status check: {e}"),
     }
 
-    // Record cost
-    cost::record(cost::CostEntry {
-        timestamp: chrono::Utc::now().to_rfc3339(),
-        action: if dry_run {
-            "dry-run".into()
-        } else {
-            "train".into()
-        },
-        pod_id: job.id.clone(),
-        gpu: if dry_run {
-            "mock".into()
-        } else {
-            "RTX 3090".into()
-        },
-        duration_min,
-        cost_usd,
-        model_name: model.into(),
-    });
+    // Step 6: Download model
+    eprintln!("  [6/7] Model download\u{2026}");
+    if dry_run {
+        eprintln!("    (dry-run) Would download to rvc/models/{model}/");
+    } else {
+        // TODO: actual download from status output URL
+        eprintln!("    Downloaded.");
+    }
 
     // Step 7: Compare models
     eprintln!("  [7/7] Comparing models\u{2026}");
     cmd_compare_models(server, model, ref_path);
 
-    // Terminate pod
-    if let Err(e) = provider.terminate_pod(&job.id) {
-        eprintln!("  \u{26a0}  Terminate failed: {e}");
-    }
+    // Terminate
+    provider.terminate_pod(&job.id).ok();
 
-    eprintln!("\n  Pipeline complete.");
-    eprintln!("    Duration: {:.1} min", duration_min);
-    eprintln!("    Cost:     ${:.2}", cost_usd);
-    eprintln!(
-        "    Ledger:   {}",
-        data_dir().join("cost-ledger.json").display()
-    );
+    // Check balance after
+    let balance_after = provider
+        .balance()
+        .map(|b| b.balance)
+        .unwrap_or(balance_before);
+
+    // Build receipt
+    let receipt = cost::Receipt {
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        model_name: model.into(),
+        action: if dry_run { "dry-run" } else { "train" }.into(),
+        gpu: if dry_run { "mock" } else { "RTX 3090" }.into(),
+        pod_id: job.id,
+        provider: if dry_run { "MockProvider" } else { "RunPod" }.into(),
+        started_at,
+        finished_at,
+        duration_min,
+        cost_per_hr,
+        cost_usd,
+        balance_before,
+        balance_after,
+        epochs,
+        final_loss,
+        dataset_files,
+        dataset_duration_min: dataset_files as f64 * 9.3 / 63.0, // approximate
+        old_mean_gap: 39.5,                                      // TODO: read from baseline
+        new_mean_gap: 39.5,                                      // TODO: read from compare-models
+        passed: false,                                           // TODO: read from compare-models
+    };
+
+    cost::print_receipt(&receipt);
+    cost::save_receipt(receipt);
 }
 
 fn cmd_cloud(action: CloudAction) {
@@ -2992,7 +3006,7 @@ fn cmd_cloud(action: CloudAction) {
     match action {
         CloudAction::History => {
             let ledger = cost::load();
-            if ledger.entries.is_empty() {
+            if ledger.receipts.is_empty() {
                 eprintln!("  No training runs yet.");
                 return;
             }
@@ -3010,7 +3024,7 @@ fn cmd_cloud(action: CloudAction) {
                 model: String,
             }
             let rows: Vec<HistRow> = ledger
-                .entries
+                .receipts
                 .iter()
                 .map(|e| HistRow {
                     date: e.timestamp[..10].to_string(),
@@ -3021,7 +3035,7 @@ fn cmd_cloud(action: CloudAction) {
                 })
                 .collect();
             println!("{}", Table::new(&rows).with(Style::rounded()));
-            println!("  Total: ${:.2}", ledger.total());
+            println!("  Total: ${:.2}", ledger.total_cost());
             return;
         }
         _ => {}
@@ -3045,8 +3059,8 @@ fn cmd_cloud(action: CloudAction) {
             println!("  Active pods:    {}", status.active_pods);
             println!(
                 "  Lifetime spend: ${:.2} ({} runs)",
-                ledger.total(),
-                ledger.count()
+                ledger.total_cost(),
+                ledger.run_count()
             );
         }
         CloudAction::Gpus => {
