@@ -298,6 +298,12 @@ enum Cmd {
         /// Simulate the full pipeline without touching RunPod (no cost)
         #[arg(long)]
         dry_run: bool,
+        /// ntfy topic for completion notification
+        #[arg(long, default_value = "foni-train")]
+        ntfy: String,
+        /// Stream progress inline instead of fire-and-forget
+        #[arg(long)]
+        follow: bool,
     },
 
     /// Save current model's scores as the baseline to beat before retraining
@@ -2853,6 +2859,8 @@ fn cmd_train(
     ref_path: &PathBuf,
     epochs: u32,
     dry_run: bool,
+    ntfy_topic: &str,
+    follow: bool,
 ) {
     use cloud::CloudProvider;
     use owo_colors::OwoColorize;
@@ -2924,7 +2932,7 @@ fn cmd_train(
             "epochs": epochs,
             "dataset_path": aug_dir.display().to_string(),
         }),
-        Some("https://ntfy.sh/foni-training"),
+        Some(&format!("https://ntfy.sh/{ntfy_topic}")),
     ) {
         Ok(j) => {
             eprintln!("    Job: {} ({})", j.id, j.status);
@@ -2936,48 +2944,61 @@ fn cmd_train(
         }
     };
 
-    // Step 5: Stream progress
-    eprintln!("  [5/7] Training\u{2026}");
+    // Step 5: Stream progress or fire-and-forget
     let mut final_loss = 0.0f64;
-    provider.stream_progress(&endpoint_id, &job.id, &mut |chunk| {
-        let epoch = chunk["epoch"].as_u64().unwrap_or(0);
-        let total = chunk["total_epochs"].as_u64().unwrap_or(1);
-        let loss = chunk["loss"].as_f64().unwrap_or(0.0);
-        final_loss = loss;
-        let pct = epoch as f32 / total as f32 * 100.0;
-        eprint!("\r    [{:>3}/{total}] {:.0}%  loss={:.6}", epoch, pct, loss);
-        std::io::stderr().flush().ok();
-    });
-    eprintln!();
+    let cost_per_hr: f64 = if dry_run { 0.0 } else { 0.22 };
+    let (finished_at, duration_min, cost_usd, status);
 
-    // Wait for completion
-    let status = provider.job_status(&endpoint_id, &job.id);
-    let finished_at = chrono::Utc::now().to_rfc3339();
-    let elapsed = t_start.elapsed();
-    let duration_min = elapsed.as_secs_f64() / 60.0;
-    let cost_per_hr = if dry_run { 0.0 } else { 0.22 };
-    let cost_usd = duration_min / 60.0 * cost_per_hr;
-
-    match &status {
-        Ok(s) => eprintln!("    Status: {}", s["status"].as_str().unwrap_or("?")),
-        Err(e) => eprintln!("  \u{26a0} Status check: {e}"),
-    }
-
-    // Step 6: Download model
-    eprintln!("  [6/7] Model download\u{2026}");
-    if dry_run {
-        eprintln!("    (dry-run) Would download to rvc/models/{model}/");
+    if follow || dry_run {
+        eprintln!("  [5/7] Training (streaming)\u{2026}");
+        provider.stream_progress(&endpoint_id, &job.id, &mut |chunk| {
+            let epoch = chunk["epoch"].as_u64().unwrap_or(0);
+            let total = chunk["total_epochs"].as_u64().unwrap_or(1);
+            let loss = chunk["loss"].as_f64().unwrap_or(0.0);
+            final_loss = loss;
+            let pct = epoch as f32 / total as f32 * 100.0;
+            eprint!("\r    [{:>3}/{total}] {:.0}%  loss={:.6}", epoch, pct, loss);
+            std::io::stderr().flush().ok();
+        });
+        eprintln!();
+        status = provider.job_status(&endpoint_id, &job.id);
+        finished_at = chrono::Utc::now().to_rfc3339();
+        let elapsed = t_start.elapsed();
+        duration_min = elapsed.as_secs_f64() / 60.0;
+        cost_usd = duration_min / 60.0 * cost_per_hr;
+        match &status {
+            Ok(s) => eprintln!("    Status: {}", s["status"].as_str().unwrap_or("?")),
+            Err(e) => eprintln!("  \u{26a0} Status check: {e}"),
+        }
     } else {
-        // TODO: actual download from status output URL
-        eprintln!("    Downloaded.");
+        eprintln!("  [5/7] Job submitted \u{2014} ntfy notification on completion");
+        eprintln!("    Topic: https://ntfy.sh/{ntfy_topic}");
+        eprintln!("    Job:   {}", job.id);
+        eprintln!("    Use --follow to stream progress inline");
+        finished_at = started_at.clone();
+        duration_min = 0.0;
+        cost_usd = 0.0;
+        status = Ok(serde_json::json!({"status": "IN_QUEUE"}));
     }
+    let _ = &status;
 
-    // Step 7: Compare models
-    eprintln!("  [7/7] Comparing models\u{2026}");
-    cmd_compare_models(server, model, ref_path);
+    if follow || dry_run {
+        // Step 6: Download model
+        eprintln!("  [6/7] Model download\u{2026}");
+        if dry_run {
+            eprintln!("    (dry-run) Would download to rvc/models/{model}/");
+        } else {
+            // TODO: actual download from status output URL
+            eprintln!("    Downloaded.");
+        }
 
-    // Terminate
-    provider.terminate_pod(&job.id).ok();
+        // Step 7: Compare models
+        eprintln!("  [7/7] Comparing models\u{2026}");
+        cmd_compare_models(server, model, ref_path);
+
+        // Terminate
+        provider.terminate_pod(&job.id).ok();
+    }
 
     // Check balance after
     let balance_after = provider
@@ -4283,8 +4304,12 @@ fn main() {
             vs,
             epochs,
             dry_run,
+            ntfy,
+            follow,
         } => {
-            cmd_train(server, &model, &dataset, &vs, epochs, dry_run);
+            cmd_train(
+                server, &model, &dataset, &vs, epochs, dry_run, &ntfy, follow,
+            );
         }
         Cmd::Cloud { action } => {
             cmd_cloud(action);
