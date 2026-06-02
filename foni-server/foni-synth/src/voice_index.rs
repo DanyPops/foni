@@ -80,7 +80,9 @@ impl VoiceIndex {
                 // Partial sort: rearrange so dists[..k] contains the k smallest.
                 let k = K.min(dists.len());
                 if k < dists.len() {
-                    dists.select_nth_unstable_by(k, |a, b| a.0.partial_cmp(&b.0).unwrap());
+                    dists.select_nth_unstable_by(k, |a, b| {
+                        a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+                    });
                 }
                 let top_k = &dists[..k];
 
@@ -140,9 +142,17 @@ fn parse_npy_f32(bytes: &[u8]) -> Result<Vec<f32>, String> {
         return Err("npy: truncated header length".into());
     }
     let hlen = if major == 1 {
-        u16::from_le_bytes(bytes[header_offset..header_offset + 2].try_into().unwrap()) as usize
+        u16::from_le_bytes(
+            bytes[header_offset..header_offset + 2]
+                .try_into()
+                .expect("infallible: 2-byte slice"),
+        ) as usize
     } else {
-        u32::from_le_bytes(bytes[header_offset..header_offset + 4].try_into().unwrap()) as usize
+        u32::from_le_bytes(
+            bytes[header_offset..header_offset + 4]
+                .try_into()
+                .expect("infallible: 4-byte slice"),
+        ) as usize
     };
     let data_start = header_offset + header_len_bytes + hlen;
     if bytes.len() < data_start {
@@ -163,7 +173,7 @@ fn parse_npy_f32(bytes: &[u8]) -> Result<Vec<f32>, String> {
     let n = data.len() / 4;
     let mut out = vec![0.0f32; n];
     for (i, chunk) in data.chunks_exact(4).enumerate() {
-        out[i] = f32::from_le_bytes(chunk.try_into().unwrap());
+        out[i] = f32::from_le_bytes(chunk.try_into().expect("infallible: chunks_exact(4)"));
     }
     Ok(out)
 }

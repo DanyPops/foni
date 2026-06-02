@@ -208,7 +208,7 @@ pub(crate) fn salience_to_hz(salience: &[f32], n_frames: usize, threshold: f32) 
             let (center, &max_val) = row
                 .iter()
                 .enumerate()
-                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .unwrap_or((0, &0.0));
             if max_val <= threshold {
                 return 0.0;

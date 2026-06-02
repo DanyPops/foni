@@ -154,7 +154,9 @@ fn espeak(text: &str, voice: &str, speed: u32, markup: bool) -> Result<Vec<u8>, 
         "-s",
         &speed.to_string(),
         "-w",
-        tmp.path().to_str().unwrap(),
+        tmp.path()
+            .to_str()
+            .expect("infallible: tempfile path is valid UTF-8"),
     ]);
     if markup {
         cmd.arg("-m");
