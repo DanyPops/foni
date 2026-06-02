@@ -824,9 +824,9 @@ fn cmd_studio(server: &str, text: &str, model: &str, from: Option<&std::path::Pa
 fn cmd_diagnose(server: &str, text: &str, model: &str) {
     use std::io::{BufRead, Write};
 
-    println!("\n⚠  Diagnose — isolating noise sources");
+    eprintln!("\n⚠  Diagnose — isolating noise sources");
     println!("   Phrase: «{text}»");
-    println!("   Step 1: synthesizing RVC base (no DSP) …");
+    eprintln!("   Step 1: synthesizing RVC base (no DSP) …");
 
     // Synthesize RVC without DSP once — this is the base for all variants.
     let rvc_wav = match synth_request(server, text, model, "ru", 150, false, serde_json::json!({}))
@@ -837,7 +837,7 @@ fn cmd_diagnose(server: &str, text: &str, model: &str) {
             return;
         }
     };
-    println!("   Base: {} kB", rvc_wav.len() / 1024);
+    eprintln!("   Base: {} kB", rvc_wav.len() / 1024);
 
     let full: serde_json::Value = serde_json::json!({
         "rmsTargetLufs": -8, "compressionRatio": 4, "compressionMakeupDb": 5,
@@ -1453,7 +1453,7 @@ fn cmd_mix(
             .collect();
 
         if !to_render.is_empty() {
-            println!("  Rendering {} maquettes…", to_render.len());
+            eprintln!("  Rendering {} maquettes…", to_render.len());
             let pb = ProgressBar::new(to_render.len() as u64);
             pb.set_style(
                 ProgressStyle::default_bar()
@@ -1793,7 +1793,7 @@ fn cmd_compare(
         pb.inc(1);
     }
     pb.finish_and_clear();
-    println!("  Pairs: {}  Skipped: {skipped}", pairs.len());
+    eprintln!("  Pairs: {}  Skipped: {skipped}", pairs.len());
 
     if pairs.is_empty() {
         return;
@@ -1923,9 +1923,9 @@ fn cmd_compare(
         println!("\n  Studio vs Synthetic ({} matched pairs)", n as usize);
         println!("{}", Table::new(&rows).with(Style::rounded()));
     }
-    println!("  Synthetic WAVs: {}/", out_dir.display());
+    eprintln!("  Synthetic WAVs: {}/", out_dir.display());
 
-    println!("  Synthetic WAVs: {}/", out_dir.display());
+    eprintln!("  Synthetic WAVs: {}/", out_dir.display());
 }
 
 fn cmd_tune(
@@ -1951,12 +1951,12 @@ fn cmd_tune(
     println!("   Controls: 1–5 rate  n next  r replay  q quit\n");
 
     // Synthesize RVC base once, apply each preset via /process.
-    print!("  Synthesizing RVC base… ");
+    eprint!("  Synthesizing RVC base… ");
     std::io::stdout().flush().ok();
     let base: Vec<u8> =
         match synth_request(server, text, model, "ru", 150, false, serde_json::json!({})) {
             Ok(b) => {
-                println!("ok ({} kB)", b.len() / 1024);
+                eprintln!("ok ({} kB)", b.len() / 1024);
                 b
             }
             Err(e) => {
@@ -1976,12 +1976,12 @@ fn cmd_tune(
 
         // Render preset.
         if !wav_path.exists() {
-            print!("  Rendering «{}»… ", m.name);
+            eprint!("  Rendering «{}»… ", m.name);
             std::io::stdout().flush().ok();
             match process_request(server, &base, m.opts.clone()) {
                 Ok(wav) => {
                     std::fs::write(&wav_path, &wav).unwrap();
-                    println!("ok");
+                    eprintln!("ok");
                 }
                 Err(e) => {
                     println!("\n  ❌ {e}");
@@ -2121,7 +2121,7 @@ fn cmd_tune_auto(
     };
 
     // Synthesize the base audio once (RVC only, no DSP)
-    print!("  Synthesizing base (RVC only)… ");
+    eprint!("  Synthesizing base (RVC only)… ");
     std::io::stdout().flush().ok();
     let base = match synth_request(
         server,
@@ -2133,7 +2133,7 @@ fn cmd_tune_auto(
         serde_json::json!({}),
     ) {
         Ok(b) => {
-            println!("ok ({} kB)", b.len() / 1024);
+            eprintln!("ok ({} kB)", b.len() / 1024);
             b
         }
         Err(e) => {
@@ -2219,8 +2219,8 @@ fn cmd_tune_auto(
 
     let mut best_score = gap_score(&best).unwrap_or(100.0);
 
-    println!("\n  Starting gap score: {best_score:.1}%");
-    println!("  Running {n_iter} iterations of coordinate descent…");
+    eprintln!("\n  Starting gap score: {best_score:.1}%");
+    eprintln!("  Running {n_iter} iterations of coordinate descent…");
     println!();
 
     let steps: &[(&str, &dyn Fn(&mut Knobs, f32), f32, f32, f32)] = &[
@@ -2292,7 +2292,7 @@ fn cmd_tune_auto(
         );
 
         if !changed && iter > 3 {
-            println!("  Converged early at iteration {}.", iter + 1);
+            eprintln!("  Converged early at iteration {}.", iter + 1);
             break;
         }
     }
@@ -2322,13 +2322,13 @@ fn cmd_tune_auto(
         );
     }
 
-    println!("\n  Best knobs:");
-    println!("    tiltLowDb:        {:.1}", top3[0].0.tilt_low_db);
-    println!("    tiltHighDb:       {:.1}", top3[0].0.tilt_high_db);
-    println!("    rmsTargetLufs:    {:.1}", top3[0].0.rms_lufs);
-    println!("    compressionRatio: {:.1}", top3[0].0.compression);
-    println!("    presenceDb:       {:.1}", top3[0].0.presence_db);
-    println!("    Final gap score:  {:.1}%", top3[0].1);
+    eprintln!("\n  Best knobs:");
+    eprintln!("    tiltLowDb:        {:.1}", top3[0].0.tilt_low_db);
+    eprintln!("    tiltHighDb:       {:.1}", top3[0].0.tilt_high_db);
+    eprintln!("    rmsTargetLufs:    {:.1}", top3[0].0.rms_lufs);
+    eprintln!("    compressionRatio: {:.1}", top3[0].0.compression);
+    eprintln!("    presenceDb:       {:.1}", top3[0].0.presence_db);
+    eprintln!("    Final gap score:  {:.1}%", top3[0].1);
 }
 
 fn cmd_diff(server: &str, knob: &str, value: f32, phrase: &str, ref_path: &PathBuf, model: &str) {
@@ -2339,7 +2339,7 @@ fn cmd_diff(server: &str, knob: &str, value: f32, phrase: &str, ref_path: &PathB
     let ref_wav = decode_wav(&ref_bytes).expect("reference WAV");
     let ref_an = analyse(&ref_wav.samples, ref_wav.sample_rate);
 
-    print!("  Synthesizing base (RVC only)\u{2026} ");
+    eprint!("  Synthesizing base (RVC only)\u{2026} ");
     std::io::stdout().flush().ok();
     let base_wav = match synth_request(
         server,
@@ -2351,7 +2351,7 @@ fn cmd_diff(server: &str, knob: &str, value: f32, phrase: &str, ref_path: &PathB
         serde_json::json!({}),
     ) {
         Ok(b) => {
-            println!("ok");
+            eprintln!("ok");
             b
         }
         Err(e) => {
@@ -2511,7 +2511,7 @@ fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str) {
     let ref_wav = decode_wav(&ref_bytes).expect("reference WAV");
     let ref_a = analyse_fast(&ref_wav.samples, ref_wav.sample_rate);
 
-    print!("  Synthesizing base (RVC, no DSP)\u{2026} ");
+    eprint!("  Synthesizing base (RVC, no DSP)\u{2026} ");
     std::io::stdout().flush().ok();
     let base = match synth_request(
         server,
@@ -2523,7 +2523,7 @@ fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str) {
         serde_json::json!({}),
     ) {
         Ok(b) => {
-            println!("ok ({} kB)", b.len() / 1024);
+            eprintln!("ok ({} kB)", b.len() / 1024);
             b
         }
         Err(e) => {
@@ -2676,8 +2676,8 @@ fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str) {
 
     // Print as Rust const for controller.rs
     println!("\n  \u{2500}\u{2500} Rust const for dsp/controller.rs \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n");
-    println!("  // Rows: tiltLowDb, tiltHighDb, rmsTargetLufs, presenceDb, compressionRatio");
-    println!("  // Cols: brightness_hz, loudness_db, bass_balance_db, vocal_darkness_db_oct, breathiness_db");
+    eprintln!("  // Rows: tiltLowDb, tiltHighDb, rmsTargetLufs, presenceDb, compressionRatio");
+    eprintln!("  // Cols: brightness_hz, loudness_db, bass_balance_db, vocal_darkness_db_oct, breathiness_db");
     println!(
         "  const SENSITIVITY: [[f32; {}]; {}] = [",
         metrics.len(),
@@ -2785,7 +2785,7 @@ fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
     let elapsed = t0.elapsed().as_millis();
     let errs = errors.load(Ordering::Relaxed);
 
-    println!("  Done in {elapsed} ms  ({} files, {} skipped)\n", n, errs);
+    eprintln!("  Done in {elapsed} ms  ({} files, {} skipped)\n", n, errs);
 
     // ── Sidorovich acoustic identity (bass-baritone deep Russian voice) ────────
     //
@@ -2840,7 +2840,7 @@ fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
                 target: "studio: 60-85%",
             },
         ];
-        println!("\n  Sidorovich corpus fingerprint ({n} files, {elapsed} ms, {errs} skipped)");
+        eprintln!("\n  Sidorovich corpus fingerprint ({n} files, {elapsed} ms, {errs} skipped)");
         println!("{}", Table::new(&rows).with(Style::rounded()));
     }
 
