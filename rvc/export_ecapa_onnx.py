@@ -41,33 +41,28 @@ def main():
 
     # SpeechBrain expects FBank features, not raw waveform. We need the full pipeline.
     # Wrap encode_batch logic into an exportable module.
-    class EcapaWrapper(torch.nn.Module):
-        def __init__(self, encoder_classifier):
-            super().__init__()
-            self.compute_features = encoder_classifier.mods.compute_features
-            self.mean_var_norm = encoder_classifier.mods.mean_var_norm
-            self.embedding_model = encoder_classifier.mods.embedding_model
+    # Export ONLY the embedding model — skip the FBank/STFT (ONNX can't do complex STFT).
+    # Rust will compute mel features and pass them in.
+    embedding_model = model.mods.embedding_model
+    embedding_model.eval()
 
-        def forward(self, wav: torch.Tensor) -> torch.Tensor:
-            """wav: [1, T] float32 at 16 kHz -> embedding [1, 192]"""
-            feats = self.compute_features(wav)
-            feats = self.mean_var_norm(feats, torch.ones(feats.shape[0]))
-            return self.embedding_model(feats)
-
-    wrapper = EcapaWrapper(model)
-    wrapper.eval()
+    # Compute features for a dummy input to get the shape
+    with torch.no_grad():
+        feats = model.mods.compute_features(dummy)
+        feats = model.mods.mean_var_norm(feats, torch.ones(feats.shape[0]))
+        print(f"[export-ecapa] feature shape: {feats.shape}")
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
     print(f"[export-ecapa] exporting to {OUT}...")
     with torch.no_grad():
         torch.onnx.export(
-            wrapper,
-            dummy,
+            embedding_model,
+            feats,
             OUT,
-            input_names=["wav"],
+            input_names=["features"],
             output_names=["embedding"],
-            dynamic_axes={"wav": {1: "T"}},
+            dynamic_axes={"features": {0: "batch", 1: "time"}},
             opset_version=17,
         )
 

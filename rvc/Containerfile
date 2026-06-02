@@ -10,10 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# PyTorch CPU first (pins numpy-compatible build)
+# PyTorch CPU (2.5.x for speechbrain/ECAPA compatibility)
 RUN pip install --no-cache-dir \
-    torch==2.1.1+cpu \
-    torchaudio==2.1.1+cpu \
+    torch==2.5.1+cpu \
+    torchaudio==2.5.1+cpu \
     --index-url https://download.pytorch.org/whl/cpu
 
 # rvc-python deps (pin numpy to what rvc needs)
@@ -37,14 +37,8 @@ RUN pip install --no-cache-dir \
 # Install rvc-python without pulling conflicting deps
 RUN pip install --no-cache-dir --no-deps rvc-python
 
-RUN mkdir -p /app/rvc_models /config
-
-COPY facade.py /app/facade.py
+RUN mkdir -p /app/rvc_models
 
 ENV RVC_MODELS_DIR=/app/rvc_models
-ENV RVC_PORT=5050
-ENV FONI_RVC_CONFIG=/config/foni-rvc.yaml
 
-EXPOSE 5050
-
-CMD ["python", "/app/facade.py"]
+CMD ["bash"]
