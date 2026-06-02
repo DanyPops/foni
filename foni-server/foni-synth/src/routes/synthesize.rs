@@ -277,13 +277,27 @@ pub async fn synthesize(
             .controller_enabled
             .load(std::sync::atomic::Ordering::Relaxed);
         let controller_cfg = state.0.controller_config.read().await.clone();
+        let policy_arc = state.0.policy_engine.read().await.clone();
         tokio::task::spawn_blocking(move || {
             wav::roundtrip(&rvc_wav, |samples, sr| {
                 let opts = if controller_enabled {
                     let analysis = foni_analyse::analyse_fast(samples, sr);
-                    let (corrected, _snapshot) =
-                        dsp::controller::correct(&analysis, &base_opts, &controller_cfg);
-                    corrected
+                    // Try policy script first, fall back to compiled controller
+                    if let Some(ref policy) = policy_arc {
+                        if let Some((corrected, _snap)) =
+                            policy.evaluate(&analysis, &base_opts, &controller_cfg)
+                        {
+                            corrected
+                        } else {
+                            let (corrected, _) =
+                                dsp::controller::correct(&analysis, &base_opts, &controller_cfg);
+                            corrected
+                        }
+                    } else {
+                        let (corrected, _) =
+                            dsp::controller::correct(&analysis, &base_opts, &controller_cfg);
+                        corrected
+                    }
                 } else {
                     base_opts
                 };

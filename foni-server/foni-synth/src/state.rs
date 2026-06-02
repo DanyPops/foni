@@ -175,6 +175,7 @@ pub struct Inner {
     pub espeak_config: RwLock<crate::config::EspeakConfig>,
     pub breaks_config: RwLock<crate::config::BreaksConfig>,
     pub dsp_defaults: RwLock<crate::config::DspDefaults>,
+    pub policy_engine: RwLock<Option<std::sync::Arc<crate::dsp::policy::PolicyEngine>>>,
 }
 
 impl AppState {
@@ -202,6 +203,11 @@ impl AppState {
             espeak_config: RwLock::new(cfg.espeak),
             breaks_config: RwLock::new(cfg.breaks),
             dsp_defaults: RwLock::new(cfg.dsp),
+            policy_engine: RwLock::new(
+                crate::dsp::policy::find_policy_script()
+                    .and_then(|p| crate::dsp::policy::PolicyEngine::load(&p))
+                    .map(std::sync::Arc::new),
+            ),
         }))
     }
 
