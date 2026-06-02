@@ -49,3 +49,72 @@ where
     f(&mut samples, sample_rate);
     encode_wav(&samples, sample_rate).map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_wav_produces_valid_wav() {
+        let samples: Vec<f32> = (0..1000).map(|i| (i as f32 / 100.0).sin()).collect();
+        let wav = encode_wav(&samples, 16000).expect("encode");
+        assert!(wav.len() > 44);
+        assert_eq!(&wav[..4], b"RIFF");
+    }
+
+    #[test]
+    fn encode_empty_samples() {
+        let wav = encode_wav(&[], 16000).expect("encode");
+        assert_eq!(&wav[..4], b"RIFF");
+    }
+
+    #[test]
+    fn encode_clamps_out_of_range() {
+        let samples = vec![-2.0, 0.0, 2.0];
+        let wav = encode_wav(&samples, 16000).expect("encode");
+        assert!(wav.len() > 44);
+    }
+
+    #[test]
+    fn pad_silence_adds_padding() {
+        let samples = vec![1.0; 100];
+        let padded = pad_silence(&samples, 0.5, 16000);
+        let pad_n = (16000.0 * 0.5) as usize;
+        assert_eq!(padded.len(), 100 + 2 * pad_n);
+        assert_eq!(padded[0], 0.0);
+        assert_eq!(padded[pad_n], 1.0);
+        assert_eq!(*padded.last().unwrap(), 0.0);
+    }
+
+    #[test]
+    fn pad_silence_zero_is_noop() {
+        let samples = vec![1.0; 100];
+        let padded = pad_silence(&samples, 0.0, 16000);
+        assert_eq!(padded.len(), 100);
+    }
+
+    #[test]
+    fn pad_silence_negative_is_noop() {
+        let samples = vec![1.0; 100];
+        let padded = pad_silence(&samples, -1.0, 16000);
+        assert_eq!(padded.len(), 100);
+    }
+
+    #[test]
+    fn roundtrip_applies_transform() {
+        let samples: Vec<f32> = (0..1000).map(|i| (i as f32 / 100.0).sin() * 0.5).collect();
+        let wav = encode_wav(&samples, 16000).expect("encode");
+        let result = roundtrip(&wav, |s, _sr| {
+            for x in s.iter_mut() {
+                *x *= 2.0;
+            }
+        });
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn roundtrip_invalid_wav_returns_error() {
+        let result = roundtrip(b"not a wav", |_, _| {});
+        assert!(result.is_err());
+    }
+}

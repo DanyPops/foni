@@ -235,3 +235,30 @@ fn search_up(name: &str) -> Option<PathBuf> {
 fn default_models_dir() -> PathBuf {
     search_up("rvc/models").unwrap_or_else(|| PathBuf::from("/app/rvc_models"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn espeak_defaults() {
+        let cfg = EspeakConfig::default();
+        assert_eq!(cfg.speed, 135);
+        assert_eq!(cfg.voice, "ru");
+        assert_eq!(cfg.rate_pct, 93);
+    }
+
+    #[test]
+    fn breaks_default_all_positive() {
+        let b = BreaksConfig::default();
+        assert!(b.comma > 0);
+        assert!(b.period > 0);
+        assert!(b.ellipsis > b.comma);
+    }
+
+    #[test]
+    fn server_config_default_has_valid_addr() {
+        let cfg = ServerConfig::default();
+        assert_eq!(cfg.addr, "0.0.0.0:5050");
+    }
+}

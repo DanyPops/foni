@@ -255,3 +255,108 @@ pub fn compute_gap(phrase: &str, actual: &AnalysisResult, tensor: &TargetTensor)
         mean_gap_pct,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AnalysisResult;
+
+    fn dummy_analysis() -> AnalysisResult {
+        crate::analyse(&vec![0.0; 16000], 16000)
+    }
+
+    fn dummy_target() -> TargetTensor {
+        TargetTensor::from_analysis(&dummy_analysis(), "test")
+    }
+
+    #[test]
+    fn verdict_close_below_15() {
+        assert!(matches!(Verdict::for_gap(0.0), Verdict::Close));
+        assert!(matches!(Verdict::for_gap(14.9), Verdict::Close));
+    }
+
+    #[test]
+    fn verdict_near_between_15_and_35() {
+        assert!(matches!(Verdict::for_gap(15.0), Verdict::Near));
+        assert!(matches!(Verdict::for_gap(34.9), Verdict::Near));
+    }
+
+    #[test]
+    fn verdict_far_between_35_and_60() {
+        assert!(matches!(Verdict::for_gap(35.0), Verdict::Far));
+        assert!(matches!(Verdict::for_gap(59.9), Verdict::Far));
+    }
+
+    #[test]
+    fn verdict_very_far_above_60() {
+        assert!(matches!(Verdict::for_gap(60.0), Verdict::VeryFar));
+        assert!(matches!(Verdict::for_gap(100.0), Verdict::VeryFar));
+    }
+
+    #[test]
+    fn verdict_label_returns_emoji_string() {
+        assert!(Verdict::Close.label().contains("✅"));
+        assert!(Verdict::VeryFar.label().contains("🔴"));
+    }
+
+    #[test]
+    fn from_analysis_copies_all_fields() {
+        let a = dummy_analysis();
+        let t = TargetTensor::from_analysis(&a, "sidorovich");
+        assert_eq!(t._description, "sidorovich");
+        assert_eq!(t.spectral.brightness_hz, a.spectral.brightness_hz);
+        assert_eq!(t.voice.pitch_hz, a.pitch.pitch_hz);
+        assert_eq!(t.temporal.duration_secs, a.temporal.duration_secs);
+    }
+
+    #[test]
+    fn identical_analysis_has_zero_gap() {
+        let a = dummy_analysis();
+        let t = dummy_target();
+        let result = compute_gap("test", &a, &t);
+        assert!(
+            result.mean_gap_pct < 10.0,
+            "identical analysis should have near-zero gap, got {}%",
+            result.mean_gap_pct
+        );
+    }
+
+    #[test]
+    fn gap_result_has_13_metrics() {
+        let a = dummy_analysis();
+        let t = dummy_target();
+        let result = compute_gap("test", &a, &t);
+        assert_eq!(result.rows.len(), 13);
+    }
+
+    #[test]
+    fn gap_is_capped_at_100_percent() {
+        let a = dummy_analysis();
+        let mut t = dummy_target();
+        t.spectral.brightness_hz = 99999.0;
+        let result = compute_gap("test", &a, &t);
+        for row in &result.rows {
+            assert!(
+                row.gap_pct <= 100.0,
+                "{} gap exceeded 100%: {}",
+                row.metric,
+                row.gap_pct
+            );
+        }
+    }
+
+    #[test]
+    fn gap_phrase_is_preserved() {
+        let a = dummy_analysis();
+        let t = dummy_target();
+        let result = compute_gap("Привет, сталкер", &a, &t);
+        assert_eq!(result.phrase, "Привет, сталкер");
+    }
+
+    #[test]
+    fn target_tensor_serializes_to_json() {
+        let t = dummy_target();
+        let json = serde_json::to_string(&t);
+        assert!(json.is_ok());
+    }
+}

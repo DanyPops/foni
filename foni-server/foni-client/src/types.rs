@@ -264,3 +264,52 @@ fn default_speed() -> u32 {
 fn default_true() -> bool {
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synth_request_new_defaults() {
+        let req = SynthRequest::new("Hello");
+        assert_eq!(req.text, "Hello");
+        assert!(req.dsp);
+        assert!(req.prosody);
+        assert_eq!(req.speed, 150);
+    }
+
+    #[test]
+    fn synth_request_serializes() {
+        let req = SynthRequest::new("test");
+        let json = serde_json::to_string(&req).expect("serialize");
+        assert!(json.contains("\"text\":\"test\""));
+    }
+
+    #[test]
+    fn synth_request_deserializes_minimal() {
+        let json = r#"{"text":"hello"}"#;
+        let req: SynthRequest = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(req.text, "hello");
+        assert!(req.dsp);
+    }
+
+    #[test]
+    fn wire_opts_default_is_neutral() {
+        let opts = WireOpts::default();
+        assert_eq!(opts.tilt_low_db, None);
+        assert_eq!(opts.tilt_high_db, None);
+    }
+
+    #[test]
+    fn wire_opts_serializes_skipping_none() {
+        let opts = WireOpts::default();
+        let json = serde_json::to_string(&opts).expect("serialize");
+        assert!(!json.contains("tilt_low_db"));
+    }
+
+    #[test]
+    fn wav_data_default_is_empty() {
+        let wav = WavData::default();
+        assert!(wav.0.is_empty());
+    }
+}

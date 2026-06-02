@@ -264,3 +264,56 @@ pub fn analyse_fast(samples: &[f32], sample_rate: u32) -> AnalysisResult {
         energy_envelope,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sine_1s(freq: f32) -> Vec<f32> {
+        (0..16000)
+            .map(|i| (2.0 * std::f32::consts::PI * freq * i as f32 / 16000.0).sin() * 0.5)
+            .collect()
+    }
+
+    #[test]
+    fn analyse_returns_valid_metrics_for_sine() {
+        let result = analyse(&sine_1s(440.0), 16000);
+        assert!(result.loudness.rms_db < 0.0);
+        assert!(result.spectral.brightness_hz > 0.0);
+        assert!(result.temporal.duration_secs > 0.9);
+    }
+
+    #[test]
+    fn analyse_silence_has_low_rms() {
+        let silence = vec![0.0; 16000];
+        let result = analyse(&silence, 16000);
+        assert!(result.loudness.rms_db < -60.0);
+    }
+
+    #[test]
+    fn analyse_fast_skips_pitch() {
+        let result = analyse_fast(&sine_1s(440.0), 16000);
+        assert_eq!(result.pitch.pitch_hz, 0.0);
+        assert!(result.f0_contour.is_empty());
+        assert!(result.spectral.brightness_hz > 0.0);
+    }
+
+    #[test]
+    fn analyse_fast_produces_energy_envelope() {
+        let result = analyse_fast(&sine_1s(440.0), 16000);
+        assert!(!result.energy_envelope.is_empty());
+    }
+
+    #[test]
+    fn analyse_short_signal_does_not_panic() {
+        let short = vec![0.1; 100];
+        let _result = analyse(&short, 16000);
+    }
+
+    #[test]
+    fn analyse_result_serializes_to_json() {
+        let result = analyse(&sine_1s(440.0), 16000);
+        let json = serde_json::to_string(&result);
+        assert!(json.is_ok());
+    }
+}
