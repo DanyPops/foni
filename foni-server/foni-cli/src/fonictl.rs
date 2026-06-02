@@ -146,6 +146,9 @@ enum Cmd {
         /// Compare against reference WAV
         #[arg(long)]
         vs: Option<PathBuf>,
+        /// Show per-frame spectral distance timeline (requires --vs)
+        #[arg(long)]
+        timeline: bool,
     },
 
     /// Batch A/B/C/N tuning — run all presets through the compare pipeline, rank by gap
@@ -1586,8 +1589,10 @@ fn cmd_status(server: &str) {
     }
 }
 
-fn cmd_analyse(file: &PathBuf, vs: Option<&PathBuf>) {
-    use foni_analyse::{analyse, compute_gap, decode_wav, format_gap_table, TargetTensor};
+fn cmd_analyse(file: &PathBuf, vs: Option<&PathBuf>, show_timeline: bool) {
+    use foni_analyse::{
+        analyse, compute_gap, decode_wav, format_gap_table, spectral_timeline, TargetTensor,
+    };
 
     let bytes = std::fs::read(file).unwrap_or_else(|e| {
         eprintln!("error: {e}");
@@ -1606,6 +1611,28 @@ fn cmd_analyse(file: &PathBuf, vs: Option<&PathBuf>) {
         let tensor = TargetTensor::from_analysis(&ref_an, ref_path.to_str().unwrap_or("?"));
         let gap = compute_gap(file.to_str().unwrap_or("?"), &analysis, &tensor);
         println!("{}", format_gap_table(&gap));
+
+        if show_timeline {
+            let tl = spectral_timeline::compare(
+                &ref_wav.samples,
+                &wav.samples,
+                ref_wav.sample_rate,
+                &ref_an.f0_contour,
+                &analysis.f0_contour,
+                &ref_an.energy_envelope,
+                &analysis.energy_envelope,
+            );
+            println!("\nSpectral gap (LSD): {:.1} dB", tl.spectral_gap);
+            println!("Pitch shape match:  {:.3}", tl.pitch_match);
+            println!("Energy shape match: {:.3}", tl.energy_match);
+            println!("\nWorst frames:");
+            for (idx, gap_db) in &tl.worst_frames {
+                let time_s = *idx as f32 * tl.frame_step_secs;
+                println!("  {:.2}s  gap={:.1} dB", time_s, gap_db);
+            }
+            let spark = spectral_timeline::sparkline(&tl.spectral_gap_per_frame, 5);
+            println!("\nPer-frame distance:\n  {spark}");
+        }
     } else {
         println!("Duration:  {:.2}s", analysis.temporal.duration_secs);
         println!("RMS:       {:.1} dBFS", analysis.loudness.rms_db);
@@ -2655,8 +2682,8 @@ fn main() {
         Cmd::Play { file } => {
             play_wav(&file);
         }
-        Cmd::Analyse { file, vs } => {
-            cmd_analyse(&file, vs.as_ref());
+        Cmd::Analyse { file, vs, timeline } => {
+            cmd_analyse(&file, vs.as_ref(), timeline);
         }
         Cmd::Compare {
             studio,
