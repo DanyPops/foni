@@ -24,6 +24,7 @@ export interface AudioProcessor {
 /** Plays a PCM WAV buffer to the system audio device. */
 export interface Player {
   play(buf: Buffer): Promise<void>;
+  stop?(): void;
 }
 
 // ─── Factory types (injected into FoniEngine) ─────────────────────────────────
@@ -53,6 +54,9 @@ export interface FacadePort {
   readonly backendName: string;
   speak(text: string, log?: (msg: string) => void): Promise<void>;
   synthesizeOnly(text: string): Promise<void>;
+  synthesizeRaw(text: string): Promise<Buffer | null>;
+  playFiller(buf: Buffer): void;
+  stopFiller(): void;
   stop(): void;
   swapTranslator(t: Translator): void;
   swapProcessor(p: AudioProcessor): void;

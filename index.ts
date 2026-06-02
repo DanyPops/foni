@@ -257,7 +257,10 @@ export default async function (pi: ExtensionAPI) {
     engine.onMessageEnd();
   });
 
-  pi.on("agent_start", () => engine.reset());
+  pi.on("agent_start", () => {
+    engine.reset();
+    engine.startFiller();
+  });
 
   // ── TUI panel helpers ──────────────────────────────────────────────────────
 

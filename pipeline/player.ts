@@ -18,6 +18,7 @@ function detectBin(): PlayerBin | null {
 
 export class SystemPlayer implements Player {
   private bin: PlayerBin | null | undefined;
+  private activeProc: ReturnType<typeof spawn> | null = null;
 
   detected(): PlayerBin | null {
     if (this.bin === undefined) this.bin = detectBin();
@@ -37,13 +38,20 @@ export class SystemPlayer implements Player {
       // args[bin] is always defined: bin is a PlayerBin key and args covers all variants
       const argv = args[bin] ?? [];
       const proc = spawn(bin, argv, { stdio: ["pipe", "ignore", "ignore"] });
-      // stdin is guaranteed non-null when stdio[0] = "pipe"
+      this.activeProc = proc;
       const stdin = proc.stdin;
-      if (!stdin) { resolve(); return; }  // guard: makes guarantee compiler-visible
+      if (!stdin) { this.activeProc = null; resolve(); return; }
       stdin.write(buf);
       stdin.end();
-      proc.on("close", () => resolve());
-      proc.on("error", () => resolve());
+      proc.on("close", () => { this.activeProc = null; resolve(); });
+      proc.on("error", () => { this.activeProc = null; resolve(); });
     });
+  }
+
+  stop(): void {
+    if (this.activeProc) {
+      this.activeProc.kill("SIGTERM");
+      this.activeProc = null;
+    }
   }
 }

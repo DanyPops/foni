@@ -38,6 +38,14 @@ export class NullPlayer implements Player {
   async play(b: Buffer): Promise<void> { this.played.push(b.length); }
 }
 
+export class SpyPlayer implements Player {
+  readonly played: Buffer[] = [];
+  stopped = false;
+  async play(b: Buffer): Promise<void> { this.played.push(b); }
+  stop(): void { this.stopped = true; }
+  reset(): void { this.played.length = 0; this.stopped = false; }
+}
+
 // ─── Timing player ────────────────────────────────────────────────────────────
 
 export interface PlayEvent { t: number; bytes: number; }

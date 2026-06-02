@@ -77,3 +77,26 @@ export const PREWARM_RU: readonly string[] = [
   // Interjections
   "Ого!", "Ах!", "Ух!", "Эх.",
 ];
+
+// ─── Filler phrases ───────────────────────────────────────────────────────────
+//
+// Short Russian hesitation sounds synthesised via RVC during prewarm.
+// Played between agent_start and first onDelta to fill the thinking gap.
+// Ordered from subtle humming → verbal fillers → self-talk.
+
+export const FILLER_PHRASES: readonly string[] = [
+  // Hesitation sounds — pure vocalisations
+  "Мм...",
+  "Хм...",
+  "Эм...",
+  // Verbal fillers — floor-holding words
+  "Ну...",
+  "Так...",
+  "Значит...",
+  "Это...",
+  // Self-talk — thinking out loud
+  "Так, так, так...",
+  "Ну, значит...",
+  "Сейчас, сейчас...",
+  "Дай подумать...",
+];
