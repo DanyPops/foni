@@ -15,6 +15,116 @@ use serde::{Deserialize, Serialize};
 use crate::dsp::controller::ControllerConfig;
 use crate::state::RvcParams;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EspeakConfig {
+    pub speed: u32,
+    pub voice: String,
+    pub rate_pct: i32,
+}
+
+impl Default for EspeakConfig {
+    fn default() -> Self {
+        Self {
+            speed: 135,
+            voice: "ru".into(),
+            rate_pct: 93,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BreaksConfig {
+    pub comma: u32,
+    pub semicolon: u32,
+    pub colon: u32,
+    pub dash: u32,
+    pub ellipsis: u32,
+    pub period: u32,
+    pub exclamation: u32,
+    pub question: u32,
+}
+
+impl Default for BreaksConfig {
+    fn default() -> Self {
+        Self {
+            comma: 150,
+            semicolon: 220,
+            colon: 180,
+            dash: 200,
+            ellipsis: 420,
+            period: 320,
+            exclamation: 300,
+            question: 350,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DspDefaults {
+    pub tilt_low_db: f32,
+    pub tilt_high_db: f32,
+    pub rms_target_lufs: f32,
+    pub compression_ratio: f32,
+    pub compression_attack_ms: f32,
+    pub compression_release_ms: f32,
+    pub compression_threshold_db: f32,
+    pub compression_makeup_db: f32,
+    pub presence_db: f32,
+    pub de_ess_db: f32,
+    pub de_harsh_db: f32,
+    pub de_harsh_freq: f32,
+    pub de_harsh_q: f32,
+    pub vibrato_freq: f32,
+    pub vibrato_depth: f32,
+    pub highpass_freq: f32,
+    pub warmth_boost_db: f32,
+    pub warmth_freq: f32,
+    pub air_boost_db: f32,
+    pub air_freq: f32,
+    pub reverb_ms: f32,
+    pub reverb_decay: f32,
+    pub reverb_in_gain: f32,
+    pub reverb_out_gain: f32,
+    pub fade_secs: f32,
+    pub limiter_db: f32,
+}
+
+impl Default for DspDefaults {
+    fn default() -> Self {
+        Self {
+            tilt_low_db: 0.0,
+            tilt_high_db: 0.0,
+            rms_target_lufs: -16.0,
+            compression_ratio: 2.0,
+            compression_attack_ms: 10.0,
+            compression_release_ms: 80.0,
+            compression_threshold_db: -12.0,
+            compression_makeup_db: 2.0,
+            presence_db: 0.0,
+            de_ess_db: 2.0,
+            de_harsh_db: -2.0,
+            de_harsh_freq: 3500.0,
+            de_harsh_q: 0.7,
+            vibrato_freq: 0.0,
+            vibrato_depth: 0.0,
+            highpass_freq: 80.0,
+            warmth_boost_db: 0.0,
+            warmth_freq: 200.0,
+            air_boost_db: 0.0,
+            air_freq: 8000.0,
+            reverb_ms: 6.0,
+            reverb_decay: 0.03,
+            reverb_in_gain: 0.8,
+            reverb_out_gain: 0.88,
+            fade_secs: 0.04,
+            limiter_db: -1.0,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ServerConfig {
@@ -23,6 +133,9 @@ pub struct ServerConfig {
     #[serde(default)]
     pub params: RvcParams,
     pub controller: ControllerConfig,
+    pub espeak: EspeakConfig,
+    pub breaks: BreaksConfig,
+    pub dsp: DspDefaults,
     pub addr: String,
 }
 
@@ -33,17 +146,22 @@ impl Default for ServerConfig {
             model: None,
             params: RvcParams::default(),
             controller: ControllerConfig::default(),
+            espeak: EspeakConfig::default(),
+            breaks: BreaksConfig::default(),
+            dsp: DspDefaults::default(),
             addr: "0.0.0.0:5050".into(),
         }
     }
 }
 
-/// The resolved config with typed paths.
 pub struct ResolvedConfig {
     pub models_dir: PathBuf,
     pub initial_model: Option<String>,
     pub params: RvcParams,
     pub controller: ControllerConfig,
+    pub espeak: EspeakConfig,
+    pub breaks: BreaksConfig,
+    pub dsp: DspDefaults,
     pub addr: String,
 }
 
@@ -80,6 +198,9 @@ impl ServerConfig {
             initial_model,
             params: cfg.params,
             controller: cfg.controller,
+            espeak: cfg.espeak,
+            breaks: cfg.breaks,
+            dsp: cfg.dsp,
             addr,
         }
     }

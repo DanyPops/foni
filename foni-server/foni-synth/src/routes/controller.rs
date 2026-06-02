@@ -1,6 +1,7 @@
 use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;
 
+use crate::config::{BreaksConfig, DspDefaults, EspeakConfig};
 use crate::dsp::controller::ControllerConfig;
 use crate::state::AppState;
 
@@ -15,6 +16,9 @@ pub async fn get_controller(State(state): State<AppState>) -> Json<serde_json::V
         .controller_enabled
         .load(std::sync::atomic::Ordering::Relaxed);
     let cfg = state.0.controller_config.read().await;
+    let espeak = state.0.espeak_config.read().await;
+    let breaks = state.0.breaks_config.read().await;
+    let dsp_defaults = state.0.dsp_defaults.read().await;
     Json(serde_json::json!({
         "dsp": dsp,
         "controller": ctrl,
@@ -22,6 +26,9 @@ pub async fn get_controller(State(state): State<AppState>) -> Json<serde_json::V
         "targets": cfg.targets,
         "sensitivity": cfg.sensitivity,
         "ranges": cfg.ranges,
+        "espeak": *espeak,
+        "breaks": *breaks,
+        "dsp_defaults": *dsp_defaults,
     }))
 }
 
@@ -30,6 +37,9 @@ pub struct ControllerUpdate {
     pub dsp: Option<bool>,
     pub enabled: Option<bool>,
     pub damping: Option<f32>,
+    pub espeak: Option<EspeakConfig>,
+    pub breaks: Option<BreaksConfig>,
+    pub dsp_defaults: Option<DspDefaults>,
     pub targets: Option<crate::dsp::controller::ControllerTargets>,
     pub sensitivity: Option<crate::dsp::controller::ControllerSensitivity>,
     pub ranges: Option<crate::dsp::controller::ControllerRanges>,
@@ -78,6 +88,17 @@ pub async fn set_controller(
     if let Some(r) = req.ranges {
         cfg.ranges = r;
     }
+    drop(cfg);
+
+    if let Some(e) = req.espeak {
+        *state.0.espeak_config.write().await = e;
+    }
+    if let Some(b) = req.breaks {
+        *state.0.breaks_config.write().await = b;
+    }
+    if let Some(d) = req.dsp_defaults {
+        *state.0.dsp_defaults.write().await = d;
+    }
 
     let enabled = state
         .0
@@ -87,6 +108,5 @@ pub async fn set_controller(
     Ok(Json(serde_json::json!({
         "status": "ok",
         "enabled": enabled,
-        "damping": cfg.damping,
     })))
 }

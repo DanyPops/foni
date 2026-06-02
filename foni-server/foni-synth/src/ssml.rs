@@ -1,5 +1,7 @@
 // Rule-based plain-text → SSML prosody annotator for Russian espeak-ng.
 // Ports pipeline/prosody.ts: deterministic per-sentence rate/pitch/range variation.
+use crate::config::BreaksConfig;
+
 pub const BREAK_COMMA_MS: u32 = 150;
 pub const BREAK_SEMICOLON_MS: u32 = 220;
 pub const BREAK_COLON_MS: u32 = 180;
@@ -8,6 +10,33 @@ pub const BREAK_ELLIPSIS_MS: u32 = 420;
 pub const BREAK_PERIOD_MS: u32 = 320;
 pub const BREAK_EXCLAIM_MS: u32 = 300;
 pub const BREAK_QUESTION_MS: u32 = 350;
+
+impl BreaksConfig {
+    pub fn comma(&self) -> u32 {
+        self.comma
+    }
+    pub fn semicolon(&self) -> u32 {
+        self.semicolon
+    }
+    pub fn colon(&self) -> u32 {
+        self.colon
+    }
+    pub fn dash(&self) -> u32 {
+        self.dash
+    }
+    pub fn ellipsis(&self) -> u32 {
+        self.ellipsis
+    }
+    pub fn period(&self) -> u32 {
+        self.period
+    }
+    pub fn exclamation(&self) -> u32 {
+        self.exclamation
+    }
+    pub fn question(&self) -> u32 {
+        self.question
+    }
+}
 
 fn brk(ms: u32) -> String {
     format!(r#"<break time="{}ms"/>"#, ms)
