@@ -213,6 +213,24 @@ enum Cmd {
         #[arg(short, long, default_value = "sidorovich")]
         model: String,
     },
+
+    /// Change one knob, re-synthesize, show before/after spectral diff
+    Diff {
+        /// Knob name (tiltHighDb, rmsTargetLufs, presenceDb, compressionRatio, deHarshDb, etc.)
+        knob: String,
+        /// New value for the knob
+        #[arg(allow_negative_numbers = true)]
+        value: f32,
+        /// Phrase to synthesize
+        #[arg(default_value = "Подойди-ка, надо тебе ситуацию прояснить.")]
+        text: String,
+        /// Reference WAV
+        #[arg(long)]
+        vs: PathBuf,
+        /// RVC model name
+        #[arg(short, long, default_value = "sidorovich")]
+        model: String,
+    },
 }
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -2296,6 +2314,154 @@ fn cmd_tune_auto(
     println!("    Final gap score:  {:.1}%", top3[0].1);
 }
 
+fn cmd_diff(server: &str, knob: &str, value: f32, phrase: &str, ref_path: &PathBuf, model: &str) {
+    use foni_analyse::{analyse, compute_gap, decode_wav, spectral_timeline, TargetTensor};
+    use std::io::Write;
+
+    let ref_bytes = std::fs::read(ref_path).expect("cannot read reference WAV");
+    let ref_wav = decode_wav(&ref_bytes).expect("reference WAV");
+    let ref_an = analyse(&ref_wav.samples, ref_wav.sample_rate);
+
+    print!("  Synthesizing base (RVC only)\u{2026} ");
+    std::io::stdout().flush().ok();
+    let base_wav = match synth_request(
+        server,
+        phrase,
+        model,
+        "ru",
+        135,
+        false,
+        serde_json::json!({}),
+    ) {
+        Ok(b) => {
+            println!("ok");
+            b
+        }
+        Err(e) => {
+            eprintln!("\n  \u{2717} {e}");
+            return;
+        }
+    };
+
+    // Before: neutral DSP
+    let neutral = serde_json::json!({});
+    let before_wav = process_request(server, &base_wav, neutral).expect("neutral DSP");
+    let before_decoded = decode_wav(&before_wav).expect("before WAV");
+    let before_an = analyse(&before_decoded.samples, before_decoded.sample_rate);
+    let before_gap = compute_gap(
+        "before",
+        &before_an,
+        &TargetTensor::from_analysis(&ref_an, "ref"),
+    );
+    let before_tl = spectral_timeline::compare(
+        &ref_wav.samples,
+        &before_decoded.samples,
+        ref_wav.sample_rate,
+        &ref_an.f0_contour,
+        &before_an.f0_contour,
+        &ref_an.energy_envelope,
+        &before_an.energy_envelope,
+    );
+
+    // After: with the knob changed
+    let after_opts = serde_json::json!({ knob: value });
+    let after_wav = process_request(server, &base_wav, after_opts).expect("modified DSP");
+    let after_decoded = decode_wav(&after_wav).expect("after WAV");
+    let after_an = analyse(&after_decoded.samples, after_decoded.sample_rate);
+    let after_gap = compute_gap(
+        "after",
+        &after_an,
+        &TargetTensor::from_analysis(&ref_an, "ref"),
+    );
+    let after_tl = spectral_timeline::compare(
+        &ref_wav.samples,
+        &after_decoded.samples,
+        ref_wav.sample_rate,
+        &ref_an.f0_contour,
+        &after_an.f0_contour,
+        &ref_an.energy_envelope,
+        &after_an.energy_envelope,
+    );
+
+    // Report
+    let gap_delta = after_gap.mean_gap_pct - before_gap.mean_gap_pct;
+    let lsd_delta = after_tl.spectral_gap - before_tl.spectral_gap;
+    let gap_arrow = if gap_delta < -1.0 {
+        "\u{2193} improved"
+    } else if gap_delta > 1.0 {
+        "\u{2191} worse"
+    } else {
+        "\u{2194} same"
+    };
+    let lsd_arrow = if lsd_delta < -0.5 {
+        "\u{2193} improved"
+    } else if lsd_delta > 0.5 {
+        "\u{2191} worse"
+    } else {
+        "\u{2194} same"
+    };
+
+    println!("\n  {knob} = {value}");
+    println!("  \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+    println!(
+        "  {:>20}  {:>8}  {:>8}  {:>8}",
+        "", "Before", "After", "Delta"
+    );
+    println!(
+        "  {:>20}  {:>7.1}%  {:>7.1}%  {:>+7.1}%  {}",
+        "Mean gap", before_gap.mean_gap_pct, after_gap.mean_gap_pct, gap_delta, gap_arrow
+    );
+    println!(
+        "  {:>20}  {:>7.1} dB {:>7.1} dB {:>+7.1} dB {}",
+        "Spectral gap (LSD)", before_tl.spectral_gap, after_tl.spectral_gap, lsd_delta, lsd_arrow
+    );
+    println!(
+        "  {:>20}  {:>8.3}  {:>8.3}",
+        "Pitch match", before_tl.pitch_match, after_tl.pitch_match
+    );
+    println!(
+        "  {:>20}  {:>8.3}  {:>8.3}",
+        "Energy match", before_tl.energy_match, after_tl.energy_match
+    );
+
+    // Per-metric deltas for the most important ones
+    let metrics = [
+        "Loudness",
+        "Brightness",
+        "Bass balance",
+        "Vocal darkness",
+        "Breathiness",
+    ];
+    println!();
+    for name in &metrics {
+        let b = before_gap.rows.iter().find(|r| r.metric == *name);
+        let a = after_gap.rows.iter().find(|r| r.metric == *name);
+        if let (Some(b), Some(a)) = (b, a) {
+            let d = a.gap_pct - b.gap_pct;
+            let arrow = if d < -1.0 {
+                "\u{2193}"
+            } else if d > 1.0 {
+                "\u{2191}"
+            } else {
+                "="
+            };
+            println!(
+                "  {:>20}  {:>7.1}%  {:>7.1}%  {:>+7.1}%  {}",
+                name, b.gap_pct, a.gap_pct, d, arrow
+            );
+        }
+    }
+
+    println!(
+        "\n  Before: {}",
+        spectral_timeline::sparkline(&before_tl.spectral_gap_per_frame, 5)
+    );
+    println!(
+        "  After:  {}",
+        spectral_timeline::sparkline(&after_tl.spectral_gap_per_frame, 5)
+    );
+}
+
 fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str) {
     use foni_analyse::{analyse_fast, decode_wav};
     use std::io::Write;
@@ -2721,6 +2887,15 @@ fn main() {
         }
         Cmd::Calibrate { text, vs, model } => {
             cmd_calibrate(server, &text, &vs, &model);
+        }
+        Cmd::Diff {
+            knob,
+            value,
+            text,
+            vs,
+            model,
+        } => {
+            cmd_diff(server, &knob, value, &text, &vs, &model);
         }
         Cmd::Mix {
             text,
