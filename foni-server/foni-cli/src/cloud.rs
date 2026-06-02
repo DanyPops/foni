@@ -195,7 +195,40 @@ impl CloudProvider for RunPodProvider {
         job_id: &str,
         on_chunk: &mut dyn FnMut(serde_json::Value),
     ) {
-        let _ = self.stream_job(endpoint_id, job_id, |v| on_chunk(v));
+        // Wait for worker to cold-start — poll status until not IN_QUEUE
+        for attempt in 1..=120 {
+            match RunPodProvider::job_status(self, endpoint_id, job_id) {
+                Ok(s) => {
+                    let status = s["status"].as_str().unwrap_or("");
+                    match status {
+                        "COMPLETED" => {
+                            if let Some(output) = s.get("output") {
+                                on_chunk(output.clone());
+                            }
+                            return;
+                        }
+                        "FAILED" | "CANCELLED" | "TIMED_OUT" => {
+                            eprintln!("    Job {status}");
+                            return;
+                        }
+                        "IN_PROGRESS" => {
+                            // Worker is running — try streaming
+                            let _ = self.stream_job(endpoint_id, job_id, |v| on_chunk(v));
+                            return;
+                        }
+                        _ => {
+                            eprint!("\r    Waiting for worker... [{attempt}] {status}   ");
+                            std::io::Write::flush(&mut std::io::stderr()).ok();
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("    Status error: {e}");
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        }
+        eprintln!("    Timed out waiting for worker (10 min)");
     }
 }
 
