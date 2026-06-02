@@ -266,7 +266,11 @@ pub async fn synthesize(
     // DSP chain — with reactive controller if enabled.
     // The controller measures the raw RVC output and corrects DSP params to match
     // the Sidorovich studio target. Falls back to defaults if controller is disabled.
-    let final_wav = if req.dsp {
+    let dsp_globally_enabled = state
+        .0
+        .dsp_enabled
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let final_wav = if req.dsp && dsp_globally_enabled {
         let (base_opts, _pad) = req.opts.into_smoothing();
         let controller_enabled = state
             .0

@@ -21,6 +21,8 @@ export interface SynthBackendOpts {
   model?:   string;
   /** Apply per-sentence SSML prosody variation (rate/range). Default: true */
   prosody?: boolean;
+  /** Apply server-side DSP chain. Default: true. Set false for raw RVC output. */
+  dsp?:     boolean;
   /** Global rate override %. */
   ratePct?: number;
   /** Global range override: "x-high" | "high" | "medium" | "low". */
@@ -50,7 +52,7 @@ export class SynthBackend implements TTSBackend {
       speed:   voiceOpts.speed ? Math.round(voiceOpts.speed * 130) : 150,
       model:   this.opts.model ?? "sidorovich",
       prosody: this.opts.prosody ?? true,
-      dsp:     true,
+      dsp:     this.opts.dsp ?? true,
     };
 
     if (this.opts.ratePct !== undefined) body["rate_pct"] = this.opts.ratePct;

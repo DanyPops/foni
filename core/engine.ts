@@ -102,7 +102,13 @@ export class FoniEngine {
 
   // ── Play queue ──────────────────────────────────────────────────────────────
 
+  muted = false;
+
+  mute(): void   { this.muted = true;  this.stop(); }
+  unmute(): void { this.muted = false; }
+
   enqueue(text: string): void {
+    if (this.muted) return;
     this.audioQueue = this.audioQueue.then(async () => {
       const f = await this.ensureFacade();
       if (f) await f.speak(text);
