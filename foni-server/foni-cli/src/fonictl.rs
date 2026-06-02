@@ -1,6 +1,8 @@
 // fonictl — foni-synth command-line factory.
 // Commands: synth | studio | samples | listen | mix | status | play | analyse
 
+pub mod cloud;
+pub mod cost;
 mod tui;
 
 use std::{path::PathBuf, process::Command};
@@ -234,6 +236,12 @@ enum Cmd {
         model: String,
     },
 
+    /// RunPod cloud GPU management — balance, GPUs, spend history
+    Cloud {
+        #[command(subcommand)]
+        action: CloudAction,
+    },
+
     /// Test a Rhai policy script against canned analysis data (no server needed)
     TestPolicy {
         /// Path to the .rhai script
@@ -328,6 +336,16 @@ enum Cmd {
         #[arg(short, long, default_value = "sidorovich")]
         model: String,
     },
+}
+
+#[derive(Subcommand)]
+enum CloudAction {
+    /// Show account balance, active pods, lifetime spend
+    Status,
+    /// List available GPUs ranked by price
+    Gpus,
+    /// Show cost history from the local ledger
+    History,
 }
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -2787,6 +2805,112 @@ const SNAPSHOT_PHRASES: &[&str] = &[
     "Удачи, браток. На Зоне удача нужна.",
 ];
 
+fn cmd_cloud(action: CloudAction) {
+    use cloud::{CloudProvider, RunPodProvider};
+    use owo_colors::OwoColorize;
+    use tabled::{settings::Style, Table, Tabled};
+
+    let api_key = match std::env::var("RUNPOD_API_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => {
+            eprintln!("  RUNPOD_API_KEY not set. Export it in your shell.");
+            return;
+        }
+    };
+    let provider = RunPodProvider::new(&api_key);
+
+    match action {
+        CloudAction::History => {
+            let ledger = cost::load();
+            if ledger.entries.is_empty() {
+                eprintln!("  No training runs yet.");
+                return;
+            }
+            #[derive(Tabled)]
+            struct HistRow {
+                #[tabled(rename = "Date")]
+                date: String,
+                #[tabled(rename = "GPU")]
+                gpu: String,
+                #[tabled(rename = "Duration")]
+                duration: String,
+                #[tabled(rename = "Cost")]
+                cost: String,
+                #[tabled(rename = "Model")]
+                model: String,
+            }
+            let rows: Vec<HistRow> = ledger
+                .entries
+                .iter()
+                .map(|e| HistRow {
+                    date: e.timestamp[..10].to_string(),
+                    gpu: e.gpu.clone(),
+                    duration: format!("{:.0} min", e.duration_min),
+                    cost: format!("${:.2}", e.cost_usd),
+                    model: e.model_name.clone(),
+                })
+                .collect();
+            println!("{}", Table::new(&rows).with(Style::rounded()));
+            println!("  Total: ${:.2}", ledger.total());
+            return;
+        }
+        _ => {}
+    }
+
+    let api_key = match std::env::var("RUNPOD_API_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => {
+            eprintln!("  RUNPOD_API_KEY not set. Export it in your shell.");
+            return;
+        }
+    };
+    let provider = RunPodProvider::new(&api_key);
+
+    match action {
+        CloudAction::Status => {
+            let status = provider.balance().expect("RunPod API");
+            let ledger = cost::load();
+            println!("  Balance:        ${:.2}", status.balance);
+            println!("  Spend/hr:       ${:.4}", status.spend_per_hr);
+            println!("  Active pods:    {}", status.active_pods);
+            println!(
+                "  Lifetime spend: ${:.2} ({} runs)",
+                ledger.total(),
+                ledger.count()
+            );
+        }
+        CloudAction::Gpus => {
+            #[derive(Tabled)]
+            struct GpuRow {
+                #[tabled(rename = "GPU")]
+                name: String,
+                #[tabled(rename = "VRAM")]
+                vram: String,
+                #[tabled(rename = "Price/hr")]
+                price: String,
+            }
+            let mut gpus = provider.gpu_types().expect("RunPod API");
+            gpus.retain(|g| g.memory_gb >= 12 && g.community_price.is_some());
+            gpus.sort_by(|a, b| {
+                a.community_price
+                    .partial_cmp(&b.community_price)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let rows: Vec<GpuRow> = gpus
+                .iter()
+                .take(15)
+                .map(|g| GpuRow {
+                    name: g.display_name.clone(),
+                    vram: format!("{}GB", g.memory_gb),
+                    price: format!("${:.2}", g.community_price.unwrap_or(0.0)),
+                })
+                .collect();
+            println!("{}", Table::new(&rows).with(Style::rounded()));
+        }
+        CloudAction::History => unreachable!(),
+    }
+}
+
 fn cmd_test_policy(script: &PathBuf, brightness: f32, loudness: f32, bass: f32, darkness: f32) {
     use owo_colors::OwoColorize;
     use tabled::{settings::Style, Table, Tabled};
@@ -3799,6 +3923,9 @@ fn main() {
         }
         Cmd::Corpus { dir, vs } => {
             cmd_corpus(&dir, vs.as_ref());
+        }
+        Cmd::Cloud { action } => {
+            cmd_cloud(action);
         }
         Cmd::TestPolicy {
             script,
