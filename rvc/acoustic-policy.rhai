@@ -48,7 +48,44 @@ fn correct(measured, target, knobs, damping) {
     knobs
 }
 
-// Clamp a value between lo and hi
+// Emotion-adaptive target offsets.
+// Call before correct() to shift the target for expressive speech.
+// Returns a modified target map.
+fn emotion_offset(target, emotion) {
+    if emotion == "angry" {
+        target.brightness_hz += 100.0;
+        target.loudness_db += 1.0;
+    } else if emotion == "tired" {
+        target.vocal_darkness_db_oct -= 1.0;
+        target.loudness_db -= 1.0;
+    } else if emotion == "excited" {
+        target.brightness_hz += 50.0;
+        target.loudness_db += 0.5;
+    } else if emotion == "sarcastic" {
+        target.brightness_hz += 80.0;
+    }
+    // neutral: no change
+    target
+}
+
+// Quality gate: return true if synthesis is acceptable, false if broken.
+// Called after synthesis but before playback.
+fn quality_ok(measured) {
+    // Reject if almost no voiced content (silence/noise)
+    if measured.voice_presence < 0.15 {
+        return false;
+    }
+    // Reject if extremely bright (artifact)
+    if measured.brightness_hz > 5000.0 {
+        return false;
+    }
+    // Reject if nearly silent
+    if measured.loudness_db < -30.0 {
+        return false;
+    }
+    true
+}
+
 fn clamp(val, lo, hi) {
     if val < lo { lo } else if val > hi { hi } else { val }
 }
