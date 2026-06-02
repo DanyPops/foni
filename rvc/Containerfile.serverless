@@ -1,17 +1,15 @@
-FROM docker.io/runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+FROM docker.io/python:3.11-slim
 
 WORKDIR /workspace
 
-# RVC training dependencies (no fairseq — use pre-extracted features)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 ffmpeg build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir \
-    runpod \
-    faiss-cpu \
-    librosa \
-    soundfile \
-    praat-parselmouth \
-    pyworld \
-    onnx \
-    numpy
+    torch==2.5.1+cpu --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir \
+    runpod faiss-cpu librosa soundfile praat-parselmouth pyworld onnx numpy
 
 COPY handler.py /workspace/handler.py
 
