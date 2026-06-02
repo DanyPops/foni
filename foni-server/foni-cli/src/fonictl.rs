@@ -2994,13 +2994,7 @@ fn cmd_train(
     }
 
     let gpu = std::env::var("FONI_GPU").unwrap_or_else(|_| "NVIDIA RTX A5000".into());
-    let is_blackwell =
-        gpu.contains("Blackwell") || gpu.contains("PRO 6000") || gpu.contains("PRO 4500");
-    let image = if is_blackwell {
-        "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"
-    } else {
-        "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
-    };
+    let image = "ghcr.io/danypops/foni-rvc-train:blackwell";
 
     eprintln!("  [4/7] Creating pod ({gpu})\u{2026}");
     let pod = match provider.create_pod(cloud::CreatePodOpts {
@@ -3025,28 +3019,10 @@ fn cmd_train(
         }
     };
 
-    // Wait for pod to get public IP + SSH port
-    eprintln!("  Waiting for pod\u{2026}");
-    let pod_info = match provider.wait_for_pod(&pod.id, 300) {
-        Ok(info) => info,
-        Err(e) => {
-            eprintln!("  \u{2717} {e}");
-            provider.terminate_pod(&pod.id).ok();
-            return;
-        }
-    };
-    let ssh = match cloud::PodSsh::from_pod(&pod_info) {
-        Ok(s) => {
-            eprintln!("    SSH: root@{}:{}", s.ip, s.port);
-            s
-        }
-        Err(e) => {
-            eprintln!("  \u{2717} {e}");
-            provider.terminate_pod(&pod.id).ok();
-            return;
-        }
-    };
-    if let Err(e) = ssh.wait_for_ssh(120) {
+    // Wait for SSH via RunPod proxy
+    let ssh = cloud::PodSsh::new(&pod.id);
+    eprintln!("  Waiting for SSH\u{2026}");
+    if let Err(e) = ssh.wait_for_ssh(300) {
         eprintln!("  \u{2717} {e}");
         provider.terminate_pod(&pod.id).ok();
         return;

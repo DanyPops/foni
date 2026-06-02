@@ -282,63 +282,39 @@ impl RunPodProvider {
 /// SSH connection info extracted from a pod.
 #[derive(Debug, Clone)]
 pub struct PodSsh {
-    pub ip: String,
-    pub port: u16,
+    pub pod_id: String,
+    pub account_hash: String,
 }
 
 impl PodSsh {
-    pub fn from_pod(pod: &serde_json::Value) -> Result<Self, String> {
-        let ip = pod["publicIp"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .ok_or("pod has no public IP — need supportPublicIp + 22/tcp")?
-            .to_string();
-        let port = pod
-            .get("portMappings")
-            .and_then(|m| m.get("22"))
-            .and_then(|p| p.as_u64())
-            .ok_or("pod has no SSH port mapping — expose 22/tcp")? as u16;
-        Ok(Self { ip, port })
+    pub fn new(pod_id: &str) -> Self {
+        let hash = std::env::var("RUNPOD_SSH_HASH").unwrap_or_else(|_| "64410b27".into());
+        Self {
+            pod_id: pod_id.to_string(),
+            account_hash: hash,
+        }
     }
 
     fn ssh_dest(&self) -> String {
-        format!("root@{}", self.ip)
+        format!("{}-{}@ssh.runpod.io", self.pod_id, self.account_hash)
     }
 
-    fn scp_dest(&self) -> String {
-        format!("root@{}", self.ip)
-    }
-
-    fn ssh_opts(&self) -> Vec<String> {
+    fn ssh_opts() -> Vec<String> {
         vec![
+            "-tt".into(),
             "-o".into(),
             "StrictHostKeyChecking=no".into(),
             "-o".into(),
             "UserKnownHostsFile=/dev/null".into(),
             "-o".into(),
             "LogLevel=ERROR".into(),
-            "-p".into(),
-            self.port.to_string(),
-        ]
-    }
-
-    fn scp_opts(&self) -> Vec<String> {
-        vec![
-            "-o".into(),
-            "StrictHostKeyChecking=no".into(),
-            "-o".into(),
-            "UserKnownHostsFile=/dev/null".into(),
-            "-o".into(),
-            "LogLevel=ERROR".into(),
-            "-P".into(),
-            self.port.to_string(),
         ]
     }
 
     pub fn run(&self, cmd: &str) -> Result<(), String> {
         eprintln!("  \u{25b6} {}", cmd);
         let status = std::process::Command::new("ssh")
-            .args(self.ssh_opts())
+            .args(Self::ssh_opts())
             .arg(&self.ssh_dest())
             .arg(cmd)
             .status()
@@ -352,21 +328,24 @@ impl PodSsh {
 
     pub fn upload(&self, local: &str, remote: &str) -> Result<(), String> {
         eprintln!("  \u{2191} {} \u{2192} {}", local, remote);
-        let mut args = self.scp_opts();
-        if std::path::Path::new(local).is_dir() {
-            args.push("-r".into());
-        }
-        args.push(local.into());
-        args.push(format!("{}:{}", self.scp_dest(), remote));
-        let status = std::process::Command::new("scp")
-            .args(&args)
+        self.run(&format!("mkdir -p {remote}"))?;
+        let tar = std::process::Command::new("tar")
+            .args(["czf", "-", "-C", local, "."])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("tar: {e}"))?;
+        let status = std::process::Command::new("ssh")
+            .args(Self::ssh_opts())
+            .arg(&self.ssh_dest())
+            .arg(format!("tar xzf - -C {remote}"))
+            .stdin(tar.stdout.ok_or("no tar stdout")?)
             .status()
-            .map_err(|e| format!("scp: {e}"))?;
+            .map_err(|e| format!("ssh upload: {e}"))?;
         if status.success() {
             Ok(())
         } else {
             Err(format!(
-                "scp upload failed: exit {}",
+                "upload failed: exit {}",
                 status.code().unwrap_or(-1)
             ))
         }
@@ -374,18 +353,34 @@ impl PodSsh {
 
     pub fn download(&self, remote: &str, local: &str) -> Result<(), String> {
         eprintln!("  \u{2193} {} \u{2192} {}", remote, local);
-        let mut args = self.scp_opts();
-        args.push(format!("{}:{}", self.scp_dest(), remote));
-        args.push(local.into());
-        let status = std::process::Command::new("scp")
-            .args(&args)
+        let local_path = std::path::Path::new(local);
+        let local_dir = local_path.parent().unwrap_or(std::path::Path::new("."));
+        std::fs::create_dir_all(local_dir).ok();
+        let remote_dir = std::path::Path::new(remote)
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or("/");
+        let remote_name = std::path::Path::new(remote)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file");
+        let ssh = std::process::Command::new("ssh")
+            .args(Self::ssh_opts())
+            .arg(&self.ssh_dest())
+            .arg(format!("tar czf - -C {remote_dir} {remote_name}"))
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("ssh download: {e}"))?;
+        let status = std::process::Command::new("tar")
+            .args(["xzf", "-", "-C", local_dir.to_str().unwrap_or(".")])
+            .stdin(ssh.stdout.ok_or("no ssh stdout")?)
             .status()
-            .map_err(|e| format!("scp: {e}"))?;
+            .map_err(|e| format!("tar: {e}"))?;
         if status.success() {
             Ok(())
         } else {
             Err(format!(
-                "scp download failed: exit {}",
+                "download failed: exit {}",
                 status.code().unwrap_or(-1)
             ))
         }
