@@ -1860,54 +1860,71 @@ fn cmd_compare(
         ("Crest factor dB", |r| r.crest, "speech 12–16 dB"),
     ];
 
-    println!("\n╬══ Studio vs Synthetic ({} matched pairs) ═════════════════════════════════════════════", n as usize);
-    println!(
-        "║ {:<24}  {:>10}  {:>10}  {:>7}  {}",
-        "Metric", "Studio", "Synthetic", "Gap%", "Target"
-    );
-    println!("║ {}", "─".repeat(74));
+    {
+        use owo_colors::OwoColorize;
+        use tabled::{settings::Style, Table, Tabled};
+        #[derive(Tabled)]
+        struct CompareRow {
+            #[tabled(rename = "Metric")]
+            metric: String,
+            #[tabled(rename = "Studio")]
+            studio: String,
+            #[tabled(rename = "Synthetic")]
+            synthetic: String,
+            #[tabled(rename = "Gap%")]
+            gap: String,
+            #[tabled(rename = "Verdict")]
+            verdict: String,
+        }
+        let mut rows = Vec::new();
+        for (label, f, _target) in metrics {
+            let sv = mean(&sr, *f);
+            let yv = mean(&sy, *f);
+            let gap = if sv.abs() > 0.01 {
+                ((yv - sv).abs() / sv.abs() * 100.0)
+            } else {
+                0.0
+            };
+            let verdict = if gap < 10.0 {
+                "close".green().to_string()
+            } else if gap < 25.0 {
+                "near".yellow().to_string()
+            } else if gap < 50.0 {
+                "far".red().to_string()
+            } else {
+                "very far".red().bold().to_string()
+            };
+            rows.push(CompareRow {
+                metric: label.to_string(),
+                studio: format!("{sv:.1}"),
+                synthetic: format!("{yv:.1}"),
+                gap: format!("{gap:.1}%"),
+                verdict,
+            });
+        }
+        let naturalness_scores: Vec<f32> = sr.iter().filter_map(|r| r.naturalness).collect();
+        if !naturalness_scores.is_empty() {
+            let mean_nat = naturalness_scores.iter().sum::<f32>() / naturalness_scores.len() as f32;
+            let verdict = if mean_nat > 4.0 {
+                "good".green().to_string()
+            } else if mean_nat > 3.0 {
+                "ok".yellow().to_string()
+            } else {
+                "poor".red().to_string()
+            };
+            rows.push(CompareRow {
+                metric: "Naturalness (1-5)".into(),
+                studio: "5.0".into(),
+                synthetic: format!("{mean_nat:.2}"),
+                gap: String::new(),
+                verdict,
+            });
+        }
+        println!("\n  Studio vs Synthetic ({} matched pairs)", n as usize);
+        println!("{}", Table::new(&rows).with(Style::rounded()));
+    }
+    println!("  Synthetic WAVs: {}/", out_dir.display());
 
-    for (label, f, target) in metrics {
-        let sv = mean(&sr, *f);
-        let yv = mean(&sy, *f);
-        let gap = if sv.abs() > 0.01 {
-            ((yv - sv).abs() / sv.abs() * 100.0)
-        } else {
-            0.0
-        };
-        let verdict = if gap < 10.0 {
-            "✅"
-        } else if gap < 25.0 {
-            "🟡"
-        } else if gap < 50.0 {
-            "🟠"
-        } else {
-            "🔴"
-        };
-        println!(
-            "║ {:<24}  {:>10.1}  {:>10.1}  {:>6.1}%  {} {}",
-            label, sv, yv, gap, verdict, target
-        );
-    }
-    // ViSQOL MOS-LQO mean across all pairs
-    let naturalness_scores: Vec<f32> = sr.iter().filter_map(|r| r.naturalness).collect();
-    if !naturalness_scores.is_empty() {
-        let mean_nat = naturalness_scores.iter().sum::<f32>() / naturalness_scores.len() as f32;
-        let verdict = if mean_nat > 4.0 {
-            "✅"
-        } else if mean_nat > 3.5 {
-            "🟡"
-        } else if mean_nat > 3.0 {
-            "🟠"
-        } else {
-            "🔴"
-        };
-        println!(
-            "║ {:<24}  {:>10}  {:>10.2}  {:>7}  {}",
-            "Naturalness (1–5)", "5.0", mean_nat, "", verdict
-        );
-    }
-    println!("╚═════════════════════════════════════════════════════════════════════════════");
     println!("  Synthetic WAVs: {}/", out_dir.display());
 }
 
@@ -2596,52 +2613,65 @@ fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str) {
         metrics.len()
     );
 
-    // Header
-    print!("  {:>20}", "");
-    for m in &metrics {
-        print!("  {:>12}", m.name.split('_').next().unwrap_or(m.name));
-    }
-    println!();
-    println!(
-        "  {:>20}  {}",
-        "(baseline)",
-        base_vals
-            .iter()
-            .map(|v| format!("{:>12.2}", v))
-            .collect::<Vec<_>>()
-            .join("  ")
-    );
-    println!();
-
-    // Sensitivity: \u{2202}metric / \u{2202}knob
+    // Sensitivity table
     let mut matrix: Vec<Vec<f32>> = Vec::new();
 
-    for knob in &knobs {
-        let mut perturbed = neutral.clone();
-        perturbed[knob.key] = serde_json::json!(knob.step);
-        // For rmsTargetLufs, baseline is -16, step is +4 \u{2192} -12
-        if knob.key == "rmsTargetLufs" {
-            perturbed[knob.key] = serde_json::json!(-16.0 + knob.step);
+    {
+        use tabled::{settings::Style, Table, Tabled};
+        #[derive(Tabled)]
+        struct CalRow {
+            #[tabled(rename = "Knob")]
+            knob: String,
+            #[tabled(rename = "Brightness")]
+            brightness: String,
+            #[tabled(rename = "Loudness")]
+            loudness: String,
+            #[tabled(rename = "Bass")]
+            bass: String,
+            #[tabled(rename = "Darkness")]
+            darkness: String,
+            #[tabled(rename = "Breathiness")]
+            breathiness: String,
         }
 
-        let wav = process_request(server, &base, perturbed).expect("perturbed DSP");
-        let decoded = decode_wav(&wav).expect("perturbed WAV");
-        let a = analyse_fast(&decoded.samples, decoded.sample_rate);
-        let vals: Vec<f32> = metrics.iter().map(|m| (m.extract)(&a)).collect();
+        let mut rows = vec![CalRow {
+            knob: "(baseline)".into(),
+            brightness: format!("{:.2}", base_vals[0]),
+            loudness: format!("{:.2}", base_vals[1]),
+            bass: format!("{:.2}", base_vals[2]),
+            darkness: format!("{:.2}", base_vals[3]),
+            breathiness: format!("{:.2}", base_vals[4]),
+        }];
 
-        let sensitivities: Vec<f32> = vals
-            .iter()
-            .zip(&base_vals)
-            .map(|(v, b)| (v - b) / knob.step.abs())
-            .collect();
+        for knob in &knobs {
+            let mut perturbed = neutral.clone();
+            perturbed[knob.key] = serde_json::json!(knob.step);
+            if knob.key == "rmsTargetLufs" {
+                perturbed[knob.key] = serde_json::json!(-16.0 + knob.step);
+            }
 
-        print!("  {:>20}", format!("{}={:+.0}", knob.name, knob.step));
-        for s in &sensitivities {
-            print!("  {:>12.3}", s);
+            let wav = process_request(server, &base, perturbed).expect("perturbed DSP");
+            let decoded = decode_wav(&wav).expect("perturbed WAV");
+            let a = analyse_fast(&decoded.samples, decoded.sample_rate);
+            let vals: Vec<f32> = metrics.iter().map(|m| (m.extract)(&a)).collect();
+            let sens: Vec<f32> = vals
+                .iter()
+                .zip(&base_vals)
+                .map(|(v, b)| (v - b) / knob.step.abs())
+                .collect();
+
+            rows.push(CalRow {
+                knob: format!("{}={:+.0}", knob.name, knob.step),
+                brightness: format!("{:.3}", sens[0]),
+                loudness: format!("{:.3}", sens[1]),
+                bass: format!("{:.3}", sens[2]),
+                darkness: format!("{:.3}", sens[3]),
+                breathiness: format!("{:.3}", sens[4]),
+            });
+            matrix.push(sens);
         }
-        println!();
 
-        matrix.push(sensitivities);
+        println!("{}", Table::new(&rows).with(Style::rounded()));
     }
 
     // Print as Rust const for controller.rs
@@ -2767,35 +2797,52 @@ fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
     //   FHE (1–5 kHz)  Bass:  2384±164 Hz     Baritone: 2454±206 Hz
     //   Crest factor   Conversational speech: 12–16 dB
     //   Voiced ratio   Clean studio speech:    60–85 %
-    //
-    println!("╬══ Sidorovich corpus fingerprint ({n} files) ══════════════════════════════════╗");
-    println!("║                                                                               ║");
-    println!(
-        "║  Pitch:              {:>7.1} Hz    target bass-baritone: 80–130 Hz          ║",
-        f0
-    );
-    println!(
-        "║  Pitch variation:    {:>7.1} Hz    higher = more expressive                 ║",
-        f0_std
-    );
-    println!(
-        "║  Brightness:         {:>7.0} Hz    bass<2400  baritone 2400–2700 Hz         ║",
-        centroid
-    );
-    println!(
-        "║  RMS level:          {:>7.1} dBFS  studio reference: −13 to −15 dBFS        ║",
-        rms
-    );
-    println!(
-        "║  Crest factor:       {:>7.1} dB    conversational speech: 12–16 dB          ║",
-        crest
-    );
-    println!(
-        "║  Voiced ratio:       {:>7.1} %     studio speech: 60–85 %                   ║",
-        voiced * 100.0
-    );
-    println!("║                                                                               ║");
-    println!("╚═══════════════════════════════════════════════════════════════════════════════╝");
+    {
+        use tabled::{settings::Style, Table, Tabled};
+        #[derive(Tabled)]
+        struct CorpusRow {
+            #[tabled(rename = "Metric")]
+            metric: &'static str,
+            #[tabled(rename = "Value")]
+            value: String,
+            #[tabled(rename = "Target")]
+            target: &'static str,
+        }
+        let rows = vec![
+            CorpusRow {
+                metric: "Pitch",
+                value: format!("{f0:.1} Hz"),
+                target: "bass-baritone: 80-130 Hz",
+            },
+            CorpusRow {
+                metric: "Pitch variation",
+                value: format!("{f0_std:.1} Hz"),
+                target: "higher = more expressive",
+            },
+            CorpusRow {
+                metric: "Brightness",
+                value: format!("{centroid:.0} Hz"),
+                target: "bass<2400, baritone 2400-2700",
+            },
+            CorpusRow {
+                metric: "RMS level",
+                value: format!("{rms:.1} dBFS"),
+                target: "studio: -13 to -15 dBFS",
+            },
+            CorpusRow {
+                metric: "Crest factor",
+                value: format!("{crest:.1} dB"),
+                target: "speech: 12-16 dB",
+            },
+            CorpusRow {
+                metric: "Voiced ratio",
+                value: format!("{:.1}%", voiced * 100.0),
+                target: "studio: 60-85%",
+            },
+        ];
+        println!("\n  Sidorovich corpus fingerprint ({n} files, {elapsed} ms, {errs} skipped)");
+        println!("{}", Table::new(&rows).with(Style::rounded()));
+    }
 
     if let Some(ref_path) = vs {
         let ref_bytes = std::fs::read(ref_path).expect("cannot read reference");
