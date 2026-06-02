@@ -176,3 +176,106 @@ async fn params_roundtrip() {
     let patched: Value = resp.json().await.unwrap();
     assert_eq!(patched["f0up_key"].as_i64(), Some(new_key));
 }
+
+#[tokio::test]
+async fn controller_get_returns_config() {
+    let base = start_server().await;
+    let resp: Value = reqwest::get(format!("{base}/controller"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(resp.get("dsp").is_some(), "missing 'dsp' field");
+    assert!(
+        resp.get("controller").is_some(),
+        "missing 'controller' field"
+    );
+    assert!(resp.get("damping").is_some(), "missing 'damping' field");
+    assert!(resp.get("targets").is_some(), "missing 'targets' field");
+    assert!(resp.get("espeak").is_some(), "missing 'espeak' field");
+    assert!(resp.get("breaks").is_some(), "missing 'breaks' field");
+}
+
+#[tokio::test]
+async fn controller_toggle_dsp() {
+    let base = start_server().await;
+    let client = reqwest::Client::new();
+
+    // Disable DSP
+    let resp: Value = client
+        .post(format!("{base}/controller"))
+        .json(&json!({"dsp": false}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "ok");
+
+    // Verify
+    let state: Value = reqwest::get(format!("{base}/controller"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(state["dsp"], false);
+
+    // Re-enable
+    client
+        .post(format!("{base}/controller"))
+        .json(&json!({"dsp": true}))
+        .send()
+        .await
+        .unwrap();
+    let state: Value = reqwest::get(format!("{base}/controller"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(state["dsp"], true);
+}
+
+#[tokio::test]
+async fn controller_update_damping() {
+    let base = start_server().await;
+    let client = reqwest::Client::new();
+
+    client
+        .post(format!("{base}/controller"))
+        .json(&json!({"damping": 0.42}))
+        .send()
+        .await
+        .unwrap();
+
+    let state: Value = reqwest::get(format!("{base}/controller"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let damping = state["damping"].as_f64().unwrap();
+    assert!((damping - 0.42).abs() < 0.01, "damping={damping}");
+}
+
+#[tokio::test]
+async fn controller_reload_returns_policy_status() {
+    let base = start_server().await;
+    let client = reqwest::Client::new();
+
+    let resp: Value = client
+        .post(format!("{base}/controller"))
+        .json(&json!({"reload": true}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(resp["status"], "reloaded from disk");
+    // policy field indicates whether a script was found
+    assert!(resp.get("policy").is_some());
+}

@@ -72,62 +72,68 @@ impl PolicyEngine {
         let measured = rhai::Map::from([
             (
                 "brightness_hz".into(),
-                Dynamic::from(analysis.spectral.brightness_hz),
+                Dynamic::from(analysis.spectral.brightness_hz as f64),
             ),
             (
                 "loudness_db".into(),
-                Dynamic::from(analysis.loudness.rms_db),
+                Dynamic::from(analysis.loudness.rms_db as f64),
             ),
             (
                 "bass_balance_db".into(),
-                Dynamic::from(analysis.spectral.bass_balance_db),
+                Dynamic::from(analysis.spectral.bass_balance_db as f64),
             ),
             (
                 "vocal_darkness_db_oct".into(),
-                Dynamic::from(analysis.spectral.vocal_darkness_db_oct),
+                Dynamic::from(analysis.spectral.vocal_darkness_db_oct as f64),
             ),
             (
                 "breathiness_db".into(),
-                Dynamic::from(analysis.voice.breathiness_db),
+                Dynamic::from(analysis.voice.breathiness_db as f64),
             ),
             (
                 "voice_presence".into(),
-                Dynamic::from(analysis.pitch.voice_presence),
+                Dynamic::from(analysis.pitch.voice_presence as f64),
             ),
         ]);
 
         let target = rhai::Map::from([
             (
                 "brightness_hz".into(),
-                Dynamic::from(cfg.targets.brightness_hz),
+                Dynamic::from(cfg.targets.brightness_hz as f64),
             ),
-            ("loudness_db".into(), Dynamic::from(cfg.targets.loudness_db)),
+            (
+                "loudness_db".into(),
+                Dynamic::from(cfg.targets.loudness_db as f64),
+            ),
             (
                 "bass_balance_db".into(),
-                Dynamic::from(cfg.targets.bass_balance_db),
+                Dynamic::from(cfg.targets.bass_balance_db as f64),
             ),
             (
                 "vocal_darkness_db_oct".into(),
-                Dynamic::from(cfg.targets.vocal_darkness_db_oct),
+                Dynamic::from(cfg.targets.vocal_darkness_db_oct as f64),
             ),
         ]);
 
         let knobs = rhai::Map::from([
-            ("tilt_high_db".into(), Dynamic::from(base.tilt_high_db)),
-            ("tilt_low_db".into(), Dynamic::from(base.tilt_low_db)),
+            (
+                "tilt_high_db".into(),
+                Dynamic::from(base.tilt_high_db as f64),
+            ),
+            ("tilt_low_db".into(), Dynamic::from(base.tilt_low_db as f64)),
             (
                 "rms_target_lufs".into(),
-                Dynamic::from(base.rms_target_lufs),
+                Dynamic::from(base.rms_target_lufs as f64),
             ),
-            ("presence_db".into(), Dynamic::from(base.presence_db)),
-            ("de_harsh_db".into(), Dynamic::from(base.de_harsh_db)),
+            ("presence_db".into(), Dynamic::from(base.presence_db as f64)),
+            ("de_harsh_db".into(), Dynamic::from(base.de_harsh_db as f64)),
             (
                 "compression_ratio".into(),
-                Dynamic::from(base.compression_ratio),
+                Dynamic::from(base.compression_ratio as f64),
             ),
         ]);
 
-        let damping = Dynamic::from(cfg.damping);
+        let damping = Dynamic::from(cfg.damping as f64);
 
         let mut scope = rhai::Scope::new();
         let result: rhai::Map = self
@@ -200,4 +206,137 @@ pub fn find_policy_script() -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsp::controller::{
+        ControllerConfig, ControllerRanges, ControllerSensitivity, ControllerTargets,
+    };
+    use crate::dsp::SmoothingOptions;
+    use std::io::Write;
+
+    fn test_script() -> String {
+        r#"
+fn correct(measured, target, knobs, damping) {
+    let err = target.brightness_hz - measured.brightness_hz;
+    if err < -100.0 {
+        knobs.tilt_high_db = knobs.tilt_high_db - 3.0 * damping;
+    }
+    knobs
+}
+
+fn clamp(val, lo, hi) {
+    if val < lo { lo } else if val > hi { hi } else { val }
+}
+"#
+        .to_string()
+    }
+
+    fn write_temp_script(content: &str) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::with_suffix(".rhai").unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        f.flush().unwrap();
+        f
+    }
+
+    fn make_analysis(brightness: f32, loudness: f32) -> AnalysisResult {
+        let mut a = AnalysisResult {
+            temporal: Default::default(),
+            loudness: Default::default(),
+            spectral: Default::default(),
+            pitch: Default::default(),
+            voice: Default::default(),
+            f0_contour: vec![],
+            energy_envelope: vec![],
+        };
+        a.spectral.brightness_hz = brightness;
+        a.loudness.rms_db = loudness;
+        a
+    }
+
+    #[test]
+    fn load_missing_file_returns_none() {
+        assert!(PolicyEngine::load(Path::new("/nonexistent/policy.rhai")).is_none());
+    }
+
+    #[test]
+    fn load_valid_script_returns_some() {
+        let f = write_temp_script(&test_script());
+        let engine = PolicyEngine::load(f.path());
+        assert!(engine.is_some());
+    }
+
+    #[test]
+    fn load_invalid_script_returns_none() {
+        let f = write_temp_script("fn broken( { }");
+        let engine = PolicyEngine::load(f.path());
+        assert!(engine.is_none());
+    }
+
+    #[test]
+    fn evaluate_applies_brightness_correction() {
+        let f = write_temp_script(&test_script());
+        let engine = PolicyEngine::load(f.path()).unwrap();
+        let cfg = ControllerConfig::default();
+        let base = SmoothingOptions::default();
+        let analysis = make_analysis(3400.0, -13.5);
+
+        let result = engine.evaluate(&analysis, &base, &cfg);
+        assert!(result.is_some(), "evaluate returned None");
+        let (opts, snap) = result.unwrap();
+        assert!(
+            opts.tilt_high_db < base.tilt_high_db,
+            "script should cut treble for bright signal: got {}",
+            opts.tilt_high_db
+        );
+        assert!(snap.enabled);
+    }
+
+    #[test]
+    fn evaluate_no_correction_when_on_target() {
+        let f = write_temp_script(&test_script());
+        let engine = PolicyEngine::load(f.path()).unwrap();
+        let cfg = ControllerConfig::default();
+        let base = SmoothingOptions::default();
+        let analysis = make_analysis(2288.0, -13.5);
+
+        let (opts, _) = engine.evaluate(&analysis, &base, &cfg).unwrap();
+        assert!(
+            (opts.tilt_high_db - base.tilt_high_db).abs() < 0.01,
+            "on-target should not change tilt: delta={}",
+            opts.tilt_high_db - base.tilt_high_db
+        );
+    }
+
+    #[test]
+    fn reload_picks_up_changed_script() {
+        let f = write_temp_script(&test_script());
+        let mut engine = PolicyEngine::load(f.path()).unwrap();
+
+        // Overwrite with a different script
+        std::fs::write(
+            f.path(),
+            r#"
+fn correct(measured, target, knobs, damping) {
+    knobs.tilt_high_db = -99.0;
+    knobs
+}
+fn clamp(val, lo, hi) { val }
+"#,
+        )
+        .unwrap();
+
+        assert!(engine.reload());
+        let cfg = ControllerConfig::default();
+        let base = SmoothingOptions::default();
+        let analysis = make_analysis(3400.0, -13.5);
+        let (opts, _) = engine.evaluate(&analysis, &base, &cfg).unwrap();
+        assert!(
+            (opts.tilt_high_db - (-99.0)).abs() < 0.01,
+            "reload should use new script: got {}",
+            opts.tilt_high_db
+        );
+    }
 }
