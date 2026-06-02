@@ -214,6 +214,24 @@ enum Cmd {
         model: String,
     },
 
+    /// Sweep a knob through multiple values, show comparison table
+    Sweep {
+        /// Knob name
+        knob: String,
+        /// Values to try (comma-separated, e.g. "-6,-10,-14")
+        #[arg(allow_hyphen_values = true)]
+        values: String,
+        /// Phrase to synthesize
+        #[arg(default_value = "Подойди-ка, надо тебе ситуацию прояснить.")]
+        text: String,
+        /// Reference WAV
+        #[arg(long)]
+        vs: PathBuf,
+        /// RVC model name
+        #[arg(short, long, default_value = "sidorovich")]
+        model: String,
+    },
+
     /// Change one knob, re-synthesize, show before/after spectral diff
     Diff {
         /// Knob name (tiltHighDb, rmsTargetLufs, presenceDb, compressionRatio, deHarshDb, etc.)
@@ -2331,6 +2349,156 @@ fn cmd_tune_auto(
     eprintln!("    Final gap score:  {:.1}%", top3[0].1);
 }
 
+fn cmd_sweep(
+    server: &str,
+    knob: &str,
+    values_csv: &str,
+    phrase: &str,
+    ref_path: &PathBuf,
+    model: &str,
+) {
+    use foni_analyse::{analyse, compute_gap, decode_wav, spectral_timeline, TargetTensor};
+    use owo_colors::OwoColorize;
+    use std::io::Write;
+    use tabled::{settings::Style, Table, Tabled};
+
+    let values: Vec<f32> = values_csv
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    if values.is_empty() {
+        eprintln!("No valid values in '{values_csv}'");
+        return;
+    }
+
+    let ref_bytes = std::fs::read(ref_path).expect("cannot read reference");
+    let ref_wav = decode_wav(&ref_bytes).expect("reference WAV");
+    let ref_an = analyse(&ref_wav.samples, ref_wav.sample_rate);
+    let tensor = TargetTensor::from_analysis(&ref_an, "ref");
+
+    eprint!("  Synthesizing base (RVC only)\u{2026} ");
+    std::io::stdout().flush().ok();
+    let base_wav = match synth_request(
+        server,
+        phrase,
+        model,
+        "ru",
+        135,
+        false,
+        serde_json::json!({}),
+    ) {
+        Ok(b) => {
+            eprintln!("ok");
+            b
+        }
+        Err(e) => {
+            eprintln!("\n  \u{2717} {e}");
+            return;
+        }
+    };
+
+    #[derive(Tabled)]
+    struct SweepRow {
+        #[tabled(rename = "Value")]
+        value: String,
+        #[tabled(rename = "Mean gap")]
+        mean_gap: String,
+        #[tabled(rename = "LSD")]
+        lsd: String,
+        #[tabled(rename = "Brightness")]
+        brightness: String,
+        #[tabled(rename = "Loudness")]
+        loudness: String,
+        #[tabled(rename = "Bass")]
+        bass: String,
+        #[tabled(rename = "Darkness")]
+        darkness: String,
+        #[tabled(rename = "Breathiness")]
+        breathiness: String,
+    }
+
+    // Baseline (neutral DSP)
+    let neutral_wav = process_request(server, &base_wav, serde_json::json!({})).expect("neutral");
+    let neutral_dec = decode_wav(&neutral_wav).expect("neutral WAV");
+    let neutral_an = analyse(&neutral_dec.samples, neutral_dec.sample_rate);
+    let neutral_gap = compute_gap("neutral", &neutral_an, &tensor);
+    let neutral_tl = spectral_timeline::compare(
+        &ref_wav.samples,
+        &neutral_dec.samples,
+        ref_wav.sample_rate,
+        &ref_an.f0_contour,
+        &neutral_an.f0_contour,
+        &ref_an.energy_envelope,
+        &neutral_an.energy_envelope,
+    );
+
+    let metric_gap = |gap: &foni_analyse::GapResult, name: &str| -> f32 {
+        gap.rows
+            .iter()
+            .find(|r| r.metric == name)
+            .map(|r| r.gap_pct)
+            .unwrap_or(0.0)
+    };
+
+    let mut rows = vec![SweepRow {
+        value: "(neutral)".dimmed().to_string(),
+        mean_gap: format!("{:.1}%", neutral_gap.mean_gap_pct),
+        lsd: format!("{:.1}", neutral_tl.spectral_gap),
+        brightness: format!("{:.1}%", metric_gap(&neutral_gap, "Brightness")),
+        loudness: format!("{:.1}%", metric_gap(&neutral_gap, "Loudness")),
+        bass: format!("{:.1}%", metric_gap(&neutral_gap, "Bass balance")),
+        darkness: format!("{:.1}%", metric_gap(&neutral_gap, "Vocal darkness")),
+        breathiness: format!("{:.1}%", metric_gap(&neutral_gap, "Breathiness")),
+    }];
+
+    let mut best_val = f32::NAN;
+    let mut best_gap = neutral_gap.mean_gap_pct;
+
+    for &val in &values {
+        let opts = serde_json::json!({ knob: val });
+        let wav = process_request(server, &base_wav, opts).expect("sweep DSP");
+        let dec = decode_wav(&wav).expect("sweep WAV");
+        let an = analyse(&dec.samples, dec.sample_rate);
+        let gap = compute_gap("sweep", &an, &tensor);
+        let tl = spectral_timeline::compare(
+            &ref_wav.samples,
+            &dec.samples,
+            ref_wav.sample_rate,
+            &ref_an.f0_contour,
+            &an.f0_contour,
+            &ref_an.energy_envelope,
+            &an.energy_envelope,
+        );
+
+        if gap.mean_gap_pct < best_gap {
+            best_gap = gap.mean_gap_pct;
+            best_val = val;
+        }
+
+        rows.push(SweepRow {
+            value: format!("{val}"),
+            mean_gap: format!("{:.1}%", gap.mean_gap_pct),
+            lsd: format!("{:.1}", tl.spectral_gap),
+            brightness: format!("{:.1}%", metric_gap(&gap, "Brightness")),
+            loudness: format!("{:.1}%", metric_gap(&gap, "Loudness")),
+            bass: format!("{:.1}%", metric_gap(&gap, "Bass balance")),
+            darkness: format!("{:.1}%", metric_gap(&gap, "Vocal darkness")),
+            breathiness: format!("{:.1}%", metric_gap(&gap, "Breathiness")),
+        });
+    }
+
+    eprintln!("\n  Sweep: {knob}");
+    println!("{}", Table::new(&rows).with(Style::rounded()));
+    if best_val.is_finite() {
+        eprintln!(
+            "\n  Best: {} = {}  (mean gap {:.1}%)",
+            knob.bold(),
+            best_val,
+            best_gap
+        );
+    }
+}
+
 fn cmd_diff(server: &str, knob: &str, value: f32, phrase: &str, ref_path: &PathBuf, model: &str) {
     use foni_analyse::{analyse, compute_gap, decode_wav, spectral_timeline, TargetTensor};
     use std::io::Write;
@@ -2958,6 +3126,15 @@ fn main() {
         }
         Cmd::Calibrate { text, vs, model } => {
             cmd_calibrate(server, &text, &vs, &model);
+        }
+        Cmd::Sweep {
+            knob,
+            values,
+            text,
+            vs,
+            model,
+        } => {
+            cmd_sweep(server, &knob, &values, &text, &vs, &model);
         }
         Cmd::Diff {
             knob,
