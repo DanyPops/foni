@@ -53,6 +53,12 @@ pub trait CloudProvider: Send + Sync {
         webhook: Option<&str>,
     ) -> Result<ServerlessJob, String>;
     fn job_status(&self, endpoint_id: &str, job_id: &str) -> Result<serde_json::Value, String>;
+    fn stream_progress(
+        &self,
+        endpoint_id: &str,
+        job_id: &str,
+        on_chunk: &mut dyn FnMut(serde_json::Value),
+    );
 }
 
 /// Real RunPod backend — calls the GraphQL API.
@@ -181,6 +187,15 @@ impl CloudProvider for RunPodProvider {
 
     fn job_status(&self, endpoint_id: &str, job_id: &str) -> Result<serde_json::Value, String> {
         RunPodProvider::job_status(self, endpoint_id, job_id)
+    }
+
+    fn stream_progress(
+        &self,
+        endpoint_id: &str,
+        job_id: &str,
+        on_chunk: &mut dyn FnMut(serde_json::Value),
+    ) {
+        let _ = self.stream_job(endpoint_id, job_id, |v| on_chunk(v));
     }
 }
 
@@ -347,6 +362,89 @@ impl CloudProvider for MockProvider {
             "output": { "model_url": "mock://model.pth" }
         }))
     }
+
+    fn stream_progress(
+        &self,
+        _endpoint_id: &str,
+        _job_id: &str,
+        _on_chunk: &mut dyn FnMut(serde_json::Value),
+    ) {
+        // No-op in production mock. Tests use SimulatedProvider below.
+    }
+}
+
+/// Test-only provider that simulates a timed training run with progress.
+#[cfg(test)]
+pub struct SimulatedProvider {
+    pub epochs: u32,
+    pub delay_ms: u64,
+}
+
+#[cfg(test)]
+impl CloudProvider for SimulatedProvider {
+    fn balance(&self) -> Result<AccountStatus, String> {
+        Ok(AccountStatus {
+            balance: 10.0,
+            spend_per_hr: 0.22,
+            active_pods: 1,
+        })
+    }
+    fn gpu_types(&self) -> Result<Vec<GpuType>, String> {
+        Ok(vec![GpuType {
+            id: "SIM_3090".into(),
+            display_name: "RTX 3090 (sim)".into(),
+            memory_gb: 24,
+            community_price: Some(0.22),
+            secure_price: None,
+        }])
+    }
+    fn create_pod(&self, _opts: CreatePodOpts) -> Result<Pod, String> {
+        Ok(Pod {
+            id: "sim-pod".into(),
+            cost_per_hr: 0.22,
+            status: "RUNNING".into(),
+            gpu_name: "RTX 3090".into(),
+        })
+    }
+    fn pod_status(&self, _pod_id: &str) -> Result<String, String> {
+        Ok("RUNNING".into())
+    }
+    fn terminate_pod(&self, _pod_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn submit_job(
+        &self,
+        _ep: &str,
+        _input: serde_json::Value,
+        _wh: Option<&str>,
+    ) -> Result<ServerlessJob, String> {
+        Ok(ServerlessJob {
+            id: "sim-job".into(),
+            status: "IN_PROGRESS".into(),
+        })
+    }
+    fn job_status(&self, _ep: &str, _job_id: &str) -> Result<serde_json::Value, String> {
+        Ok(
+            serde_json::json!({ "status": "COMPLETED", "output": { "model_url": "sim://model.pth" } }),
+        )
+    }
+    fn stream_progress(
+        &self,
+        _ep: &str,
+        _job_id: &str,
+        on_chunk: &mut dyn FnMut(serde_json::Value),
+    ) {
+        for epoch in 1..=self.epochs {
+            std::thread::sleep(std::time::Duration::from_millis(self.delay_ms));
+            let loss = 0.05 * (1.0 - epoch as f64 / self.epochs as f64) + 0.001;
+            on_chunk(serde_json::json!({
+                "epoch": epoch,
+                "total_epochs": self.epochs,
+                "loss": loss,
+                "status": if epoch == self.epochs { "COMPLETED" } else { "IN_PROGRESS" },
+            }));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -410,5 +508,57 @@ mod tests {
         let status = m.job_status("ep-123", "job-1").unwrap();
         assert_eq!(status["status"], "COMPLETED");
         assert!(status["output"]["model_url"].as_str().is_some());
+    }
+
+    #[test]
+    fn simulated_provider_streams_all_epochs() {
+        let sim = SimulatedProvider {
+            epochs: 5,
+            delay_ms: 10,
+        };
+        let mut received = Vec::new();
+        sim.stream_progress("ep", "job", &mut |chunk| {
+            received.push(chunk);
+        });
+        assert_eq!(received.len(), 5);
+        assert_eq!(received[0]["epoch"], 1);
+        assert_eq!(received[4]["epoch"], 5);
+        assert_eq!(received[4]["status"], "COMPLETED");
+        assert_eq!(received[2]["status"], "IN_PROGRESS");
+    }
+
+    #[test]
+    fn simulated_provider_loss_decreases() {
+        let sim = SimulatedProvider {
+            epochs: 10,
+            delay_ms: 1,
+        };
+        let mut losses = Vec::new();
+        sim.stream_progress("ep", "job", &mut |chunk| {
+            losses.push(chunk["loss"].as_f64().unwrap());
+        });
+        assert!(losses.len() == 10);
+        assert!(
+            losses.first().unwrap() > losses.last().unwrap(),
+            "loss should decrease: first={} last={}",
+            losses.first().unwrap(),
+            losses.last().unwrap()
+        );
+    }
+
+    #[test]
+    fn simulated_provider_respects_timing() {
+        let sim = SimulatedProvider {
+            epochs: 3,
+            delay_ms: 50,
+        };
+        let t0 = std::time::Instant::now();
+        sim.stream_progress("ep", "job", &mut |_| {});
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed.as_millis() >= 140,
+            "3 epochs × 50ms should take >=140ms, took {}ms",
+            elapsed.as_millis()
+        );
     }
 }
