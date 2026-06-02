@@ -194,7 +194,8 @@ impl AppState {
             models_dir: cfg.models_dir,
             sessions: SessionPool::new(pool_size),
             wav_cache: Arc::new(Mutex::new(LruCache::new(
-                std::num::NonZeroUsize::new(WAV_CACHE_CAPACITY).unwrap(),
+                std::num::NonZeroUsize::new(WAV_CACHE_CAPACITY)
+                    .expect("infallible: WAV_CACHE_CAPACITY is non-zero"),
             ))),
             voice_index: RwLock::new(None),
             dsp_enabled: std::sync::atomic::AtomicBool::new(true),
