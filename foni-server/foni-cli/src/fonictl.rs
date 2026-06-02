@@ -2401,56 +2401,80 @@ fn cmd_diff(server: &str, knob: &str, value: f32, phrase: &str, ref_path: &PathB
         "\u{2194} same"
     };
 
-    println!("\n  {knob} = {value}");
-    println!("  \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
-    println!(
-        "  {:>20}  {:>8}  {:>8}  {:>8}",
-        "", "Before", "After", "Delta"
-    );
-    println!(
-        "  {:>20}  {:>7.1}%  {:>7.1}%  {:>+7.1}%  {}",
-        "Mean gap", before_gap.mean_gap_pct, after_gap.mean_gap_pct, gap_delta, gap_arrow
-    );
-    println!(
-        "  {:>20}  {:>7.1} dB {:>7.1} dB {:>+7.1} dB {}",
-        "Spectral gap (LSD)", before_tl.spectral_gap, after_tl.spectral_gap, lsd_delta, lsd_arrow
-    );
-    println!(
-        "  {:>20}  {:>8.3}  {:>8.3}",
-        "Pitch match", before_tl.pitch_match, after_tl.pitch_match
-    );
-    println!(
-        "  {:>20}  {:>8.3}  {:>8.3}",
-        "Energy match", before_tl.energy_match, after_tl.energy_match
-    );
+    use owo_colors::OwoColorize;
+    use tabled::{settings::Style, Table, Tabled};
 
-    // Per-metric deltas for the most important ones
-    let metrics = [
+    #[derive(Tabled)]
+    struct DiffRow {
+        #[tabled(rename = "Metric")]
+        metric: String,
+        #[tabled(rename = "Before")]
+        before: String,
+        #[tabled(rename = "After")]
+        after: String,
+        #[tabled(rename = "Delta")]
+        delta: String,
+    }
+
+    let arrow = |d: f32, threshold: f32| -> String {
+        if d < -threshold {
+            format!("{:+.1} \u{2193}", d).green().to_string()
+        } else if d > threshold {
+            format!("{:+.1} \u{2191}", d).red().to_string()
+        } else {
+            format!("{:+.1} =", d).dimmed().to_string()
+        }
+    };
+
+    let mut rows = vec![
+        DiffRow {
+            metric: "Mean gap".into(),
+            before: format!("{:.1}%", before_gap.mean_gap_pct),
+            after: format!("{:.1}%", after_gap.mean_gap_pct),
+            delta: arrow(gap_delta, 1.0),
+        },
+        DiffRow {
+            metric: "Spectral gap (LSD)".into(),
+            before: format!("{:.1} dB", before_tl.spectral_gap),
+            after: format!("{:.1} dB", after_tl.spectral_gap),
+            delta: arrow(lsd_delta, 0.5),
+        },
+        DiffRow {
+            metric: "Pitch match".into(),
+            before: format!("{:.3}", before_tl.pitch_match),
+            after: format!("{:.3}", after_tl.pitch_match),
+            delta: String::new(),
+        },
+        DiffRow {
+            metric: "Energy match".into(),
+            before: format!("{:.3}", before_tl.energy_match),
+            after: format!("{:.3}", after_tl.energy_match),
+            delta: String::new(),
+        },
+    ];
+
+    for name in [
         "Loudness",
         "Brightness",
         "Bass balance",
         "Vocal darkness",
         "Breathiness",
-    ];
-    println!();
-    for name in &metrics {
-        let b = before_gap.rows.iter().find(|r| r.metric == *name);
-        let a = after_gap.rows.iter().find(|r| r.metric == *name);
+    ] {
+        let b = before_gap.rows.iter().find(|r| r.metric == name);
+        let a = after_gap.rows.iter().find(|r| r.metric == name);
         if let (Some(b), Some(a)) = (b, a) {
             let d = a.gap_pct - b.gap_pct;
-            let arrow = if d < -1.0 {
-                "\u{2193}"
-            } else if d > 1.0 {
-                "\u{2191}"
-            } else {
-                "="
-            };
-            println!(
-                "  {:>20}  {:>7.1}%  {:>7.1}%  {:>+7.1}%  {}",
-                name, b.gap_pct, a.gap_pct, d, arrow
-            );
+            rows.push(DiffRow {
+                metric: name.to_string(),
+                before: format!("{:.1}%", b.gap_pct),
+                after: format!("{:.1}%", a.gap_pct),
+                delta: arrow(d, 1.0),
+            });
         }
     }
+
+    println!("\n  {} = {}", knob.bold(), value);
+    println!("{}", Table::new(&rows).with(Style::rounded()));
 
     println!(
         "\n  Before: {}",
