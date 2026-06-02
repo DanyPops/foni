@@ -3565,7 +3565,7 @@ fn cmd_compare_models(server: &str, model: &str, ref_path: &PathBuf) {
         pass: String,
     }
 
-    let arrow = |old: f32, new: f32, lower_is_better: bool| -> (String, bool) {
+    let arrow = |old: f32, new: f32, lower_is_better: bool, tolerance: f32| -> (String, bool) {
         let d = new - old;
         let better = if lower_is_better { d < 0.0 } else { d > 0.0 };
         let s = if better {
@@ -3573,15 +3573,15 @@ fn cmd_compare_models(server: &str, model: &str, ref_path: &PathBuf) {
         } else {
             format!("{d:+.1}").red().to_string()
         };
-        let ok = better || d.abs() < 2.0;
+        let ok = better || d.abs() < tolerance;
         (s, ok)
     };
 
-    let (d1, p1) = arrow(old_gap, new_gap, true);
-    let (d2, p2) = arrow(old_lsd, new_lsd, true);
-    let (d3, p3) = arrow(old_pres, new_pres, false);
-    let (d4, p4) = arrow(old_bright, new_bright, true);
-    let (d5, p5) = arrow(old_worst, new_worst, true);
+    let (d1, p1) = arrow(old_gap, new_gap, true, 2.0);
+    let (d2, p2) = arrow(old_lsd, new_lsd, true, 2.0);
+    let (d3, p3) = arrow(old_pres, new_pres, false, 0.05);
+    let (d4, p4) = arrow(old_bright, new_bright, true, 100.0);
+    let (d5, p5) = arrow(old_worst, new_worst, true, 30.0);
 
     let rows = vec![
         Row {
