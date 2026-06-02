@@ -11,9 +11,9 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { EspeakBackend }     from "./backends/espeak.ts";
 
-import { FoniEngine, type FacadeFactory, type TranslatorFactory, type ProcessorFactory } from "./core/engine.ts";
+
+import { FoniEngine, type FacadeFactory, type TranslatorFactory } from "./core/engine.ts";
 import { DEFAULT_CONFIG }    from "./core/config.ts";
 import type { FoniConfig }   from "./core/config.ts";
 import {
@@ -22,11 +22,11 @@ import {
 } from "./pipeline/translators.ts";
 import { BIAS_WORDS, effectiveWeights, currentIntensity } from "./core/emotion.ts";
 import type { EmotionState, Emotion } from "./core/emotion.ts";
-import { IdentityProcessor, RVCProcessor, SmoothingProcessor } from "./pipeline/processors.ts";
+import { IdentityProcessor } from "./pipeline/processors.ts";
 import { SynthBackend }      from "./pipeline/synth-backend.ts";
 import type { SynthBackendOpts } from "./pipeline/synth-backend.ts";
 import { syncBreaksFrom }    from "./pipeline/prosody.ts";
-import { BreathProcessor }   from "./pipeline/breath-injector.ts";
+
 import { SpeakFacade }       from "./pipeline/speak-facade.ts";
 import { SystemPlayer }      from "./pipeline/player.ts";
 
@@ -90,35 +90,17 @@ function synthBackendOpts(cfg: typeof DEFAULT_CONFIG, emotion: EmotionState): Sy
 }
 
 const facadeFactory: FacadeFactory = async (cfg, translator, emotion) => {
-  // Fast path: when foni-synth is up and RVC is enabled, route all synthesis
-  // through a single POST /synthesize — SSML + espeak + RVC + DSP in Rust.
-  if (cfg.rvcEnabled && cfg.rvcModel) {
-    const synth = new SynthBackend(synthBackendOpts(cfg, emotion));
-    if (await synth.isAvailable()) {
-      syncBreaksFrom(cfg.rvcUrl); // fire-and-forget: keeps prosody.ts in sync with Rust
-      return new SpeakFacade(translator, synth, new IdentityProcessor(), new SystemPlayer(), {
-        // espeak voice must match outputLang — cfg.voice is the input-side voice
-        voice: cfg.outputLang === "ru" ? "ru" : cfg.voice,
-        speed: cfg.speed,
-      });
-    }
-  }
-
-  // Fallback: espeak only when SynthBackend unavailable.
-  const backend = new EspeakBackend(cfg.outputLang === "ru" ? "ru" : "en");
-  if (!(await backend.isAvailable())) return null;
-  const processor = processorFactory(cfg);
-  return new SpeakFacade(translator, backend, processor, new SystemPlayer(), {
+  // All synthesis goes through foni-synth. No fallback to bare espeak.
+  const synth = new SynthBackend(synthBackendOpts(cfg, emotion));
+  if (!(await synth.isAvailable())) return null;
+  syncBreaksFrom(cfg.rvcUrl);
+  return new SpeakFacade(translator, synth, new IdentityProcessor(), new SystemPlayer(), {
     voice: cfg.outputLang === "ru" ? "ru" : cfg.voice,
     speed: cfg.speed,
   });
 };
 
-const processorFactory: ProcessorFactory = (cfg: FoniConfig) => {
-  if (!cfg.rvcEnabled || !cfg.rvcModel) return new IdentityProcessor();
-  const inner = new SmoothingProcessor(new RVCProcessor(cfg.rvcUrl), {}, cfg.rvcUrl);
-  return cfg.breathEnabled ? new BreathProcessor(inner, {}, cfg.rvcUrl) : inner;
-};
+
 import { pickModel }         from "./tui/model-picker.ts";
 import { openFoniPanel }     from "./tui/foni-panel.ts";
 import type { FoniPanelState, FoniPanelActions } from "./tui/foni-panel.ts";
@@ -130,7 +112,7 @@ export default async function (pi: ExtensionAPI) {
     { ...DEFAULT_CONFIG },
     facadeFactory,
     translatorFactory,
-    processorFactory,
+    (_cfg: FoniConfig) => new IdentityProcessor(),
   );
   const config = engine.config;
 
@@ -322,7 +304,7 @@ export default async function (pi: ExtensionAPI) {
         if (!config.rvcEnabled && !config.rvcModel) return;
         config.rvcEnabled = !config.rvcEnabled;
         engine.ensureFacade().then(f =>
-          f?.swapProcessor(processorFactory(config)),
+          f?.swapProcessor(new IdentityProcessor()),
         );
         updateStatus(ctx);
       },
@@ -339,7 +321,7 @@ export default async function (pi: ExtensionAPI) {
           });
           if (lr.ok) {
             const f = await engine.ensureFacade();
-            f?.swapProcessor(processorFactory(config));
+            f?.swapProcessor(new IdentityProcessor());
           }
           updateStatus(ctx);
         } catch { /* server unreachable */ }
@@ -556,7 +538,7 @@ export default async function (pi: ExtensionAPI) {
           if (rvcSub === "on" && !config.rvcModel) { ctx.ui.notify("Set a model first: /tts rvc model <name>", "warning"); return; }
           config.rvcEnabled = rvcSub === "on";
           const f = await engine.ensureFacade();
-          f?.swapProcessor(processorFactory(config));
+          f?.swapProcessor(new IdentityProcessor());
           ctx.ui.notify(`RVC ${config.rvcEnabled ? "enabled" : "disabled"}`, "info");
           updateStatus(ctx);
           return;
@@ -582,7 +564,7 @@ export default async function (pi: ExtensionAPI) {
             ctx.ui.notify(r.ok ? `RVC model loaded: ${config.rvcModel}` : `RVC server ${r.status}`, r.ok ? "info" : "warning");
             if (r.ok) {
               const f = await engine.ensureFacade();
-              f?.swapProcessor(processorFactory(config));
+              f?.swapProcessor(new IdentityProcessor());
             }
           } catch { ctx.ui.notify(`RVC unreachable at ${config.rvcUrl}`, "warning"); }
           updateStatus(ctx);
