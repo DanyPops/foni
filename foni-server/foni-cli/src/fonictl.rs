@@ -3098,41 +3098,42 @@ fn cmd_cloud(action: CloudAction) {
     match action {
         CloudAction::Status => {
             let ledger = cost::load();
-            match provider.account_overview() {
-                Ok(acct) => {
+            let status = provider.balance().expect("RunPod API");
+            println!("  Balance:        ${:.2}", status.balance);
+            println!("  Spend/hr:       ${:.4}", status.spend_per_hr);
+            println!("  Active pods:    {}", status.active_pods);
+
+            let endpoint_id = std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_default();
+            if !endpoint_id.is_empty() {
+                if let Ok(ep) = provider.get_endpoint(&endpoint_id) {
                     println!(
-                        "  Balance:        ${:.2}",
-                        acct["clientBalance"].as_f64().unwrap_or(0.0)
+                        "  Endpoint:       {} ({})",
+                        ep["name"].as_str().unwrap_or("?"),
+                        endpoint_id
                     );
-                    println!(
-                        "  Spend/hr:       ${:.4}",
-                        acct["currentSpendPerHr"].as_f64().unwrap_or(0.0)
-                    );
-                    let pods = acct["pods"].as_array().map(|a| a.len()).unwrap_or(0);
-                    println!("  Active pods:    {pods}");
-                    let empty = vec![];
-                    let endpoints = acct["endpoints"].as_array().unwrap_or(&empty);
-                    println!("  Endpoints:      {}", endpoints.len());
-                    for ep in endpoints {
-                        println!(
-                            "    {} ({})",
-                            ep["name"].as_str().unwrap_or("?"),
-                            ep["id"].as_str().unwrap_or("?")
-                        );
-                    }
-                    let empty2 = vec![];
-                    let regs = acct["containerRegistryCreds"].as_array().unwrap_or(&empty2);
-                    if !regs.is_empty() {
-                        println!(
-                            "  Registries:     {}",
-                            regs.iter()
-                                .map(|r| r["name"].as_str().unwrap_or("?"))
+                    let gpus = ep["gpuTypeIds"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|g| g.as_str())
                                 .collect::<Vec<_>>()
                                 .join(", ")
-                        );
+                        })
+                        .unwrap_or_default();
+                    println!("  GPUs:           {gpus}");
+                }
+                if let Ok(billing) = provider.billing_endpoints() {
+                    if let Some(entries) = billing.as_array() {
+                        let total: f64 = entries
+                            .iter()
+                            .filter(|e| e["endpointId"].as_str() == Some(&endpoint_id))
+                            .filter_map(|e| e["amount"].as_f64())
+                            .sum();
+                        if total > 0.0 {
+                            println!("  RunPod billing: ${total:.4}");
+                        }
                     }
                 }
-                Err(e) => eprintln!("  API error: {e}"),
             }
             println!(
                 "  Lifetime spend: ${:.2} ({} runs, {:.1}h GPU)",
