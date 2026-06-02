@@ -393,6 +393,22 @@ enum CloudAction {
         #[arg(long, default_value = "600")]
         timeout: u64,
     },
+    /// Show endpoint details (GPUs, workers, template)
+    Endpoint,
+    /// Update endpoint GPU types
+    UpdateGpus {
+        /// Comma-separated GPU type IDs
+        gpus: String,
+    },
+    /// Delete endpoint and create a fresh one
+    ResetEndpoint,
+    /// Purge all queued jobs
+    Purge,
+    /// Submit a raw job to the endpoint
+    Submit {
+        /// JSON input payload
+        input: String,
+    },
 }
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -3280,6 +3296,128 @@ fn cmd_cloud(action: CloudAction) {
                     return;
                 }
                 std::thread::sleep(poll_interval);
+            }
+        }
+        CloudAction::Endpoint => {
+            let endpoint_id =
+                std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
+            if endpoint_id == "none" {
+                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                return;
+            }
+            match provider.get_endpoint(&endpoint_id) {
+                Ok(ep) => println!("{}", serde_json::to_string_pretty(&ep).unwrap_or_default()),
+                Err(e) => eprintln!("  {e}"),
+            }
+        }
+        CloudAction::UpdateGpus { gpus } => {
+            let endpoint_id =
+                std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
+            if endpoint_id == "none" {
+                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                return;
+            }
+            let gpu_list: Vec<&str> = gpus.split(',').map(|s| s.trim()).collect();
+            match provider
+                .update_endpoint(&endpoint_id, serde_json::json!({ "gpuTypeIds": gpu_list }))
+            {
+                Ok(ep) => {
+                    let updated = ep["gpuTypeIds"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|g| g.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default();
+                    eprintln!("  GPUs updated: {updated}");
+                }
+                Err(e) => eprintln!("  {e}"),
+            }
+        }
+        CloudAction::ResetEndpoint => {
+            let endpoint_id =
+                std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
+            if endpoint_id == "none" {
+                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                return;
+            }
+            // Get current config before delete
+            let ep = match provider.get_endpoint(&endpoint_id) {
+                Ok(ep) => ep,
+                Err(e) => {
+                    eprintln!("  Cannot read endpoint: {e}");
+                    return;
+                }
+            };
+            // Purge + delete
+            provider.cancel_job(&endpoint_id, "purge-queue").ok();
+            let template_id = ep["templateId"].as_str().unwrap_or("hu8c3blznq");
+            let gpus = ep["gpuTypeIds"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|g| g.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\",\"")
+                })
+                .unwrap_or_default();
+            // Delete via REST
+            let _ = provider.rest_delete(&format!("/endpoints/{endpoint_id}"));
+            eprintln!("  Deleted {endpoint_id}");
+            // Recreate
+            match provider.create_endpoint(
+                ep["name"].as_str().unwrap_or("foni-train"),
+                template_id,
+                &gpus,
+                ep["executionTimeoutMs"].as_u64().unwrap_or(14_400_000),
+            ) {
+                Ok(new_id) => {
+                    eprintln!("  Created {new_id}");
+                    eprintln!("  Update your shell: export FONI_RUNPOD_ENDPOINT={new_id}");
+                }
+                Err(e) => eprintln!("  Recreate failed: {e}"),
+            }
+        }
+        CloudAction::Purge => {
+            let endpoint_id =
+                std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
+            if endpoint_id == "none" {
+                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                return;
+            }
+            match provider.purge_queue(&endpoint_id) {
+                Ok(removed) => eprintln!("  Purged {removed} job(s)"),
+                Err(e) => eprintln!("  {e}"),
+            }
+        }
+        CloudAction::Submit { input } => {
+            let endpoint_id =
+                std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
+            if endpoint_id == "none" {
+                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                return;
+            }
+            let payload: serde_json::Value = match serde_json::from_str(&input) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("  Invalid JSON: {e}");
+                    return;
+                }
+            };
+            let ntfy_topic =
+                std::env::var("FONI_NTFY_TOPIC").unwrap_or_else(|_| "foni-train".into());
+            match provider.submit_job(
+                &endpoint_id,
+                payload,
+                Some(&format!("https://ntfy.sh/{ntfy_topic}")),
+            ) {
+                Ok(job) => {
+                    println!("{}", job.id);
+                    eprintln!("  Status: {}", job.status);
+                }
+                Err(e) => eprintln!("  {e}"),
             }
         }
         CloudAction::History => unreachable!(),

@@ -238,6 +238,32 @@ impl RunPodProvider {
     pub fn list_pods(&self) -> Result<serde_json::Value, String> {
         self.rest_get("/pods")
     }
+
+    /// DELETE on REST API.
+    pub fn rest_delete(&self, path: &str) -> Result<(), String> {
+        self.client
+            .delete(format!("https://rest.runpod.io/v1{path}"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .map_err(|e| format!("REST DELETE {path}: {e}"))?;
+        Ok(())
+    }
+
+    /// Purge all queued jobs. Returns count removed.
+    pub fn purge_queue(&self, endpoint_id: &str) -> Result<u64, String> {
+        let resp = self
+            .client
+            .post(format!(
+                "https://api.runpod.ai/v2/{endpoint_id}/purge-queue"
+            ))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .map_err(|e| format!("purge: {e}"))?;
+        let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+        Ok(data["removed"].as_u64().unwrap_or(0))
+    }
 }
 
 impl CloudProvider for RunPodProvider {
