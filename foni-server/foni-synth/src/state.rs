@@ -169,6 +169,7 @@ pub struct Inner {
     pub sessions: SharedSessionPool,
     pub wav_cache: WavCache,
     pub voice_index: RwLock<Option<VoiceIndex>>,
+    pub dsp_enabled: std::sync::atomic::AtomicBool,
     pub controller_enabled: std::sync::atomic::AtomicBool,
     pub controller_config: RwLock<crate::dsp::controller::ControllerConfig>,
 }
@@ -192,6 +193,7 @@ impl AppState {
                 std::num::NonZeroUsize::new(WAV_CACHE_CAPACITY).unwrap(),
             ))),
             voice_index: RwLock::new(None),
+            dsp_enabled: std::sync::atomic::AtomicBool::new(true),
             controller_enabled: std::sync::atomic::AtomicBool::new(cfg.controller.enabled),
             controller_config: RwLock::new(cfg.controller),
         }))

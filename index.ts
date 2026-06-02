@@ -203,7 +203,7 @@ export default async function (pi: ExtensionAPI) {
     const mix      = winner ? theme.fg("accent", ` ✪${winner.label}`) : "";
     ctx.ui.setStatus(
       "tts",
-      theme.fg("accent", "TTS") + theme.fg("dim", ` ${s.backendName}${s.rvcModel ? `+${s.rvcModel}` : ""}${mat}${ij} ${lang}${emotion}`) + mix,
+      theme.fg("accent", "TTS") + theme.fg("dim", ` ${engine.muted ? "🔇 " : ""}${s.backendName}${s.rvcModel ? `+${s.rvcModel}` : ""}${mat}${ij} ${lang}${emotion}`) + mix,
     );
   }
 
@@ -603,7 +603,9 @@ export default async function (pi: ExtensionAPI) {
       }
 
       // ── stop ───────────────────────────────────────────────────────────────
-      if (sub === "stop") { engine.stop(); ctx.ui.notify("TTS stopped", "info"); return; }
+      if (sub === "stop")   { engine.stop();   ctx.ui.notify("TTS stopped", "info"); return; }
+      if (sub === "mute")   { engine.mute();   ctx.ui.notify("TTS muted — audio tests safe", "info"); return; }
+      if (sub === "unmute") { engine.unmute(); ctx.ui.notify("TTS unmuted", "info"); return; }
 
       // ── mix ─────────────────────────────────────────────────────────────────────
       if (sub === "mix") {

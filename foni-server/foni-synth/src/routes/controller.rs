@@ -6,13 +6,18 @@ use crate::state::AppState;
 
 /// GET /controller — current config + enabled state.
 pub async fn get_controller(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let enabled = state
+    let dsp = state
+        .0
+        .dsp_enabled
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let ctrl = state
         .0
         .controller_enabled
         .load(std::sync::atomic::Ordering::Relaxed);
     let cfg = state.0.controller_config.read().await;
     Json(serde_json::json!({
-        "enabled": enabled,
+        "dsp": dsp,
+        "controller": ctrl,
         "damping": cfg.damping,
         "targets": cfg.targets,
         "sensitivity": cfg.sensitivity,
@@ -22,6 +27,7 @@ pub async fn get_controller(State(state): State<AppState>) -> Json<serde_json::V
 
 #[derive(Deserialize)]
 pub struct ControllerUpdate {
+    pub dsp: Option<bool>,
     pub enabled: Option<bool>,
     pub damping: Option<f32>,
     pub targets: Option<crate::dsp::controller::ControllerTargets>,
@@ -46,6 +52,12 @@ pub async fn set_controller(
         return Ok(Json(serde_json::json!({ "status": "reloaded from disk" })));
     }
 
+    if let Some(dsp) = req.dsp {
+        state
+            .0
+            .dsp_enabled
+            .store(dsp, std::sync::atomic::Ordering::Relaxed);
+    }
     if let Some(enabled) = req.enabled {
         state
             .0
