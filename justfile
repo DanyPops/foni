@@ -162,7 +162,7 @@ analyse wav:
 
 # Check a WAV against studio reference — naturalness score + voice match
 [group('analyse')]
-check wav:
+check-wav wav:
     FONI_SYNTH_URL={{server_url}} {{fonictl}} score {{wav}} \
         --reference {{reference}} \
         --voice-id rvc/models/pretrained/ecapa-voxceleb.onnx
