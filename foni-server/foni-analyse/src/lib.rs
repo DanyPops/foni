@@ -10,6 +10,7 @@ pub mod report;
 pub mod speaker_sim;
 pub mod spectral;
 pub mod spectral_timeline;
+pub mod tempo;
 pub mod temporal;
 pub mod timeline;
 pub mod voice;

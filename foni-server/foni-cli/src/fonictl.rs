@@ -1747,6 +1747,35 @@ fn cmd_analyse(file: &PathBuf, vs: Option<&PathBuf>, show_timeline: bool) {
             }
             let spark = spectral_timeline::sparkline(&tl.spectral_gap_per_frame, 5);
             println!("\nPer-frame distance:\n  {spark}");
+
+            // Tempo comparison
+            let tc =
+                foni_analyse::tempo::compare(&ref_wav.samples, &wav.samples, ref_wav.sample_rate);
+            println!("\nTempo: overall {:.0}% speed", tc.overall_ratio * 100.0);
+            if !tc.rushed.is_empty() {
+                println!("  Rushed segments:");
+                for r in &tc.rushed {
+                    println!(
+                        "    {:.2}s  ref={:.0}ms  syn={:.0}ms  ({:.0}%)",
+                        r.ref_start_s,
+                        r.ref_duration_s * 1000.0,
+                        r.syn_duration_s * 1000.0,
+                        r.ratio * 100.0
+                    );
+                }
+            }
+            if !tc.drawn_out.is_empty() {
+                println!("  Drawn out segments:");
+                for d in &tc.drawn_out {
+                    println!(
+                        "    {:.2}s  ref={:.0}ms  syn={:.0}ms  ({:.0}%)",
+                        d.ref_start_s,
+                        d.ref_duration_s * 1000.0,
+                        d.syn_duration_s * 1000.0,
+                        d.ratio * 100.0
+                    );
+                }
+            }
         }
     } else {
         println!("Duration:  {:.2}s", analysis.temporal.duration_secs);
