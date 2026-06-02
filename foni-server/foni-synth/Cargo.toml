@@ -13,6 +13,7 @@ serde        = { workspace = true }
 serde_json   = { workspace = true }
 serde_yaml   = { workspace = true }
 figment      = { version = "0.10", features = ["yaml", "json", "env"] }
+rhai         = { version = "1.25", features = ["sync"] }
 ebur128      = { workspace = true }
 hound        = { workspace = true }
 ndarray      = { workspace = true }

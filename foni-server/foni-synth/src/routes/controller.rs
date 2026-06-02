@@ -59,7 +59,17 @@ pub async fn set_controller(
             fresh.controller.enabled,
             std::sync::atomic::Ordering::Relaxed,
         );
-        return Ok(Json(serde_json::json!({ "status": "reloaded from disk" })));
+        // Reload policy script
+        let new_policy = crate::dsp::policy::find_policy_script()
+            .and_then(|p| crate::dsp::policy::PolicyEngine::load(&p))
+            .map(std::sync::Arc::new);
+        let had_policy = state.0.policy_engine.read().await.is_some();
+        let has_policy = new_policy.is_some();
+        *state.0.policy_engine.write().await = new_policy;
+        return Ok(Json(serde_json::json!({
+            "status": "reloaded from disk",
+            "policy": if has_policy { "loaded" } else { "none" }
+        })));
     }
 
     if let Some(dsp) = req.dsp {
