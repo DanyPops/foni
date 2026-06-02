@@ -234,6 +234,24 @@ enum Cmd {
         model: String,
     },
 
+    /// Test a Rhai policy script against canned analysis data (no server needed)
+    TestPolicy {
+        /// Path to the .rhai script
+        script: PathBuf,
+        /// Simulated brightness (Hz)
+        #[arg(long, default_value_t = 3400.0)]
+        brightness: f32,
+        /// Simulated loudness (dBFS)
+        #[arg(long, default_value_t = -19.0, allow_hyphen_values = true)]
+        loudness: f32,
+        /// Simulated bass balance (dB)
+        #[arg(long, default_value_t = 14.0)]
+        bass: f32,
+        /// Simulated vocal darkness (dB/oct)
+        #[arg(long, default_value_t = -5.0, allow_hyphen_values = true)]
+        darkness: f32,
+    },
+
     /// Clean a dataset directory — trim silence, normalize volume, report clipping
     Clean {
         /// Input directory of WAV files
@@ -2740,6 +2758,89 @@ const SNAPSHOT_PHRASES: &[&str] = &[
     "Удачи, браток. На Зоне удача нужна.",
 ];
 
+fn cmd_test_policy(script: &PathBuf, brightness: f32, loudness: f32, bass: f32, darkness: f32) {
+    use owo_colors::OwoColorize;
+    use tabled::{settings::Style, Table, Tabled};
+
+    let engine = match foni_synth::dsp::policy::PolicyEngine::load(script) {
+        Some(e) => e,
+        None => {
+            eprintln!("  Failed to load script: {}", script.display());
+            return;
+        }
+    };
+
+    let cfg = foni_synth::dsp::controller::ControllerConfig::default();
+    let base = foni_synth::dsp::SmoothingOptions::default();
+
+    let mut analysis = foni_analyse::AnalysisResult {
+        temporal: Default::default(),
+        loudness: Default::default(),
+        spectral: Default::default(),
+        pitch: Default::default(),
+        voice: Default::default(),
+        f0_contour: vec![],
+        energy_envelope: vec![],
+    };
+    analysis.spectral.brightness_hz = brightness;
+    analysis.loudness.rms_db = loudness;
+    analysis.spectral.bass_balance_db = bass;
+    analysis.spectral.vocal_darkness_db_oct = darkness;
+
+    match engine.evaluate(&analysis, &base, &cfg) {
+        Some((opts, snap)) => {
+            #[derive(Tabled)]
+            struct Row {
+                #[tabled(rename = "Knob")]
+                knob: &'static str,
+                #[tabled(rename = "Base")]
+                base: String,
+                #[tabled(rename = "Corrected")]
+                corrected: String,
+                #[tabled(rename = "Delta")]
+                delta: String,
+            }
+            let rows = vec![
+                Row {
+                    knob: "tiltHighDb",
+                    base: format!("{:.1}", base.tilt_high_db),
+                    corrected: format!("{:.1}", opts.tilt_high_db),
+                    delta: format!("{:+.1}", snap.correction_tilt_high_db),
+                },
+                Row {
+                    knob: "tiltLowDb",
+                    base: format!("{:.1}", base.tilt_low_db),
+                    corrected: format!("{:.1}", opts.tilt_low_db),
+                    delta: format!("{:+.1}", snap.correction_tilt_low_db),
+                },
+                Row {
+                    knob: "rmsTargetLufs",
+                    base: format!("{:.1}", base.rms_target_lufs),
+                    corrected: format!("{:.1}", opts.rms_target_lufs),
+                    delta: format!("{:+.1}", snap.correction_rms_lufs),
+                },
+                Row {
+                    knob: "presenceDb",
+                    base: format!("{:.1}", base.presence_db),
+                    corrected: format!("{:.1}", opts.presence_db),
+                    delta: format!("{:+.1}", snap.correction_presence_db),
+                },
+                Row {
+                    knob: "deHarshDb",
+                    base: format!("{:.1}", base.de_harsh_db),
+                    corrected: format!("{:.1}", opts.de_harsh_db),
+                    delta: format!("{:+.1}", snap.correction_de_harsh_db),
+                },
+            ];
+            eprintln!("  Input: brightness={brightness} loudness={loudness} bass={bass} darkness={darkness}");
+            println!("{}", Table::new(&rows).with(Style::rounded()));
+        }
+        None => {
+            eprintln!("  Script evaluation failed. Check for runtime errors.");
+        }
+    }
+}
+
 fn cmd_clean(dir: &PathBuf, out: &PathBuf) {
     use foni_analyse::decode_wav;
     use tabled::{settings::Style, Table, Tabled};
@@ -3669,6 +3770,15 @@ fn main() {
         }
         Cmd::Corpus { dir, vs } => {
             cmd_corpus(&dir, vs.as_ref());
+        }
+        Cmd::TestPolicy {
+            script,
+            brightness,
+            loudness,
+            bass,
+            darkness,
+        } => {
+            cmd_test_policy(&script, brightness, loudness, bass, darkness);
         }
         Cmd::Clean { dir, out } => {
             let out = out.unwrap_or_else(|| data_dir().join("training/clean"));

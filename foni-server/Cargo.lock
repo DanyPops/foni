@@ -775,6 +775,7 @@ dependencies = [
  "dialoguer",
  "foni-analyse",
  "foni-client",
+ "foni-synth",
  "hound",
  "indicatif",
  "owo-colors",
