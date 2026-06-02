@@ -359,12 +359,25 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum CloudAction {
-    /// Show account balance, active pods, lifetime spend
+    /// Show account balance, endpoints, templates, lifetime spend
     Status,
     /// List available GPUs ranked by price
     Gpus,
     /// Show cost history from the local ledger
     History,
+    /// Check serverless endpoint worker health
+    Health,
+    /// One-time setup: create template + endpoint + registry auth
+    Setup {
+        /// Container image to use
+        #[arg(long, default_value = "ghcr.io/danypops/foni-rvc-train:latest")]
+        image: String,
+    },
+    /// Cancel a running or queued job
+    Cancel {
+        /// Job ID to cancel
+        job_id: String,
+    },
 }
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -3054,15 +3067,48 @@ fn cmd_cloud(action: CloudAction) {
 
     match action {
         CloudAction::Status => {
-            let status = provider.balance().expect("RunPod API");
             let ledger = cost::load();
-            println!("  Balance:        ${:.2}", status.balance);
-            println!("  Spend/hr:       ${:.4}", status.spend_per_hr);
-            println!("  Active pods:    {}", status.active_pods);
+            match provider.account_overview() {
+                Ok(acct) => {
+                    println!(
+                        "  Balance:        ${:.2}",
+                        acct["clientBalance"].as_f64().unwrap_or(0.0)
+                    );
+                    println!(
+                        "  Spend/hr:       ${:.4}",
+                        acct["currentSpendPerHr"].as_f64().unwrap_or(0.0)
+                    );
+                    let pods = acct["pods"].as_array().map(|a| a.len()).unwrap_or(0);
+                    println!("  Active pods:    {pods}");
+                    let empty = vec![];
+                    let endpoints = acct["endpoints"].as_array().unwrap_or(&empty);
+                    println!("  Endpoints:      {}", endpoints.len());
+                    for ep in endpoints {
+                        println!(
+                            "    {} ({})",
+                            ep["name"].as_str().unwrap_or("?"),
+                            ep["id"].as_str().unwrap_or("?")
+                        );
+                    }
+                    let empty2 = vec![];
+                    let regs = acct["containerRegistryCreds"].as_array().unwrap_or(&empty2);
+                    if !regs.is_empty() {
+                        println!(
+                            "  Registries:     {}",
+                            regs.iter()
+                                .map(|r| r["name"].as_str().unwrap_or("?"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                    }
+                }
+                Err(e) => eprintln!("  API error: {e}"),
+            }
             println!(
-                "  Lifetime spend: ${:.2} ({} runs)",
+                "  Lifetime spend: ${:.2} ({} runs, {:.1}h GPU)",
                 ledger.total_cost(),
-                ledger.run_count()
+                ledger.run_count(),
+                ledger.total_gpu_hours()
             );
         }
         CloudAction::Gpus => {
@@ -3092,6 +3138,56 @@ fn cmd_cloud(action: CloudAction) {
                 })
                 .collect();
             println!("{}", Table::new(&rows).with(Style::rounded()));
+        }
+        CloudAction::Health => {
+            let endpoint_id =
+                std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
+            if endpoint_id == "none" {
+                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                return;
+            }
+            match provider.endpoint_health(&endpoint_id) {
+                Ok(h) => println!("{}", serde_json::to_string_pretty(&h).unwrap_or_default()),
+                Err(e) => eprintln!("  Health check failed: {e}"),
+            }
+        }
+        CloudAction::Setup { image } => {
+            eprintln!("  Setting up RunPod Serverless infrastructure...");
+
+            // 1. Register ghcr.io credentials
+            let gh_token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
+            if !gh_token.is_empty() {
+                match provider.register_registry("ghcr-foni", "DanyPops", &gh_token) {
+                    Ok(id) => eprintln!("  Registry auth: {id}"),
+                    Err(e) => eprintln!("  Registry auth failed: {e}"),
+                }
+            }
+
+            // 2. Create template
+            match provider.create_template("foni-rvc-train", &image, None) {
+                Ok(id) => {
+                    eprintln!("  Template: {id}");
+
+                    // 3. Create endpoint
+                    match provider.create_endpoint("foni-train", &id, "AMPERE_24", 14_400_000) {
+                        Ok(eid) => {
+                            eprintln!("  Endpoint: {eid}");
+                            eprintln!("\n  Add to your shell:");
+                            eprintln!("    export FONI_RUNPOD_ENDPOINT={eid}");
+                        }
+                        Err(e) => eprintln!("  Endpoint creation failed: {e}"),
+                    }
+                }
+                Err(e) => eprintln!("  Template creation failed: {e}"),
+            }
+        }
+        CloudAction::Cancel { job_id } => {
+            let endpoint_id =
+                std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
+            match provider.cancel_job(&endpoint_id, &job_id) {
+                Ok(()) => eprintln!("  Cancelled: {job_id}"),
+                Err(e) => eprintln!("  Cancel failed: {e}"),
+            }
         }
         CloudAction::History => unreachable!(),
     }

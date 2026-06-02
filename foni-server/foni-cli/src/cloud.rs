@@ -75,6 +75,82 @@ impl RunPodProvider {
         }
     }
 
+    /// Create a serverless template.
+    pub fn create_template(
+        &self,
+        name: &str,
+        image: &str,
+        registry_auth_id: Option<&str>,
+    ) -> Result<String, String> {
+        let reg = registry_auth_id
+            .map(|id| format!(r#", containerRegistryAuthId: "{id}""#))
+            .unwrap_or_default();
+        let q = format!(
+            r#"mutation {{ saveTemplate(input: {{ name: "{name}", imageName: "{image}"{reg}, dockerArgs: "", containerDiskInGb: 30, volumeInGb: 0, isServerless: true, env: [] }}) {{ id name }} }}"#
+        );
+        let data = self.graphql(&q)?;
+        data["saveTemplate"]["id"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or("no template id".into())
+    }
+
+    /// Create a serverless endpoint from a template.
+    pub fn create_endpoint(
+        &self,
+        name: &str,
+        template_id: &str,
+        gpu_ids: &str,
+        execution_timeout_ms: u64,
+    ) -> Result<String, String> {
+        let q = format!(
+            r#"mutation {{ saveEndpoint(input: {{ name: "{name}", templateId: "{template_id}", gpuIds: "{gpu_ids}", workersMin: 0, workersMax: 1, idleTimeout: 30, scalerType: "QUEUE_DELAY", scalerValue: 1, flashBootType: FLASHBOOT, executionTimeoutMs: {execution_timeout_ms} }}) {{ id name }} }}"#
+        );
+        let data = self.graphql(&q)?;
+        data["saveEndpoint"]["id"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or("no endpoint id".into())
+    }
+
+    /// Register container registry credentials.
+    pub fn register_registry(
+        &self,
+        name: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<String, String> {
+        let q = format!(
+            r#"mutation {{ saveRegistryAuth(input: {{ name: "{name}", username: "{username}", password: "{password}" }}) {{ id }} }}"#
+        );
+        let data = self.graphql(&q)?;
+        data["saveRegistryAuth"]["id"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or("no registry id".into())
+    }
+
+    /// Check endpoint health.
+    pub fn endpoint_health(&self, endpoint_id: &str) -> Result<serde_json::Value, String> {
+        let resp = self
+            .client
+            .get(format!("https://api.runpod.ai/v2/{endpoint_id}/health"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .map_err(|e| format!("health: {e}"))?;
+        resp.json().map_err(|e| e.to_string())
+    }
+
+    /// Set SSH public key on the account.
+    pub fn set_ssh_key(&self, pub_key: &str) -> Result<(), String> {
+        let q = format!(
+            r#"mutation {{ updateUserSettings(input: {{ pubKey: "{pub_key}" }}) {{ id }} }}"#
+        );
+        self.graphql(&q)?;
+        Ok(())
+    }
+
     fn graphql(&self, query: &str) -> Result<serde_json::Value, String> {
         let resp = self
             .client
@@ -284,6 +360,47 @@ impl RunPodProvider {
             .send()
             .map_err(|e| format!("status failed: {e}"))?;
         resp.json().map_err(|e| e.to_string())
+    }
+
+    /// Cancel a running or queued job.
+    pub fn cancel_job(&self, endpoint_id: &str, job_id: &str) -> Result<(), String> {
+        self.client
+            .post(format!(
+                "https://api.runpod.ai/v2/{endpoint_id}/cancel/{job_id}"
+            ))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .map_err(|e| format!("cancel: {e}"))?;
+        Ok(())
+    }
+
+    /// List all endpoints on this account.
+    pub fn list_endpoints(&self) -> Result<Vec<serde_json::Value>, String> {
+        let data = self.graphql(
+            "{ myself { endpoints { id name templateId gpuIds workersMin workersMax } } }",
+        )?;
+        Ok(data["myself"]["endpoints"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// List all templates on this account.
+    pub fn list_templates(&self) -> Result<Vec<serde_json::Value>, String> {
+        let data =
+            self.graphql("{ myself { podTemplates { id name imageName isServerless } } }")?;
+        Ok(data["myself"]["podTemplates"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// Full account overview.
+    pub fn account_overview(&self) -> Result<serde_json::Value, String> {
+        self.graphql(
+            "{ myself { id email clientBalance currentSpendPerHr pods { id name costPerHr desiredStatus } endpoints { id name gpuIds workersMin workersMax } containerRegistryCreds { id name } networkVolumes { id name size } } }"
+        ).map(|d| d["myself"].clone())
     }
 
     /// Stream incremental results. Calls `on_chunk` for each progress update.
