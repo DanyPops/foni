@@ -409,6 +409,22 @@ enum CloudAction {
         /// JSON input payload
         input: String,
     },
+    /// Create an on-demand pod (persistent disk, no cold start)
+    CreatePod {
+        /// GPU type ID (e.g. "NVIDIA RTX A5000")
+        #[arg(long, default_value = "NVIDIA RTX A5000")]
+        gpu: String,
+        /// Container disk size in GB
+        #[arg(long, default_value_t = 50)]
+        disk: u32,
+    },
+    /// Stop and delete a pod
+    DeletePod {
+        /// Pod ID
+        pod_id: String,
+    },
+    /// List running pods
+    Pods,
 }
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -3420,6 +3436,35 @@ fn cmd_cloud(action: CloudAction) {
                 Err(e) => eprintln!("  {e}"),
             }
         }
+        CloudAction::CreatePod { gpu, disk } => {
+            match provider.create_pod(cloud::CreatePodOpts {
+                gpu_type_id: gpu,
+                image: "ghcr.io/danypops/foni-rvc-train:latest".into(),
+                volume_gb: 0,
+                container_disk_gb: disk,
+                name: "foni-train".into(),
+                ports: "8888/http".into(),
+            }) {
+                Ok(pod) => {
+                    println!("{}", pod.id);
+                    eprintln!("  GPU:    {}", pod.gpu_name);
+                    eprintln!("  Cost:   ${:.2}/hr", pod.cost_per_hr);
+                    eprintln!("  Status: {}", pod.status);
+                }
+                Err(e) => eprintln!("  {e}"),
+            }
+        }
+        CloudAction::DeletePod { pod_id } => match provider.terminate_pod(&pod_id) {
+            Ok(()) => eprintln!("  Deleted {pod_id}"),
+            Err(e) => eprintln!("  {e}"),
+        },
+        CloudAction::Pods => match provider.list_pods() {
+            Ok(pods) => println!(
+                "{}",
+                serde_json::to_string_pretty(&pods).unwrap_or_default()
+            ),
+            Err(e) => eprintln!("  {e}"),
+        },
         CloudAction::History => unreachable!(),
     }
 }
