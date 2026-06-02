@@ -1,6 +1,7 @@
-//! RunPod GraphQL client — typed Rust, no Python.
+//! RunPod REST + Serverless client — typed Rust, no Python.
 //!
 //! All cloud GPU operations go through this module.
+//! REST API (rest.runpod.io/v1) for management; Serverless API (api.runpod.ai/v2) for jobs.
 //! Implements `CloudProvider` trait for real and mock backends.
 
 use serde::{Deserialize, Serialize};
@@ -173,6 +174,69 @@ impl RunPodProvider {
         body.get("data")
             .cloned()
             .ok_or_else(|| "no data in response".into())
+    }
+
+    // ── REST API (rest.runpod.io/v1) ──────────────────────────────────────────
+
+    fn rest_get(&self, path: &str) -> Result<serde_json::Value, String> {
+        let resp = self
+            .client
+            .get(format!("https://rest.runpod.io/v1{path}"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .map_err(|e| format!("REST GET {path}: {e}"))?;
+        resp.json().map_err(|e| format!("REST JSON: {e}"))
+    }
+
+    fn rest_patch(&self, path: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+        let resp = self
+            .client
+            .patch(format!("https://rest.runpod.io/v1{path}"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .map_err(|e| format!("REST PATCH {path}: {e}"))?;
+        resp.json().map_err(|e| format!("REST JSON: {e}"))
+    }
+
+    /// GET /endpoints/{id} — full endpoint details with workers.
+    pub fn get_endpoint(&self, endpoint_id: &str) -> Result<serde_json::Value, String> {
+        self.rest_get(&format!("/endpoints/{endpoint_id}"))
+    }
+
+    /// PATCH /endpoints/{id} — update GPU types, worker counts, etc.
+    pub fn update_endpoint(
+        &self,
+        endpoint_id: &str,
+        patch: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.rest_patch(&format!("/endpoints/{endpoint_id}"), patch)
+    }
+
+    /// GET /templates/{id} — template details.
+    pub fn get_template(&self, template_id: &str) -> Result<serde_json::Value, String> {
+        self.rest_get(&format!("/templates/{template_id}"))
+    }
+
+    /// PATCH /templates/{id} — update image, disk, etc.
+    pub fn update_template(
+        &self,
+        template_id: &str,
+        patch: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.rest_patch(&format!("/templates/{template_id}"), patch)
+    }
+
+    /// GET /billing/endpoints — serverless billing history.
+    pub fn billing_endpoints(&self) -> Result<serde_json::Value, String> {
+        self.rest_get("/billing/endpoints")
+    }
+
+    /// GET /pods — list all pods.
+    pub fn list_pods(&self) -> Result<serde_json::Value, String> {
+        self.rest_get("/pods")
     }
 }
 
