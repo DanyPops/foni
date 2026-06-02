@@ -234,6 +234,27 @@ enum Cmd {
         model: String,
     },
 
+    /// Clean a dataset directory — trim silence, normalize volume, report clipping
+    Clean {
+        /// Input directory of WAV files
+        dir: PathBuf,
+        /// Output directory for cleaned WAVs
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
+    /// Augment a dataset — speed perturbation to expand training data
+    Augment {
+        /// Input directory of WAV files
+        dir: PathBuf,
+        /// Output directory for augmented WAVs
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Speed factors (comma-separated, e.g. "0.95,1.0,1.05")
+        #[arg(long, default_value = "0.95,1.0,1.05")]
+        speeds: String,
+    },
+
     /// Save current model's scores as the baseline to beat before retraining
     Snapshot {
         /// Model name
@@ -2719,6 +2740,201 @@ const SNAPSHOT_PHRASES: &[&str] = &[
     "Удачи, браток. На Зоне удача нужна.",
 ];
 
+fn cmd_clean(dir: &PathBuf, out: &PathBuf) {
+    use foni_analyse::decode_wav;
+    use tabled::{settings::Style, Table, Tabled};
+
+    std::fs::create_dir_all(out).expect("create output dir");
+
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .expect("read dir")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("wav"))
+        .collect();
+    files.sort();
+
+    #[derive(Tabled)]
+    struct CleanRow {
+        #[tabled(rename = "File")]
+        file: String,
+        #[tabled(rename = "Before")]
+        before: String,
+        #[tabled(rename = "After")]
+        after: String,
+        #[tabled(rename = "Clipping")]
+        clipping: String,
+    }
+
+    let mut rows = Vec::new();
+    let mut total_before = 0.0f32;
+    let mut total_after = 0.0f32;
+
+    for path in &files {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let wav = match decode_wav(&bytes) {
+            Ok(w) => w,
+            Err(_) => continue,
+        };
+        let sr = wav.sample_rate;
+        let mut samples = wav.samples;
+        let before_dur = samples.len() as f32 / sr as f32;
+        total_before += before_dur;
+
+        // Trim silence (head/tail below -40 dBFS)
+        let threshold = 10.0f32.powf(-40.0 / 20.0);
+        let first = samples
+            .iter()
+            .position(|&s| s.abs() > threshold)
+            .unwrap_or(0);
+        let last = samples
+            .iter()
+            .rposition(|&s| s.abs() > threshold)
+            .unwrap_or(samples.len());
+        if first < last {
+            samples = samples[first..=last].to_vec();
+        }
+
+        // Skip very short clips
+        let after_dur = samples.len() as f32 / sr as f32;
+        if after_dur < 0.5 {
+            continue;
+        }
+
+        // Normalize RMS to -14 dBFS
+        let rms = (samples.iter().map(|&s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+        let target_rms = 10.0f32.powf(-14.0 / 20.0);
+        if rms > 1e-8 {
+            let gain = target_rms / rms;
+            for s in samples.iter_mut() {
+                *s *= gain;
+            }
+        }
+
+        // Detect clipping
+        let clipped = samples.iter().filter(|&&s| s.abs() > 0.99).count();
+
+        // Write cleaned WAV
+        let out_path = out.join(path.file_name().unwrap());
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: sr,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&out_path, spec).expect("create WAV");
+        for &s in &samples {
+            writer
+                .write_sample((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                .ok();
+        }
+        writer.finalize().ok();
+
+        total_after += after_dur;
+        rows.push(CleanRow {
+            file: path.file_name().unwrap().to_string_lossy().into_owned(),
+            before: format!("{before_dur:.1}s"),
+            after: format!("{after_dur:.1}s"),
+            clipping: if clipped > 0 {
+                format!("{clipped} samples")
+            } else {
+                String::new()
+            },
+        });
+    }
+
+    println!("{}", Table::new(&rows).with(Style::rounded()));
+    eprintln!(
+        "\n  {files} files, {before:.1}s \u{2192} {after:.1}s  \u{2192} {out}",
+        files = rows.len(),
+        before = total_before,
+        after = total_after,
+        out = out.display()
+    );
+}
+
+fn cmd_augment(dir: &PathBuf, out: &PathBuf, speeds_csv: &str) {
+    use foni_analyse::decode_wav;
+
+    std::fs::create_dir_all(out).expect("create output dir");
+
+    let speeds: Vec<f32> = speeds_csv
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    if speeds.is_empty() {
+        eprintln!("No valid speed factors");
+        return;
+    }
+
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .expect("read dir")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("wav"))
+        .collect();
+    files.sort();
+
+    let mut total_files = 0usize;
+    let mut total_dur = 0.0f32;
+
+    for path in &files {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let wav = match decode_wav(&bytes) {
+            Ok(w) => w,
+            Err(_) => continue,
+        };
+        let sr = wav.sample_rate;
+        let stem = path.file_stem().unwrap().to_string_lossy();
+
+        for &speed in &speeds {
+            let suffix = format!("_s{}", (speed * 100.0) as u32);
+            let out_name = format!("{stem}{suffix}.wav");
+
+            // Resample: change duration without pitch shift
+            let ratio = 1.0 / speed as f64;
+            let out_len = (wav.samples.len() as f64 * ratio).ceil() as usize;
+            let resampled: Vec<f32> = (0..out_len)
+                .map(|i| {
+                    let pos = i as f64 / ratio;
+                    let lo = pos.floor() as usize;
+                    let hi = (lo + 1).min(wav.samples.len() - 1);
+                    let frac = (pos - lo as f64) as f32;
+                    wav.samples[lo] * (1.0 - frac) + wav.samples[hi] * frac
+                })
+                .collect();
+
+            let out_path = out.join(&out_name);
+            let spec = hound::WavSpec {
+                channels: 1,
+                sample_rate: sr,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::create(&out_path, spec).expect("create WAV");
+            for &s in &resampled {
+                writer
+                    .write_sample((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                    .ok();
+            }
+            writer.finalize().ok();
+
+            total_files += 1;
+            total_dur += resampled.len() as f32 / sr as f32;
+        }
+    }
+
+    eprintln!(
+        "  {total_files} files ({:.1} min) \u{2192} {}",
+        total_dur / 60.0,
+        out.display()
+    );
+}
+
 fn cmd_snapshot(server: &str, model: &str, ref_path: &PathBuf) {
     use foni_analyse::{analyse, compute_gap, decode_wav, spectral_timeline, TargetTensor};
     use std::io::Write;
@@ -3453,6 +3669,14 @@ fn main() {
         }
         Cmd::Corpus { dir, vs } => {
             cmd_corpus(&dir, vs.as_ref());
+        }
+        Cmd::Clean { dir, out } => {
+            let out = out.unwrap_or_else(|| data_dir().join("training/clean"));
+            cmd_clean(&dir, &out);
+        }
+        Cmd::Augment { dir, out, speeds } => {
+            let out = out.unwrap_or_else(|| data_dir().join("training/augmented"));
+            cmd_augment(&dir, &out, &speeds);
         }
         Cmd::Snapshot { model, vs } => {
             cmd_snapshot(server, &model, &vs);
