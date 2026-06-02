@@ -14,7 +14,7 @@
 
 
 import type { FoniConfig }    from "./config.ts";
-import { PREWARM_RU }         from "./config.ts";
+import { PREWARM_RU, FILLER_PHRASES } from "./config.ts";
 import { freshState, resolveBacktickRun, drainChunks } from "./stream.ts";
 import type { StreamState }   from "./stream.ts";
 import {
@@ -52,6 +52,8 @@ export class FoniEngine {
   private audioQueue: Promise<void>  = Promise.resolve();
   private streamState: StreamState   = freshState();
   private emotionState: EmotionState = neutralState();
+  private fillerCache: Buffer[]      = [];
+  private fillerActive               = false;
 
   /**
    * FoniEngine receives abstract factories rather than constructing backends
@@ -115,13 +117,34 @@ export class FoniEngine {
     });
   }
 
-  stop(): void { this.audioQueue = Promise.resolve(); }
+  stop(): void {
+    this.audioQueue = Promise.resolve();
+    this.stopFiller();
+  }
+
+  // ── Filler sounds ───────────────────────────────────────────────────────────
+
+  fillerCount(): number { return this.fillerCache.length; }
+
+  startFiller(): void {
+    if (this.muted || this.fillerCache.length === 0 || !this.facade) return;
+    const idx = Math.floor(Math.random() * this.fillerCache.length);
+    this.fillerActive = true;
+    this.facade.playFiller(this.fillerCache[idx]);
+  }
+
+  stopFiller(): void {
+    if (!this.fillerActive) return;
+    this.fillerActive = false;
+    this.facade?.stopFiller();
+  }
 
   // ── Stream delta processing ─────────────────────────────────────────────────
 
   /** Feed one streaming text delta from the LLM. Enqueues complete chunks. */
   onDelta(delta: string): void {
     if (!this.config.enabled || !delta) return;
+    if (this.fillerActive) this.stopFiller();
     for (const ch of delta) {
       if (ch === "`") {
         this.streamState.backtickRun++;
@@ -170,8 +193,18 @@ export class FoniEngine {
     if (!this.config.rvcEnabled || this.config.outputLang !== "ru") return;
     const f = await this.ensureFacade();
     if (!f) return;
-    // Synthesize into cache without playing — speak() plays audio, which is unwanted here.
     await Promise.all(PREWARM_RU.map(p => f.synthesizeOnly(p).catch(() => {})));
+    await this.prewarmFillers(f);
+  }
+
+  private async prewarmFillers(f: FacadePort): Promise<void> {
+    const results = await Promise.allSettled(
+      FILLER_PHRASES.map(text => f.synthesizeRaw(text)),
+    );
+    this.fillerCache = results
+      .filter((r): r is PromiseFulfilledResult<Buffer | null> => r.status === "fulfilled")
+      .map(r => r.value)
+      .filter((b): b is Buffer => b != null);
   }
 
   // ── Observability ───────────────────────────────────────────────────────────

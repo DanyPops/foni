@@ -378,6 +378,15 @@ enum CloudAction {
         /// Job ID to cancel
         job_id: String,
     },
+    /// Wait for a worker to become ready, optionally notify via ntfy
+    Wait {
+        /// ntfy topic to notify when ready (e.g. "foni-train")
+        #[arg(long)]
+        ntfy: Option<String>,
+        /// Max wait time in seconds
+        #[arg(long, default_value = "600")]
+        timeout: u64,
+    },
 }
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -3187,6 +3196,68 @@ fn cmd_cloud(action: CloudAction) {
             match provider.cancel_job(&endpoint_id, &job_id) {
                 Ok(()) => eprintln!("  Cancelled: {job_id}"),
                 Err(e) => eprintln!("  Cancel failed: {e}"),
+            }
+        }
+        CloudAction::Wait { ntfy, timeout } => {
+            let endpoint_id =
+                std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
+            if endpoint_id == "none" {
+                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                return;
+            }
+            let start = std::time::Instant::now();
+            let deadline = std::time::Duration::from_secs(timeout);
+            let poll_interval = std::time::Duration::from_secs(10);
+
+            loop {
+                match provider.endpoint_health(&endpoint_id) {
+                    Ok(h) => {
+                        let workers = &h["workers"];
+                        let ready = workers["ready"].as_u64().unwrap_or(0);
+                        let idle = workers["idle"].as_u64().unwrap_or(0);
+                        let unhealthy = workers["unhealthy"].as_u64().unwrap_or(0);
+                        let init = workers["initializing"].as_u64().unwrap_or(0);
+
+                        if ready > 0 || idle > 0 {
+                            let elapsed = start.elapsed().as_secs();
+                            eprintln!("  Worker ready after {elapsed}s");
+                            if let Some(topic) = &ntfy {
+                                let _ = reqwest::blocking::Client::new()
+                                    .post(format!("https://ntfy.sh/{topic}"))
+                                    .header("Title", "foni-train: worker ready")
+                                    .body(format!("Worker ready after {elapsed}s. Run: fonictl train sidorovich"))
+                                    .send();
+                            }
+                            println!("ready");
+                            return;
+                        }
+                        if unhealthy > 0 {
+                            eprintln!("  Worker unhealthy — image pull or handler failed");
+                            if let Some(topic) = &ntfy {
+                                let _ = reqwest::blocking::Client::new()
+                                    .post(format!("https://ntfy.sh/{topic}"))
+                                    .header("Title", "foni-train: worker UNHEALTHY")
+                                    .header("Priority", "high")
+                                    .body("Worker failed to initialize")
+                                    .send();
+                            }
+                            println!("unhealthy");
+                            return;
+                        }
+                        eprint!(
+                            "\r  Waiting... init={init} ready={ready} [{:.0}s]",
+                            start.elapsed().as_secs_f64()
+                        );
+                    }
+                    Err(e) => eprint!("\r  Poll error: {e}"),
+                }
+
+                if start.elapsed() > deadline {
+                    eprintln!("\n  Timed out after {timeout}s");
+                    println!("timeout");
+                    return;
+                }
+                std::thread::sleep(poll_interval);
             }
         }
         CloudAction::History => unreachable!(),
