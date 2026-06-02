@@ -17,13 +17,7 @@ use foni_analyse::{
     decode_wav,
     timeline::{merge_short_silences, pauses, segment, voiced_segments},
 };
-// SSML annotator lives in foni-synth; access via path import in tests
-mod ssml {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../foni-synth/src/ssml.rs"
-    ));
-}
+use foni_synth::ssml;
 
 use std::path::Path;
 use std::process::Command;
