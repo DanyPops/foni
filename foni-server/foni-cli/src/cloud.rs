@@ -287,17 +287,26 @@ pub struct PodSsh {
 }
 
 impl PodSsh {
-    /// Extract SSH connection info from pod JSON.
     pub fn from_pod(pod: &serde_json::Value) -> Result<Self, String> {
         let ip = pod["publicIp"]
             .as_str()
             .filter(|s| !s.is_empty())
-            .ok_or("pod has no public IP")?
+            .ok_or("pod has no public IP — need supportPublicIp + 22/tcp")?
             .to_string();
-        let port = pod["portMappings"]["22"]
-            .as_u64()
-            .ok_or("pod has no SSH port mapping")? as u16;
+        let port = pod
+            .get("portMappings")
+            .and_then(|m| m.get("22"))
+            .and_then(|p| p.as_u64())
+            .ok_or("pod has no SSH port mapping — expose 22/tcp")? as u16;
         Ok(Self { ip, port })
+    }
+
+    fn ssh_dest(&self) -> String {
+        format!("root@{}", self.ip)
+    }
+
+    fn scp_dest(&self) -> String {
+        format!("root@{}", self.ip)
     }
 
     fn ssh_opts(&self) -> Vec<String> {
@@ -313,38 +322,46 @@ impl PodSsh {
         ]
     }
 
-    /// Run a command on the pod via SSH. Streams stdout/stderr.
+    fn scp_opts(&self) -> Vec<String> {
+        vec![
+            "-o".into(),
+            "StrictHostKeyChecking=no".into(),
+            "-o".into(),
+            "UserKnownHostsFile=/dev/null".into(),
+            "-o".into(),
+            "LogLevel=ERROR".into(),
+            "-P".into(),
+            self.port.to_string(),
+        ]
+    }
+
     pub fn run(&self, cmd: &str) -> Result<(), String> {
         eprintln!("  \u{25b6} {}", cmd);
         let status = std::process::Command::new("ssh")
             .args(self.ssh_opts())
-            .arg(format!("root@{}", self.ip))
+            .arg(&self.ssh_dest())
             .arg(cmd)
             .status()
             .map_err(|e| format!("ssh: {e}"))?;
         if status.success() {
             Ok(())
         } else {
-            Err(format!(
-                "ssh command failed: exit {}",
-                status.code().unwrap_or(-1)
-            ))
+            Err(format!("ssh failed: exit {}", status.code().unwrap_or(-1)))
         }
     }
 
-    /// Upload a local file or directory to the pod.
     pub fn upload(&self, local: &str, remote: &str) -> Result<(), String> {
-        eprintln!("  \u{2191} {local} \u{2192} {remote}");
-        let mut args = self.ssh_opts();
+        eprintln!("  \u{2191} {} \u{2192} {}", local, remote);
+        let mut args = self.scp_opts();
         if std::path::Path::new(local).is_dir() {
             args.push("-r".into());
         }
         args.push(local.into());
-        args.push(format!("root@{}:{}", self.ip, remote));
+        args.push(format!("{}:{}", self.scp_dest(), remote));
         let status = std::process::Command::new("scp")
             .args(&args)
             .status()
-            .map_err(|e| format!("scp upload: {e}"))?;
+            .map_err(|e| format!("scp: {e}"))?;
         if status.success() {
             Ok(())
         } else {
@@ -355,16 +372,15 @@ impl PodSsh {
         }
     }
 
-    /// Download a file from the pod to local path.
     pub fn download(&self, remote: &str, local: &str) -> Result<(), String> {
-        eprintln!("  \u{2193} {remote} \u{2192} {local}");
-        let mut args = self.ssh_opts();
-        args.push(format!("root@{}:{}", self.ip, remote));
+        eprintln!("  \u{2193} {} \u{2192} {}", remote, local);
+        let mut args = self.scp_opts();
+        args.push(format!("{}:{}", self.scp_dest(), remote));
         args.push(local.into());
         let status = std::process::Command::new("scp")
             .args(&args)
             .status()
-            .map_err(|e| format!("scp download: {e}"))?;
+            .map_err(|e| format!("scp: {e}"))?;
         if status.success() {
             Ok(())
         } else {
@@ -375,7 +391,6 @@ impl PodSsh {
         }
     }
 
-    /// Wait until SSH is reachable.
     pub fn wait_for_ssh(&self, timeout_secs: u64) -> Result<(), String> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
         loop {
@@ -385,7 +400,7 @@ impl PodSsh {
             if std::time::Instant::now() > deadline {
                 return Err("SSH not reachable".into());
             }
-            std::thread::sleep(std::time::Duration::from_secs(3));
+            std::thread::sleep(std::time::Duration::from_secs(5));
         }
     }
 }
@@ -463,6 +478,7 @@ impl CloudProvider for RunPodProvider {
                 name: "{name}",
                 imageName: "{image}",
                 ports: "{ports}",
+                supportPublicIp: true,
                 volumeMountPath: "/workspace"
                 {docker_args}
             }}) {{ id costPerHr desiredStatus machine {{ gpuDisplayName }} }} }}"#,
