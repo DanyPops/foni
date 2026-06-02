@@ -9,6 +9,7 @@ pub mod pitch;
 pub mod report;
 pub mod speaker_sim;
 pub mod spectral;
+pub mod spectral_timeline;
 pub mod temporal;
 pub mod timeline;
 pub mod voice;
@@ -79,6 +80,10 @@ pub struct ComparisonResult {
     /// Does it sound like Sidorovich? 0–1, from neural voice fingerprint.
     /// Requires the voice ID model — run `just setup-voice-id` once.
     pub sounds_like: Option<f32>,
+    /// Per-frame spectral comparison — shows WHERE the quality gap lives.
+    /// Only computed when `compare_full` is called with samples available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<spectral_timeline::SpectralTimeline>,
 }
 
 /// Compare a synthesis against a reference recording.
@@ -176,6 +181,16 @@ pub fn compare_full(
         Some(voice_id::cosine_sim(&ref_emb, &syn_emb))
     });
 
+    let timeline = Some(spectral_timeline::compare(
+        ref_samples,
+        syn_samples,
+        sample_rate,
+        &reference.f0_contour,
+        &synthesis.f0_contour,
+        &reference.energy_envelope,
+        &synthesis.energy_envelope,
+    ));
+
     ComparisonResult {
         gap,
         timbre_distance_db,
@@ -185,6 +200,7 @@ pub fn compare_full(
         voice_match,
         naturalness,
         sounds_like,
+        timeline,
     }
 }
 
