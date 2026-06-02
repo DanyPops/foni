@@ -3025,7 +3025,7 @@ fn cmd_train(
         }
     };
 
-    // Wait for pod + SSH
+    // Wait for pod to get public IP + SSH port
     eprintln!("  Waiting for pod\u{2026}");
     let pod_info = match provider.wait_for_pod(&pod.id, 300) {
         Ok(info) => info,
@@ -3035,7 +3035,6 @@ fn cmd_train(
             return;
         }
     };
-
     let ssh = match cloud::PodSsh::from_pod(&pod_info) {
         Ok(s) => {
             eprintln!("    SSH: root@{}:{}", s.ip, s.port);
@@ -3047,7 +3046,6 @@ fn cmd_train(
             return;
         }
     };
-
     if let Err(e) = ssh.wait_for_ssh(120) {
         eprintln!("  \u{2717} {e}");
         provider.terminate_pod(&pod.id).ok();
