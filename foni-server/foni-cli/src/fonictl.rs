@@ -2999,7 +2999,7 @@ fn cmd_train(
 
     eprintln!("  [4/7] Creating pod ({gpu})\u{2026}");
 
-    let template_id = std::env::var("FONI_TEMPLATE_ID").unwrap_or_else(|_| "ztigypvs62".into());
+    let template_id = std::env::var("FONI_TEMPLATE_ID").unwrap_or_else(|_| "zqsos1r03t".into());
 
     let gh_token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
     let pod_opts = cloud::CreatePodOpts {
@@ -3015,8 +3015,9 @@ fn cmd_train(
             let mut env = vec![
                 ("FONI_MODEL".into(), model.to_string()),
                 ("FONI_EPOCHS".into(), epochs.to_string()),
-                ("FONI_DATASET_URL".into(), "https://github.com/DanyPops/foni/releases/download/dataset-v1/foni-dataset.tar.gz".into()),
-                ("FONI_UPLOAD_TAG".into(), format!("model-{model}")),
+                ("FONI_DATASET_URL".into(), std::env::var("FONI_DATASET_URL")
+                    .unwrap_or_else(|_| "https://github.com/DanyPops/foni/releases/download/dataset-fish/foni-dataset-fish.tar.gz".into())),
+                ("FONI_UPLOAD_TAG".into(), format!("model-{model}-fish")),
             ];
             if !gh_token.is_empty() {
                 env.push(("GITHUB_TOKEN".into(), gh_token));
@@ -3095,8 +3096,9 @@ fn cmd_train(
     eprintln!("  [6/7] Downloading model\u{2026}");
     let model_dir = format!("rvc/models/{model}");
     std::fs::create_dir_all(&model_dir).ok();
-    let download_url =
-        format!("https://github.com/DanyPops/foni/releases/download/model-{model}/{model}.pth");
+    let download_url = format!(
+        "https://github.com/DanyPops/foni/releases/download/model-{model}-fish/{model}-fish.tar.gz"
+    );
     let dl_status = std::process::Command::new("curl")
         .args([
             "-sL",
