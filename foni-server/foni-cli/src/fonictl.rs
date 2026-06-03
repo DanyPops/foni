@@ -3006,7 +3006,7 @@ fn cmd_train(
         container_disk_gb: 20,
         name: "foni-train".into(),
         ports: "22/tcp".into(),
-        docker_args: "bash -c 'wget -qO /train.py https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py; python3 /train.py; sleep 300'".into(),
+        docker_args: "wget -qO /train.py https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py && python3 /train.py; sleep 300".into(),
         env: {
             let mut env = vec![
                 ("FONI_MODEL".into(), model.to_string()),

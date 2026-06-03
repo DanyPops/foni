@@ -472,51 +472,58 @@ impl CloudProvider for RunPodProvider {
     }
 
     fn create_pod(&self, opts: CreatePodOpts) -> Result<Pod, String> {
-        let docker_args = if opts.docker_args.is_empty() {
-            String::new()
-        } else {
-            let escaped = opts.docker_args.replace('"', r#"\""#);
-            format!(r#", dockerArgs: "{escaped}""#)
-        };
-        let env_str = if opts.env.is_empty() {
-            String::new()
-        } else {
-            let pairs: Vec<String> = opts
+        let mut body = serde_json::json!({
+            "name": opts.name,
+            "imageName": opts.image,
+            "gpuTypeIds": [opts.gpu_type_id],
+            "gpuCount": 1,
+            "containerDiskInGb": opts.container_disk_gb,
+            "volumeInGb": opts.volume_gb,
+            "volumeMountPath": "/workspace",
+            "ports": opts.ports.split(',').collect::<Vec<_>>(),
+            "supportPublicIp": true,
+        });
+        if !opts.docker_args.is_empty() {
+            body["dockerStartCmd"] = serde_json::json!(["bash", "-c", opts.docker_args]);
+        }
+        if !opts.env.is_empty() {
+            let env_map: serde_json::Map<String, serde_json::Value> = opts
                 .env
                 .iter()
-                .map(|(k, v)| format!(r#"{{ key: "{k}", value: "{v}" }}"#))
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
                 .collect();
-            format!(", env: [{}]", pairs.join(", "))
-        };
-        let query = format!(
-            r#"mutation {{ podFindAndDeployOnDemand(input: {{
-                cloudType: COMMUNITY, gpuCount: 1,
-                volumeInGb: {vol}, containerDiskInGb: {disk},
-                minVcpuCount: 2, minMemoryInGb: 15,
-                gpuTypeId: "{gpu}",
-                name: "{name}",
-                imageName: "{image}",
-                ports: "{ports}",
-                supportPublicIp: true,
-                volumeMountPath: "/workspace"
-                {docker_args}
-                {env_str}
-            }}) {{ id costPerHr desiredStatus machine {{ gpuDisplayName }} }} }}"#,
-            vol = opts.volume_gb,
-            disk = opts.container_disk_gb,
-            gpu = opts.gpu_type_id,
-            name = opts.name,
-            image = opts.image,
-            ports = opts.ports,
-        );
-        let data = self.graphql(&query)?;
-        let p = &data["podFindAndDeployOnDemand"];
+            body["env"] = serde_json::Value::Object(env_map);
+        }
+        let resp = self
+            .client
+            .post("https://rest.runpod.io/v1/pods")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()
+            .map_err(|e| format!("create pod: {e}"))?;
+        let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+        if let Some(errors) = data.as_array() {
+            if let Some(err) = errors.first() {
+                return Err(err["error"]
+                    .as_str()
+                    .unwrap_or(&data.to_string())
+                    .to_string());
+            }
+        }
         Ok(Pod {
-            id: p["id"].as_str().unwrap_or("").to_string(),
-            cost_per_hr: p["costPerHr"].as_f64().unwrap_or(0.0),
-            status: p["desiredStatus"].as_str().unwrap_or("UNKNOWN").to_string(),
-            gpu_name: p["machine"]["gpuDisplayName"]
+            id: data["id"].as_str().unwrap_or("").to_string(),
+            cost_per_hr: data["costPerHr"]
+                .as_f64()
+                .or_else(|| data["costPerHr"].as_str().and_then(|s| s.parse().ok()))
+                .unwrap_or(0.0),
+            status: data["desiredStatus"]
                 .as_str()
+                .unwrap_or("UNKNOWN")
+                .to_string(),
+            gpu_name: data["machine"]["gpuType"]["displayName"]
+                .as_str()
+                .or_else(|| data["gpu"]["displayName"].as_str())
                 .unwrap_or("")
                 .to_string(),
         })
