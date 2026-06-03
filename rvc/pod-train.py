@@ -1,123 +1,206 @@
-"""Pod training script — downloaded and executed on RunPod pod at boot."""
-import os, sys, time, subprocess, glob, json
+"""
+Headless RVC training script for cloud GPU pods.
 
-MODEL = os.environ.get("FONI_MODEL", "sidorovich")
-EPOCHS = int(os.environ.get("FONI_EPOCHS", "500"))
-BATCH_SIZE = int(os.environ.get("FONI_BATCH_SIZE", "16"))
-DATASET_URL = os.environ.get("FONI_DATASET_URL", "")
+Expects environment variables:
+    FONI_MODEL        — model name (default: sidorovich)
+    FONI_EPOCHS       — training epochs (default: 500)
+    FONI_BATCH_SIZE   — batch size, scale with VRAM (default: 16)
+    FONI_DATASET_URL  — tar.gz URL of WAV dataset
+    GITHUB_TOKEN      — for uploading trained model to GitHub release
+    FONI_UPLOAD_TAG   — GitHub release tag (default: model-{FONI_MODEL})
+    FONI_REPO         — GitHub repo (default: DanyPops/foni)
+"""
 
-print(f"[train] model={MODEL} epochs={EPOCHS} batch={BATCH_SIZE}")
+import glob
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
 
-# Install rvc-no-gui
-if not os.path.exists("/workspace/rvc-no-gui"):
-    print("[train] cloning rvc-no-gui...")
-    subprocess.run(
-        ["git", "clone", "--depth=1",
-         "https://github.com/nakshatra-garg/rvc-no-gui.git",
-         "/workspace/rvc-no-gui"],
-        check=True)
 
-os.chdir("/workspace/rvc-no-gui")
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"])
+@dataclass
+class TrainConfig:
+    model: str
+    epochs: int
+    batch_size: int
+    dataset_url: str
+    upload_token: str
+    upload_repo: str
+    upload_tag: str
 
-# Setup RVC (downloads pretrained models)
-print("[train] setting up RVC pretrained models...")
-subprocess.run([sys.executable, "pipeline.py", "setup"], check=True)
+    @staticmethod
+    def from_env() -> "TrainConfig":
+        model = os.environ.get("FONI_MODEL", "sidorovich")
+        return TrainConfig(
+            model=model,
+            epochs=int(os.environ.get("FONI_EPOCHS", "500")),
+            batch_size=int(os.environ.get("FONI_BATCH_SIZE", "16")),
+            dataset_url=os.environ.get("FONI_DATASET_URL", ""),
+            upload_token=os.environ.get("GITHUB_TOKEN", ""),
+            upload_repo=os.environ.get("FONI_REPO", "DanyPops/foni"),
+            upload_tag=os.environ.get("FONI_UPLOAD_TAG", f"model-{model}"),
+        )
 
-# Download dataset
-os.makedirs("/workspace/dataset", exist_ok=True)
-os.makedirs("/workspace/output", exist_ok=True)
-if DATASET_URL:
-    print(f"[train] downloading dataset from {DATASET_URL}")
-    subprocess.run(
-        f"curl -sL {DATASET_URL} | tar xzf - --no-same-owner -C /workspace/dataset",
-        shell=True)
 
-files = glob.glob("/workspace/dataset/*.wav")
-print(f"[train] {len(files)} WAV files")
+WORKSPACE = Path("/workspace")
+DATASET_DIR = WORKSPACE / "dataset"
+OUTPUT_DIR = WORKSPACE / "output"
+RVC_DIR = WORKSPACE / "rvc-no-gui"
+RVC_REPO = "https://github.com/nakshatra-garg/rvc-no-gui.git"
 
-if not files:
-    print("[train] ERROR: no WAV files")
-    open("/workspace/output/FAILED", "w").write("no dataset")
-    sys.exit(1)
 
-# Train
-print(f"[train] starting training: {EPOCHS} epochs, batch={BATCH_SIZE}")
-t0 = time.time()
+def run(cmd: list[str] | str, **kwargs) -> subprocess.CompletedProcess:
+    """Run a command, print it, and check for errors."""
+    label = cmd if isinstance(cmd, str) else " ".join(cmd)
+    print(f"  $ {label}")
+    return subprocess.run(cmd, check=True, **kwargs)
 
-try:
-    from pipeline import RVCPipeline
-    from pathlib import Path
+
+def install_rvc():
+    """Clone rvc-no-gui and install its dependencies."""
+    if not RVC_DIR.exists():
+        print("[setup] cloning rvc-no-gui...")
+        run(["git", "clone", "--depth=1", RVC_REPO, str(RVC_DIR)])
+
+    os.chdir(RVC_DIR)
+    run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"])
+    run([sys.executable, "pipeline.py", "setup"])
+
+
+def download_dataset(url: str) -> list[Path]:
+    """Download and extract dataset, return list of WAV files."""
+    DATASET_DIR.mkdir(parents=True, exist_ok=True)
+
+    if url:
+        print(f"[dataset] downloading from {url}")
+        run(f"curl -sL {url} | tar xzf - --no-same-owner -C {DATASET_DIR}", shell=True)
+
+    wavs = sorted(Path(f) for f in glob.glob(str(DATASET_DIR / "*.wav")))
+    print(f"[dataset] {len(wavs)} WAV files")
+
+    if not wavs:
+        raise FileNotFoundError(f"no WAV files in {DATASET_DIR}")
+
+    return wavs
+
+
+def train(cfg: TrainConfig, wavs: list[Path]) -> Path:
+    """Run RVC training, return path to trained model."""
+    os.chdir(RVC_DIR)
+    sys.path.insert(0, str(RVC_DIR))
+
     from config import PipelineConfig
+    from pipeline import RVCPipeline
 
-    config = PipelineConfig()
-    config.training.epochs = EPOCHS
-    config.training.batch_size = BATCH_SIZE
-    config.f0.method = "rmvpe_gpu"
+    pipeline_cfg = PipelineConfig()
+    pipeline_cfg.training.epochs = cfg.epochs
+    pipeline_cfg.training.batch_size = cfg.batch_size
+    pipeline_cfg.f0.method = "rmvpe_gpu"
 
-    pipeline = RVCPipeline(config)
+    pipeline = RVCPipeline(pipeline_cfg)
     pipeline.run_full_training(
-        model_name=MODEL,
-        audio_files=[Path(f) for f in files],
-        epochs=EPOCHS,
-        batch_size=BATCH_SIZE,
+        model_name=cfg.model,
+        audio_files=wavs,
+        epochs=cfg.epochs,
+        batch_size=cfg.batch_size,
         skip_setup=True,
     )
-    elapsed = time.time() - t0
-    print(f"[train] training complete in {elapsed:.0f}s")
 
-    # Find the trained model
-    model_paths = (
-        glob.glob(f"weights/{MODEL}.pth") +
-        glob.glob(f"logs/{MODEL}/*.pth")
+    candidates = (
+        glob.glob(str(RVC_DIR / "weights" / f"{cfg.model}.pth"))
+        + glob.glob(str(RVC_DIR / "logs" / cfg.model / "*.pth"))
     )
-    if model_paths:
-        import shutil
-        shutil.copy(model_paths[0], f"/workspace/output/{MODEL}.pth")
-        print(f"[train] model saved: /workspace/output/{MODEL}.pth")
-    else:
-        print("[train] WARNING: no .pth file found after training")
+    if not candidates:
+        raise FileNotFoundError("no .pth file found after training")
 
-except Exception as e:
-    print(f"[train] ERROR: {e}")
-    import traceback
-    traceback.print_exc()
-    open("/workspace/output/FAILED", "w").write(str(e))
-    sys.exit(1)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = OUTPUT_DIR / f"{cfg.model}.pth"
+    shutil.copy(candidates[0], output_path)
+    print(f"[train] model saved: {output_path} ({output_path.stat().st_size} bytes)")
+    return output_path
 
-# Upload result to GitHub release
-UPLOAD_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-UPLOAD_REPO = os.environ.get("FONI_REPO", "DanyPops/foni")
-UPLOAD_TAG = os.environ.get("FONI_UPLOAD_TAG", "model-latest")
 
-model_file = f"/workspace/output/{MODEL}.pth"
-if UPLOAD_TOKEN and os.path.exists(model_file):
-    print(f"[train] uploading {MODEL}.pth to {UPLOAD_REPO} release {UPLOAD_TAG}")
+def upload_model(cfg: TrainConfig, model_path: Path, elapsed_secs: float):
+    """Upload trained model to a GitHub release."""
+    if not cfg.upload_token:
+        print("[upload] GITHUB_TOKEN not set, skipping")
+        return
+
+    api = f"https://api.github.com/repos/{cfg.upload_repo}"
+    auth = f"Authorization: token {cfg.upload_token}"
+    tag = cfg.upload_tag
+    body = json.dumps({
+        "tag_name": tag,
+        "name": f"{cfg.model} model",
+        "body": f"epochs={cfg.epochs} batch={cfg.batch_size} time={elapsed_secs:.0f}s",
+    })
+
+    # Delete existing release (if any)
     subprocess.run(
-        f'curl -sX DELETE -H "Authorization: token {UPLOAD_TOKEN}" '
-        f'"https://api.github.com/repos/{UPLOAD_REPO}/releases/tags/{UPLOAD_TAG}"',
-        shell=True)
+        ["curl", "-sX", "DELETE", "-H", auth, f"{api}/releases/tags/{tag}"],
+        capture_output=True,
+    )
+
+    # Create release
     result = subprocess.run(
-        f'curl -s -H "Authorization: token {UPLOAD_TOKEN}" '
-        f'-H "Content-Type: application/json" '
-        f'"https://api.github.com/repos/{UPLOAD_REPO}/releases" '
-        f'-d \'{json.dumps({"tag_name": UPLOAD_TAG, "name": f"{MODEL} model", "body": f"epochs={EPOCHS} batch={BATCH_SIZE} time={elapsed:.0f}s"})}\'',
-        shell=True, capture_output=True, text=True)
+        ["curl", "-s", "-H", auth, "-H", "Content-Type: application/json", f"{api}/releases", "-d", body],
+        capture_output=True, text=True,
+    )
     release = json.loads(result.stdout)
     upload_url = release.get("upload_url", "").replace("{?name,label}", "")
-    if upload_url:
-        subprocess.run(
-            f'curl -s -H "Authorization: token {UPLOAD_TOKEN}" '
-            f'-H "Content-Type: application/octet-stream" '
-            f'"{upload_url}?name={MODEL}.pth" '
-            f'--data-binary @{model_file}',
-            shell=True)
-        print(f"[train] uploaded to {UPLOAD_REPO}/releases/{UPLOAD_TAG}")
-    else:
-        print(f"[train] upload failed: {result.stdout[:200]}")
-else:
-    if not UPLOAD_TOKEN:
-        print("[train] GITHUB_TOKEN not set, skipping upload")
 
-open("/workspace/output/COMPLETE", "w").write("ok")
-print("[train] DONE")
+    if not upload_url:
+        print(f"[upload] failed to create release: {result.stdout[:200]}")
+        return
+
+    # Upload asset
+    name = model_path.name
+    subprocess.run(
+        ["curl", "-s", "-H", auth, "-H", "Content-Type: application/octet-stream",
+         f"{upload_url}?name={name}", "--data-binary", f"@{model_path}"],
+        capture_output=True,
+    )
+    print(f"[upload] {name} → {cfg.upload_repo}/releases/{tag}")
+
+
+def mark_complete():
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    (OUTPUT_DIR / "COMPLETE").write_text("ok")
+
+
+def mark_failed(reason: str):
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    (OUTPUT_DIR / "FAILED").write_text(reason)
+
+
+def main():
+    cfg = TrainConfig.from_env()
+    print(f"[main] model={cfg.model} epochs={cfg.epochs} batch={cfg.batch_size}")
+
+    try:
+        install_rvc()
+        wavs = download_dataset(cfg.dataset_url)
+
+        t0 = time.time()
+        model_path = train(cfg, wavs)
+        elapsed = time.time() - t0
+        print(f"[main] training completed in {elapsed:.0f}s ({elapsed / 60:.1f} min)")
+
+        upload_model(cfg, model_path, elapsed)
+        mark_complete()
+        print("[main] DONE")
+
+    except Exception as e:
+        print(f"[main] FAILED: {e}")
+        import traceback
+        traceback.print_exc()
+        mark_failed(str(e))
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
