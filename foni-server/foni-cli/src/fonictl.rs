@@ -2994,7 +2994,8 @@ fn cmd_train(
     }
 
     let gpu = std::env::var("FONI_GPU").unwrap_or_else(|_| "NVIDIA RTX A5000".into());
-    let image = "ghcr.io/danypops/foni-rvc-train:blackwell";
+    let image = std::env::var("FONI_TRAIN_IMAGE")
+        .unwrap_or_else(|_| "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404".into());
 
     eprintln!("  [4/7] Creating pod ({gpu})\u{2026}");
     let pod = match provider.create_pod(cloud::CreatePodOpts {
@@ -3004,7 +3005,9 @@ fn cmd_train(
         container_disk_gb: 20,
         name: "foni-train".into(),
         ports: "22/tcp".into(),
-        docker_args: String::new(),
+        docker_args: format!(
+                "bash -c 'curl -sL https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py -o /train.py && FONI_MODEL={model} FONI_EPOCHS={epochs} FONI_DATASET_URL=https://github.com/DanyPops/foni/releases/download/dataset-v1/foni-dataset.tar.gz python3 /train.py 2>&1 | tee /workspace/train.log; sleep infinity'"
+            ),
     }) {
         Ok(p) => {
             eprintln!(
@@ -3019,57 +3022,52 @@ fn cmd_train(
         }
     };
 
-    // Wait for SSH via RunPod proxy
+    // Step 5: Training runs inside dockerArgs — poll for completion
+    eprintln!("  [5/7] Training (running in pod)\u{2026}");
+    eprintln!("    Training script runs at container boot via dockerArgs");
+    eprintln!("    Logs: https://console.runpod.io/pods (click pod → logs)");
+
     let ssh = cloud::PodSsh::new(&pod.id);
-    eprintln!("  Waiting for SSH\u{2026}");
-    if let Err(e) = ssh.wait_for_ssh(300) {
-        eprintln!("  \u{2717} {e}");
-        provider.terminate_pod(&pod.id).ok();
-        return;
-    }
+    let mut final_loss = 0.001f64;
 
-    // Step 5: Upload dataset + install deps + train
-    eprintln!("  [5/7] Training\u{2026}");
-
-    let train_result = (|| -> Result<f64, String> {
-        ssh.run("mkdir -p /workspace/dataset /workspace/output")?;
-        ssh.upload(aug_dir.to_str().unwrap_or("."), "/workspace/dataset/")?;
-        ssh.run("pip install --no-cache-dir -q fairseq faiss-cpu praat-parselmouth pyworld torchcrepe scipy")?;
-
-        // Run training — stream output
-        let train_cmd = format!(
-            "python3 -c \"\
-import time, os\n\
-files = [f for f in os.listdir('/workspace/dataset') if f.endswith('.wav')]\n\
-print(f'Dataset: {{len(files)}} files')\n\
-try:\n\
-    from train_rvc import train\n\
-    for p in train('{model}', '/workspace/dataset', '/workspace/output', {epochs}):\n\
-        e, t, l = p.get('epoch',0), p.get('total_epochs',1), p.get('loss',0)\n\
-        if e % 50 == 0 or e == t: print(f'[{{e}}/{{t}}] loss={{l:.6f}}')\n\
-except ImportError:\n\
-    print('train_rvc not available - simulating')\n\
-    for e in range(1, {epochs}+1):\n\
-        time.sleep(0.1)\n\
-        l = 0.05 * (1.0 - e/{epochs}) + 0.001\n\
-        if e % 50 == 0 or e == {epochs}: print(f'[{{e}}/{epochs}] loss={{l:.6f}}')\n\
-    open('/workspace/output/{model}.pth','wb').write(b'DUMMY')\n\
-\""
-        );
-        ssh.run(&train_cmd)?;
-        Ok(0.001)
-    })();
-
-    let final_loss = match train_result {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("  \u{2717} Training failed: {e}");
+    // Wait for training to complete — poll via SSH for the COMPLETE marker file
+    let train_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1800);
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        let out = std::process::Command::new("ssh")
+            .args(cloud::PodSsh::ssh_opts_static())
+            .arg(&ssh.ssh_dest())
+            .arg("cat /workspace/output/COMPLETE 2>/dev/null || cat /workspace/output/FAILED 2>/dev/null || echo PENDING")
+            .output();
+        if let Ok(o) = out {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let text = stdout.trim();
+            if text == "ok" {
+                eprintln!("\n    Training complete!");
+                break;
+            }
+            if text.starts_with("no ") || stdout.contains("FAILED") {
+                eprintln!("\n  \u{2717} Training failed: {text}");
+                provider.terminate_pod(&pod.id).ok();
+                return;
+            }
+            eprint!(
+                "\r    Waiting for training... ({:.0}s)",
+                train_deadline
+                    .duration_since(std::time::Instant::now())
+                    .as_secs_f64()
+                    .max(0.0)
+            );
+            std::io::Write::flush(&mut std::io::stderr()).ok();
+        }
+        if std::time::Instant::now() > train_deadline {
+            eprintln!("\n  \u{2717} Training timed out (30 min)");
             provider.terminate_pod(&pod.id).ok();
             return;
         }
-    };
+    }
 
-    // Step 6: Download model
+    // Step 6: Download model via SSH tar
     eprintln!("  [6/7] Downloading model\u{2026}");
     let model_dir = format!("rvc/models/{model}");
     std::fs::create_dir_all(&model_dir).ok();
@@ -3495,25 +3493,13 @@ fn cmd_cloud(action: CloudAction) {
                 Err(e) => eprintln!("  {e}"),
             }
         }
-        CloudAction::CreatePod { gpu, disk, cached } => {
-            let is_blackwell =
-                gpu.contains("Blackwell") || gpu.contains("PRO 6000") || gpu.contains("PRO 4500");
-            let (image, docker_args) = if cached {
-                let base = if is_blackwell {
-                    "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"
-                } else {
-                    "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
-                };
-                (
-                    base.to_string(),
-                    "pip install --no-cache-dir fairseq faiss-cpu praat-parselmouth pyworld torchcrepe scipy && curl -sL https://raw.githubusercontent.com/DanyPops/foni/master/rvc/handler.py -o /handler.py && python /handler.py".to_string(),
-                )
-            } else {
-                (
-                    "ghcr.io/danypops/foni-rvc-train:latest".into(),
-                    String::new(),
-                )
-            };
+        CloudAction::CreatePod {
+            gpu,
+            disk,
+            cached: _,
+        } => {
+            let image = std::env::var("FONI_TRAIN_IMAGE")
+                .unwrap_or_else(|_| "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404".into());
             match provider.create_pod(cloud::CreatePodOpts {
                 gpu_type_id: gpu,
                 image,
@@ -3521,7 +3507,7 @@ fn cmd_cloud(action: CloudAction) {
                 container_disk_gb: disk,
                 name: "foni-train".into(),
                 ports: "8888/http".into(),
-                docker_args,
+                docker_args: String::new(),
             }) {
                 Ok(pod) => {
                     println!("{}", pod.id);
