@@ -3005,7 +3005,7 @@ fn cmd_train(
         container_disk_gb: 20,
         name: "foni-train".into(),
         ports: "22/tcp".into(),
-        docker_args: "bash -c 'curl -sL https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py -o /train.py && python3 /train.py 2>&1 | tee /workspace/train.log; sleep infinity'".into(),
+        docker_args: "bash -c 'curl -sL https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py -o /train.py && python3 /train.py 2>&1 | tee /workspace/train.log'".into(),
         env: {
             let gh_token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
             let mut env = vec![
