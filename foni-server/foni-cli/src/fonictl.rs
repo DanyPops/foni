@@ -2998,15 +2998,35 @@ fn cmd_train(
         .unwrap_or_else(|_| "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404".into());
 
     eprintln!("  [4/7] Creating pod ({gpu})\u{2026}");
+
+    // Create template with dockerArgs (REST dockerStartCmd is broken)
+    let docker_cmd = "wget -qO /train.py https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py && python3 /train.py; sleep 300";
+    let template_id = match provider.create_template(
+        "foni-train-run",
+        "runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04",
+        None,
+    ) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("  \u{2717} Template creation failed: {e}");
+            return;
+        }
+    };
+    // Update template with dockerArgs via GraphQL (only way that works)
+    let _ = provider.graphql(&format!(
+        r#"mutation {{ saveTemplate(input: {{ id: \"{template_id}\", name: \"foni-train-run\", imageName: \"runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04\", dockerArgs: \"{docker_cmd}\", containerDiskInGb: 20, volumeInGb: 0, isServerless: false, env: [] }}) {{ id }} }}"#
+    ));
+
     let gh_token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
     let pod_opts = cloud::CreatePodOpts {
         gpu_type_id: gpu.clone(),
-        image: image.into(),
+        image: String::new(),
         volume_gb: 0,
         container_disk_gb: 20,
         name: "foni-train".into(),
-        ports: "22/tcp".into(),
-        docker_args: "wget -qO /train.py https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py && python3 /train.py; sleep 300".into(),
+        ports: String::new(),
+        docker_args: String::new(),
+        template_id: Some(template_id),
         env: {
             let mut env = vec![
                 ("FONI_MODEL".into(), model.to_string()),
@@ -3535,6 +3555,7 @@ fn cmd_cloud(action: CloudAction) {
                 name: "foni-train".into(),
                 ports: "8888/http".into(),
                 docker_args: String::new(),
+                template_id: None,
                 env: vec![],
             }) {
                 Ok(pod) => {

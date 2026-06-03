@@ -33,6 +33,7 @@ pub struct CreatePodOpts {
     pub ports: String,
     pub docker_args: String,
     pub env: Vec<(String, String)>,
+    pub template_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,7 +155,7 @@ impl RunPodProvider {
         Ok(())
     }
 
-    fn graphql(&self, query: &str) -> Result<serde_json::Value, String> {
+    pub fn graphql(&self, query: &str) -> Result<serde_json::Value, String> {
         let resp = self
             .client
             .post("https://api.runpod.io/graphql")
@@ -474,17 +475,16 @@ impl CloudProvider for RunPodProvider {
     fn create_pod(&self, opts: CreatePodOpts) -> Result<Pod, String> {
         let mut body = serde_json::json!({
             "name": opts.name,
-            "imageName": opts.image,
             "gpuTypeIds": [opts.gpu_type_id],
             "gpuCount": 1,
             "containerDiskInGb": opts.container_disk_gb,
             "volumeInGb": opts.volume_gb,
             "volumeMountPath": "/workspace",
-            "ports": opts.ports.split(',').collect::<Vec<_>>(),
-            "supportPublicIp": true,
         });
-        if !opts.docker_args.is_empty() {
-            body["dockerStartCmd"] = serde_json::json!(["bash", "-c", opts.docker_args]);
+        if let Some(tid) = &opts.template_id {
+            body["templateId"] = serde_json::json!(tid);
+        } else {
+            body["imageName"] = serde_json::json!(opts.image);
         }
         if !opts.env.is_empty() {
             let env_map: serde_json::Map<String, serde_json::Value> = opts
@@ -913,6 +913,7 @@ mod tests {
                 name: "test-pod".into(),
                 ports: "22/tcp".into(),
                 docker_args: String::new(),
+                template_id: None,
                 env: vec![],
             })
             .unwrap();
