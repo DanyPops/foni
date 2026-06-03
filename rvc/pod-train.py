@@ -46,3 +46,39 @@ except ImportError:
 
 open("/workspace/output/COMPLETE", "w").write("ok")
 print("[train] DONE")
+
+# Upload result to GitHub release
+UPLOAD_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+UPLOAD_REPO = os.environ.get("FONI_REPO", "DanyPops/foni")
+UPLOAD_TAG = os.environ.get("FONI_UPLOAD_TAG", "model-latest")
+
+if UPLOAD_TOKEN and os.path.exists(f"/workspace/output/{MODEL}.pth"):
+    print(f"[train] uploading {MODEL}.pth to {UPLOAD_REPO} release {UPLOAD_TAG}")
+    # Delete existing release if it exists
+    subprocess.run(f'curl -sX DELETE -H "Authorization: token {UPLOAD_TOKEN}" '
+                   f'"https://api.github.com/repos/{UPLOAD_REPO}/releases/tags/{UPLOAD_TAG}"',
+                   shell=True)
+    # Create release
+    import json
+    result = subprocess.run(
+        f'curl -s -H "Authorization: token {UPLOAD_TOKEN}" '
+        f'-H "Content-Type: application/json" '
+        f'"https://api.github.com/repos/{UPLOAD_REPO}/releases" '
+        f'-d \'{json.dumps({"tag_name": UPLOAD_TAG, "name": f"{MODEL} model", "body": "auto-uploaded by pod-train.py"})}\'',
+        shell=True, capture_output=True, text=True)
+    release = json.loads(result.stdout)
+    upload_url = release.get("upload_url", "").replace("{?name,label}", "")
+    if upload_url:
+        model_path = f"/workspace/output/{MODEL}.pth"
+        subprocess.run(
+            f'curl -s -H "Authorization: token {UPLOAD_TOKEN}" '
+            f'-H "Content-Type: application/octet-stream" '
+            f'"{upload_url}?name={MODEL}.pth" '
+            f'--data-binary @{model_path}',
+            shell=True)
+        print(f"[train] uploaded to {UPLOAD_REPO}/releases/{UPLOAD_TAG}")
+    else:
+        print(f"[train] upload failed: {result.stdout[:200]}")
+else:
+    if not UPLOAD_TOKEN:
+        print("[train] GITHUB_TOKEN not set, skipping upload")

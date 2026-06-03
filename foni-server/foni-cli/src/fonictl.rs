@@ -3022,43 +3022,28 @@ fn cmd_train(
         }
     };
 
-    // Step 5: Training runs inside dockerArgs — poll for completion
+    // Step 5: Training runs inside dockerArgs — poll pod status for EXITED
     eprintln!("  [5/7] Training (running in pod)\u{2026}");
-    eprintln!("    Training script runs at container boot via dockerArgs");
-    eprintln!("    Logs: https://console.runpod.io/pods (click pod → logs)");
+    eprintln!("    Logs: https://console.runpod.io/pods");
 
-    let ssh = cloud::PodSsh::new(&pod.id);
     let mut final_loss = 0.001f64;
-
-    // Wait for training to complete — poll via SSH for the COMPLETE marker file
     let train_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1800);
     loop {
         std::thread::sleep(std::time::Duration::from_secs(10));
-        let out = std::process::Command::new("ssh")
-            .args(cloud::PodSsh::ssh_opts_static())
-            .arg(&ssh.ssh_dest())
-            .arg("cat /workspace/output/COMPLETE 2>/dev/null || cat /workspace/output/FAILED 2>/dev/null || echo PENDING")
-            .output();
-        if let Ok(o) = out {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            let text = stdout.trim();
-            if text == "ok" {
-                eprintln!("\n    Training complete!");
+        match provider.get_pod(&pod.id) {
+            Ok(p) => {
+                let status = p["desiredStatus"].as_str().unwrap_or("?");
+                if status == "EXITED" || status == "STOPPED" {
+                    eprintln!("\n    Pod exited \u{2014} training done");
+                    break;
+                }
+                eprint!("\r    {status}  ");
+                std::io::Write::flush(&mut std::io::stderr()).ok();
+            }
+            Err(_) => {
+                eprintln!("\n    Pod gone \u{2014} training may have completed");
                 break;
             }
-            if text.starts_with("no ") || stdout.contains("FAILED") {
-                eprintln!("\n  \u{2717} Training failed: {text}");
-                provider.terminate_pod(&pod.id).ok();
-                return;
-            }
-            eprint!(
-                "\r    Waiting for training... ({:.0}s)",
-                train_deadline
-                    .duration_since(std::time::Instant::now())
-                    .as_secs_f64()
-                    .max(0.0)
-            );
-            std::io::Write::flush(&mut std::io::stderr()).ok();
         }
         if std::time::Instant::now() > train_deadline {
             eprintln!("\n  \u{2717} Training timed out (30 min)");
@@ -3067,18 +3052,25 @@ fn cmd_train(
         }
     }
 
-    // Step 6: Download model via SSH tar
+    // Step 6: Download model from GitHub release (uploaded by pod-train.py)
     eprintln!("  [6/7] Downloading model\u{2026}");
     let model_dir = format!("rvc/models/{model}");
     std::fs::create_dir_all(&model_dir).ok();
-    if let Err(e) = ssh.download(
-        &format!("/workspace/output/{model}.pth"),
-        &format!("{model_dir}/{model}.pth"),
-    ) {
-        eprintln!("  \u{26a0} Download failed: {e}");
+    let download_url =
+        format!("https://github.com/DanyPops/foni/releases/download/model-{model}/{model}.pth");
+    let dl_status = std::process::Command::new("curl")
+        .args([
+            "-sL",
+            "-o",
+            &format!("{model_dir}/{model}.pth"),
+            &download_url,
+        ])
+        .status();
+    match dl_status {
+        Ok(s) if s.success() => eprintln!("    Downloaded from {download_url}"),
+        _ => eprintln!("  \u{26a0} Download failed"),
     }
-
-    // Kill pod
+    // Kill pod + compute cost
     let elapsed = t_start.elapsed();
     let duration_min = elapsed.as_secs_f64() / 60.0;
     let cost_usd = duration_min / 60.0 * pod.cost_per_hr;
