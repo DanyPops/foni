@@ -502,14 +502,15 @@ impl CloudProvider for RunPodProvider {
             .timeout(std::time::Duration::from_secs(30))
             .send()
             .map_err(|e| format!("create pod: {e}"))?;
+        let status = resp.status();
         let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-        if let Some(errors) = data.as_array() {
-            if let Some(err) = errors.first() {
-                return Err(err["error"]
-                    .as_str()
-                    .unwrap_or(&data.to_string())
-                    .to_string());
-            }
+        if !status.is_success() {
+            let fallback = data.to_string();
+            let msg = data["error"]
+                .as_str()
+                .or_else(|| data["message"].as_str())
+                .unwrap_or(&fallback);
+            return Err(msg.to_string());
         }
         Ok(Pod {
             id: data["id"].as_str().unwrap_or("").to_string(),
