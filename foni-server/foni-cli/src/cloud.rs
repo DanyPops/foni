@@ -242,6 +242,52 @@ impl RunPodProvider {
         self.rest_get("/pods")
     }
 
+    /// POST /templates — create template via REST with proper dockerStartCmd array.
+    pub fn create_template_rest(
+        &self,
+        name: &str,
+        image: &str,
+        start_cmd: &[&str],
+        env: &[(String, String)],
+    ) -> Result<String, String> {
+        let mut body = serde_json::json!({
+            "name": name,
+            "imageName": image,
+            "containerDiskInGb": 20,
+            "volumeInGb": 0,
+            "isServerless": false,
+            "isPublic": false,
+            "category": "NVIDIA",
+            "dockerStartCmd": start_cmd,
+            "ports": ["8888/http"],
+        });
+        if !env.is_empty() {
+            let env_map: serde_json::Map<String, serde_json::Value> = env
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect();
+            body["env"] = serde_json::Value::Object(env_map);
+        }
+        let resp = self
+            .client
+            .post("https://rest.runpod.io/v1/templates")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .map_err(|e| format!("create template: {e}"))?;
+        let status = resp.status();
+        let data: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+        if !status.is_success() {
+            let fallback = data.to_string();
+            return Err(data["error"].as_str().unwrap_or(&fallback).to_string());
+        }
+        data["id"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or("no template id in response".into())
+    }
+
     /// GET /pods/{id} — single pod details (IP, ports, status).
     pub fn get_pod(&self, pod_id: &str) -> Result<serde_json::Value, String> {
         self.rest_get(&format!("/pods/{pod_id}"))
