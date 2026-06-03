@@ -32,6 +32,7 @@ pub struct CreatePodOpts {
     pub name: String,
     pub ports: String,
     pub docker_args: String,
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -477,6 +478,16 @@ impl CloudProvider for RunPodProvider {
             let escaped = opts.docker_args.replace('"', r#"\""#);
             format!(r#", dockerArgs: "{escaped}""#)
         };
+        let env_str = if opts.env.is_empty() {
+            String::new()
+        } else {
+            let pairs: Vec<String> = opts
+                .env
+                .iter()
+                .map(|(k, v)| format!(r#"{{ key: "{k}", value: "{v}" }}"#))
+                .collect();
+            format!(", env: [{}]", pairs.join(", "))
+        };
         let query = format!(
             r#"mutation {{ podFindAndDeployOnDemand(input: {{
                 cloudType: COMMUNITY, gpuCount: 1,
@@ -489,6 +500,7 @@ impl CloudProvider for RunPodProvider {
                 supportPublicIp: true,
                 volumeMountPath: "/workspace"
                 {docker_args}
+                {env_str}
             }}) {{ id costPerHr desiredStatus machine {{ gpuDisplayName }} }} }}"#,
             vol = opts.volume_gb,
             disk = opts.container_disk_gb,
@@ -893,6 +905,7 @@ mod tests {
                 name: "test-pod".into(),
                 ports: "22/tcp".into(),
                 docker_args: String::new(),
+                env: vec![],
             })
             .unwrap();
         assert!(pod.id.contains("test-pod"));
