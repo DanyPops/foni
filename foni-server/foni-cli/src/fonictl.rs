@@ -2998,7 +2998,8 @@ fn cmd_train(
         .unwrap_or_else(|_| "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404".into());
 
     eprintln!("  [4/7] Creating pod ({gpu})\u{2026}");
-    let pod = match provider.create_pod(cloud::CreatePodOpts {
+    let gh_token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
+    let pod_opts = cloud::CreatePodOpts {
         gpu_type_id: gpu.clone(),
         image: image.into(),
         volume_gb: 0,
@@ -3007,7 +3008,6 @@ fn cmd_train(
         ports: "22/tcp".into(),
         docker_args: "bash -c 'wget -qO /train.py https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py; python3 /train.py; sleep 300'".into(),
         env: {
-            let gh_token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
             let mut env = vec![
                 ("FONI_MODEL".into(), model.to_string()),
                 ("FONI_EPOCHS".into(), epochs.to_string()),
@@ -3019,18 +3019,42 @@ fn cmd_train(
             }
             env
         },
-    }) {
-        Ok(p) => {
-            eprintln!(
-                "    Pod: {} ({}), ${:.2}/hr",
-                p.id, p.gpu_name, p.cost_per_hr
-            );
-            p
+    };
+    let gpu_candidates = [
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA RTX A5000",
+        "NVIDIA GeForce RTX 4090",
+        "NVIDIA RTX A6000",
+        "NVIDIA A40",
+        "NVIDIA L4",
+        "NVIDIA GeForce RTX 3090 Ti",
+        "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+        "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+        "NVIDIA RTX PRO 4500 Blackwell",
+    ];
+    let pod = 'retry: loop {
+        for candidate in std::iter::once(gpu.as_str()).chain(gpu_candidates.iter().copied()) {
+            let mut opts = pod_opts.clone();
+            opts.gpu_type_id = candidate.to_string();
+            let is_blackwell = candidate.contains("Blackwell")
+                || candidate.contains("PRO 6000")
+                || candidate.contains("PRO 4500");
+            opts.image = if is_blackwell {
+                "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404".into()
+            } else {
+                "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04".into()
+            };
+            if let Ok(p) = provider.create_pod(opts) {
+                eprintln!(
+                    "    Pod: {} ({}), ${:.2}/hr",
+                    p.id, p.gpu_name, p.cost_per_hr
+                );
+                break 'retry p;
+            }
         }
-        Err(e) => {
-            eprintln!("  \u{2717} Pod creation failed: {e}");
-            return;
-        }
+        eprint!("\r    No GPUs available, retrying in 30s...");
+        std::io::Write::flush(&mut std::io::stderr()).ok();
+        std::thread::sleep(std::time::Duration::from_secs(30));
     };
 
     // Step 5: Training runs inside dockerArgs — poll pod status for EXITED
