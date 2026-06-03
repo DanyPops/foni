@@ -16,7 +16,7 @@ os.makedirs("/workspace/dataset", exist_ok=True)
 os.makedirs("/workspace/output", exist_ok=True)
 if DATASET_URL:
     print(f"[train] downloading dataset from {DATASET_URL}")
-    subprocess.run(f"curl -sL {DATASET_URL} | tar xz -C /workspace/dataset", shell=True, check=True)
+    subprocess.run(f"curl -sL {DATASET_URL} | tar xzf - --no-same-owner -C /workspace/dataset", shell=True)
 
 files = [f for f in os.listdir("/workspace/dataset") if f.endswith(".wav")]
 print(f"[train] {len(files)} WAV files")
