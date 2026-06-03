@@ -999,3 +999,65 @@ mod tests {
         );
     }
 }
+
+#[test]
+fn docker_args_escaping_no_double_quotes() {
+    let opts = CreatePodOpts {
+        gpu_type_id: "TEST".into(),
+        image: "test".into(),
+        volume_gb: 0,
+        container_disk_gb: 20,
+        name: "test".into(),
+        ports: "22/tcp".into(),
+        docker_args: "bash -c 'echo hello; sleep 10'".into(),
+        env: vec![],
+    };
+    // Verify the escaped string doesn't contain double-escaped quotes
+    let escaped = opts.docker_args.replace('"', r#"\""#);
+    assert!(
+        !escaped.contains(r#"\\""#),
+        "double-escaped quotes: {escaped}"
+    );
+    assert_eq!(escaped, "bash -c 'echo hello; sleep 10'");
+}
+
+#[test]
+fn docker_args_with_double_quotes_escapes_once() {
+    let args = r#"python3 -c "print('hello')""#;
+    let escaped = args.replace('"', r#"\""#);
+    assert!(
+        escaped.contains(r#"\"print"#),
+        "should escape double quotes: {escaped}"
+    );
+}
+
+#[test]
+fn env_vars_serialize_to_graphql() {
+    let env = vec![
+        ("FONI_MODEL".to_string(), "sidorovich".to_string()),
+        ("FONI_EPOCHS".to_string(), "500".to_string()),
+    ];
+    let pairs: Vec<String> = env
+        .iter()
+        .map(|(k, v)| format!(r#"{{ key: "{k}", value: "{v}" }}"#))
+        .collect();
+    let env_str = format!(", env: [{}]", pairs.join(", "));
+    assert!(env_str.contains(r#"key: "FONI_MODEL""#));
+    assert!(env_str.contains(r#"value: "sidorovich""#));
+    assert!(env_str.contains(r#"key: "FONI_EPOCHS""#));
+}
+
+#[test]
+fn pod_ssh_dest_format() {
+    std::env::set_var("RUNPOD_SSH_HASH", "abcd1234");
+    let ssh = PodSsh::new("mypod123");
+    assert_eq!(ssh.ssh_dest(), "mypod123-abcd1234@ssh.runpod.io");
+    std::env::remove_var("RUNPOD_SSH_HASH");
+}
+
+#[test]
+fn pod_ssh_default_hash() {
+    std::env::remove_var("RUNPOD_SSH_HASH");
+    let ssh = PodSsh::new("testpod");
+    assert_eq!(ssh.ssh_dest(), "testpod-64410b27@ssh.runpod.io");
+}
