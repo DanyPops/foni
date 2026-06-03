@@ -60,15 +60,37 @@ def run(cmd: list[str] | str, **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=True, **kwargs)
 
 
+CONDA_ENV = WORKSPACE / "rvc-env"
+PYTHON = str(CONDA_ENV / "bin" / "python")
+
+
+def setup_python():
+    """Install Python 3.10 via conda if system Python is too new for RVC."""
+    version = sys.version_info
+    if version.minor < 11:
+        print(f"[setup] system Python {version.major}.{version.minor} is compatible")
+        return sys.executable
+
+    if Path(PYTHON).exists():
+        print("[setup] conda Python 3.10 already installed")
+        return PYTHON
+
+    print(f"[setup] system Python {version.major}.{version.minor} too new, installing 3.10 via conda...")
+    run(["conda", "create", "-y", "-p", str(CONDA_ENV), "python=3.10", "-q"])
+    return PYTHON
+
+
 def install_rvc():
     """Clone rvc-no-gui and install its dependencies."""
+    python = setup_python()
+
     if not RVC_DIR.exists():
         print("[setup] cloning rvc-no-gui...")
         run(["git", "clone", "--depth=1", RVC_REPO, str(RVC_DIR)])
 
     os.chdir(RVC_DIR)
-    run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"])
-    run([sys.executable, "pipeline.py", "setup"])
+    run([python, "-m", "pip", "install", "-q", "-r", "requirements.txt"])
+    run([python, "pipeline.py", "setup"])
 
 
 def download_dataset(url: str) -> list[Path]:
@@ -91,24 +113,17 @@ def download_dataset(url: str) -> list[Path]:
 def train(cfg: TrainConfig, wavs: list[Path]) -> Path:
     """Run RVC training, return path to trained model."""
     os.chdir(RVC_DIR)
-    sys.path.insert(0, str(RVC_DIR))
+    python = PYTHON if Path(PYTHON).exists() else sys.executable
 
-    from config import PipelineConfig
-    from pipeline import RVCPipeline
-
-    pipeline_cfg = PipelineConfig()
-    pipeline_cfg.training.epochs = cfg.epochs
-    pipeline_cfg.training.batch_size = cfg.batch_size
-    pipeline_cfg.f0.method = "rmvpe_gpu"
-
-    pipeline = RVCPipeline(pipeline_cfg)
-    pipeline.run_full_training(
-        model_name=cfg.model,
-        audio_files=wavs,
-        epochs=cfg.epochs,
-        batch_size=cfg.batch_size,
-        skip_setup=True,
+    wav_args = " ".join(f'"{w}"' for w in wavs)
+    train_cmd = (
+        f"{python} pipeline.py train"
+        f" -m {cfg.model}"
+        f" -a {wav_args}"
+        f" -e {cfg.epochs}"
+        f" -b {cfg.batch_size}"
     )
+    run(train_cmd, shell=True)
 
     candidates = (
         glob.glob(str(RVC_DIR / "weights" / f"{cfg.model}.pth"))
