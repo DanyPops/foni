@@ -127,7 +127,7 @@ export class FoniEngine {
   fillerCount(): number { return this.fillerCache.length; }
 
   startFiller(): void {
-    if (this.muted || this.fillerCache.length === 0 || !this.facade) return;
+    if (!this.config.enabled || this.muted || this.fillerCache.length === 0 || !this.facade) return;
     const idx = Math.floor(Math.random() * this.fillerCache.length);
     this.fillerActive = true;
     this.facade.playFiller(this.fillerCache[idx]);

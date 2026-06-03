@@ -2999,18 +2999,7 @@ fn cmd_train(
 
     eprintln!("  [4/7] Creating pod ({gpu})\u{2026}");
 
-    let template_id = match provider.create_template_rest(
-        "foni-train-run",
-        "runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04",
-        &["bash", "-c", "wget -qO /train.py https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py && python3 /train.py; sleep 300"],
-        &[],
-    ) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("  \u{2717} Template creation failed: {e}");
-            return;
-        }
-    };
+    let template_id = std::env::var("FONI_TEMPLATE_ID").unwrap_or_else(|_| "ztigypvs62".into());
 
     let gh_token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
     let pod_opts = cloud::CreatePodOpts {
