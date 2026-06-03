@@ -3005,9 +3005,20 @@ fn cmd_train(
         container_disk_gb: 20,
         name: "foni-train".into(),
         ports: "22/tcp".into(),
-        docker_args: format!(
-                "bash -c 'curl -sL https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py -o /train.py && FONI_MODEL={model} FONI_EPOCHS={epochs} FONI_DATASET_URL=https://github.com/DanyPops/foni/releases/download/dataset-v1/foni-dataset.tar.gz python3 /train.py 2>&1 | tee /workspace/train.log; sleep infinity'"
-            ),
+        docker_args: "bash -c 'curl -sL https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py -o /train.py && python3 /train.py 2>&1 | tee /workspace/train.log; sleep infinity'".into(),
+        env: {
+            let gh_token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
+            let mut env = vec![
+                ("FONI_MODEL".into(), model.to_string()),
+                ("FONI_EPOCHS".into(), epochs.to_string()),
+                ("FONI_DATASET_URL".into(), "https://github.com/DanyPops/foni/releases/download/dataset-v1/foni-dataset.tar.gz".into()),
+                ("FONI_UPLOAD_TAG".into(), format!("model-{model}")),
+            ];
+            if !gh_token.is_empty() {
+                env.push(("GITHUB_TOKEN".into(), gh_token));
+            }
+            env
+        },
     }) {
         Ok(p) => {
             eprintln!(
@@ -3500,6 +3511,7 @@ fn cmd_cloud(action: CloudAction) {
                 name: "foni-train".into(),
                 ports: "8888/http".into(),
                 docker_args: String::new(),
+                env: vec![],
             }) {
                 Ok(pod) => {
                     println!("{}", pod.id);
