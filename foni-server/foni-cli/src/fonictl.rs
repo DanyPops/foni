@@ -428,6 +428,8 @@ enum CloudAction {
     },
     /// List running pods
     Pods,
+    /// Terminate all running pods
+    KillAll,
 }
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -2935,22 +2937,23 @@ fn cmd_train(
     }
     eprintln!("  Balance: ${:.2}", balance_before);
 
-    // Step 1: Clean
-    let clean_dir = data_dir().join("training/clean");
-    eprintln!("\n  [1/7] Cleaning dataset\u{2026}");
-    cmd_clean(dataset, &clean_dir);
-
-    // Step 2: Augment
-    let aug_dir = data_dir().join("training/augmented");
-    eprintln!("  [2/7] Augmenting\u{2026}");
-    cmd_augment(&clean_dir, &aug_dir, "0.95,1.0,1.05");
-    let dataset_files = std::fs::read_dir(&aug_dir)
-        .map(|d| d.filter_map(|e| e.ok()).count())
+    let dataset_files = std::fs::read_dir(dataset)
+        .map(|d| {
+            d.filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .map(|ext| ext == "wav")
+                        .unwrap_or(false)
+                })
+                .count()
+        })
         .unwrap_or(0);
-
-    // Step 3: Snapshot
-    eprintln!("  [3/7] Snapshotting current model\u{2026}");
-    cmd_snapshot(server, model, ref_path);
+    eprintln!(
+        "  Dataset: {} WAV files in {}",
+        dataset_files,
+        dataset.display()
+    );
 
     // Step 4: Create pod
     let started_at = chrono::Utc::now().to_rfc3339();
@@ -2963,7 +2966,7 @@ fn cmd_train(
             dataset_files
         );
         eprintln!("  [6/7] (dry-run) Would download model");
-        eprintln!("  [7/7] Comparing models\u{2026}");
+        eprintln!("  [4/4] Comparing models\u{2026}");
         cmd_compare_models(server, model, ref_path);
 
         let receipt = cost::Receipt {
@@ -2997,7 +3000,7 @@ fn cmd_train(
     let image = std::env::var("FONI_TRAIN_IMAGE")
         .unwrap_or_else(|_| "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404".into());
 
-    eprintln!("  [4/7] Creating pod ({gpu})\u{2026}");
+    eprintln!("  [1/4] Creating pod ({gpu})\u{2026}");
 
     let template_id = std::env::var("FONI_TEMPLATE_ID").unwrap_or_else(|_| "zqsos1r03t".into());
 
@@ -3041,14 +3044,6 @@ fn cmd_train(
         for candidate in std::iter::once(gpu.as_str()).chain(gpu_candidates.iter().copied()) {
             let mut opts = pod_opts.clone();
             opts.gpu_type_id = candidate.to_string();
-            let is_blackwell = candidate.contains("Blackwell")
-                || candidate.contains("PRO 6000")
-                || candidate.contains("PRO 4500");
-            opts.image = if is_blackwell {
-                "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404".into()
-            } else {
-                "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04".into()
-            };
             if let Ok(p) = provider.create_pod(opts) {
                 eprintln!(
                     "    Pod: {} ({}), ${:.2}/hr",
@@ -3063,7 +3058,7 @@ fn cmd_train(
     };
 
     // Step 5: Training runs inside dockerArgs — poll pod status for EXITED
-    eprintln!("  [5/7] Training (running in pod)\u{2026}");
+    eprintln!("  [2/4] Training (running in pod)\u{2026}");
     eprintln!("    Logs: https://console.runpod.io/pods");
 
     let mut final_loss = 0.001f64;
@@ -3093,7 +3088,7 @@ fn cmd_train(
     }
 
     // Step 6: Download model from GitHub release (uploaded by pod-train.py)
-    eprintln!("  [6/7] Downloading model\u{2026}");
+    eprintln!("  [3/4] Downloading model\u{2026}");
     let model_dir = format!("rvc/models/{model}");
     std::fs::create_dir_all(&model_dir).ok();
     let download_url = format!(
@@ -3122,7 +3117,7 @@ fn cmd_train(
     );
 
     // Step 7: Compare models
-    eprintln!("  [7/7] Comparing models\u{2026}");
+    eprintln!("  [4/4] Comparing models\u{2026}");
     cmd_compare_models(server, model, ref_path);
 
     let balance_after = provider
@@ -3562,6 +3557,25 @@ fn cmd_cloud(action: CloudAction) {
                 "{}",
                 serde_json::to_string_pretty(&pods).unwrap_or_default()
             ),
+            Err(e) => eprintln!("  {e}"),
+        },
+        CloudAction::KillAll => match provider.list_pods() {
+            Ok(pods) => {
+                let empty = vec![];
+                let arr = pods.as_array().unwrap_or(&empty);
+                if arr.is_empty() {
+                    eprintln!("  No pods running");
+                } else {
+                    for p in arr {
+                        if let Some(id) = p["id"].as_str() {
+                            match provider.terminate_pod(id) {
+                                Ok(()) => eprintln!("  Killed {id}"),
+                                Err(e) => eprintln!("  Failed {id}: {e}"),
+                            }
+                        }
+                    }
+                }
+            }
             Err(e) => eprintln!("  {e}"),
         },
         CloudAction::History => unreachable!(),

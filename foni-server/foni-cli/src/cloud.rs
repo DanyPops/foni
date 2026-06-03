@@ -1066,6 +1066,7 @@ fn docker_args_escaping_no_double_quotes() {
         ports: "22/tcp".into(),
         docker_args: "bash -c 'echo hello; sleep 10'".into(),
         env: vec![],
+        template_id: None,
     };
     // Verify the escaped string doesn't contain double-escaped quotes
     let escaped = opts.docker_args.replace('"', r#"\""#);
