@@ -295,11 +295,11 @@ impl PodSsh {
         }
     }
 
-    fn ssh_dest(&self) -> String {
+    pub fn ssh_dest(&self) -> String {
         format!("{}-{}@ssh.runpod.io", self.pod_id, self.account_hash)
     }
 
-    fn ssh_opts() -> Vec<String> {
+    pub fn ssh_opts_static() -> Vec<String> {
         vec![
             "-tt".into(),
             "-o".into(),
@@ -314,7 +314,7 @@ impl PodSsh {
     pub fn run(&self, cmd: &str) -> Result<(), String> {
         eprintln!("  \u{25b6} {}", cmd);
         let status = std::process::Command::new("ssh")
-            .args(Self::ssh_opts())
+            .args(Self::ssh_opts_static())
             .arg(&self.ssh_dest())
             .arg(cmd)
             .status()
@@ -335,7 +335,7 @@ impl PodSsh {
             .spawn()
             .map_err(|e| format!("tar: {e}"))?;
         let status = std::process::Command::new("ssh")
-            .args(Self::ssh_opts())
+            .args(Self::ssh_opts_static())
             .arg(&self.ssh_dest())
             .arg(format!("tar xzf - -C {remote}"))
             .stdin(tar.stdout.ok_or("no tar stdout")?)
@@ -365,7 +365,7 @@ impl PodSsh {
             .and_then(|n| n.to_str())
             .unwrap_or("file");
         let ssh = std::process::Command::new("ssh")
-            .args(Self::ssh_opts())
+            .args(Self::ssh_opts_static())
             .arg(&self.ssh_dest())
             .arg(format!("tar czf - -C {remote_dir} {remote_name}"))
             .stdout(std::process::Stdio::piped())
@@ -389,12 +389,25 @@ impl PodSsh {
     pub fn wait_for_ssh(&self, timeout_secs: u64) -> Result<(), String> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
         loop {
-            if self.run("true").is_ok() {
-                return Ok(());
+            // run `hostname` not `true` — proxy accepts `true` before container is ready
+            let out = std::process::Command::new("ssh")
+                .args(Self::ssh_opts_static())
+                .arg(&self.ssh_dest())
+                .arg("hostname")
+                .output();
+            if let Ok(o) = out {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                // "container not found" means proxy is up but container isn't
+                if o.status.success() && !stdout.contains("container not found") {
+                    eprintln!("  SSH ready");
+                    return Ok(());
+                }
             }
             if std::time::Instant::now() > deadline {
                 return Err("SSH not reachable".into());
             }
+            eprint!("\r  Waiting for container...");
+            std::io::Write::flush(&mut std::io::stderr()).ok();
             std::thread::sleep(std::time::Duration::from_secs(5));
         }
     }
