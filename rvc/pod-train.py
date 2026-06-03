@@ -122,15 +122,15 @@ def train(cfg: TrainConfig, wavs: list[Path]) -> Path:
     os.chdir(RVC_DIR)
     python = PYTHON if Path(PYTHON).exists() else sys.executable
 
-    wav_args = " ".join(f'"{w}"' for w in wavs)
-    train_cmd = (
-        f"{python} pipeline.py train"
-        f" -m {cfg.model}"
-        f" -a {wav_args}"
-        f" -e {cfg.epochs}"
-        f" -b {cfg.batch_size}"
-    )
-    run(train_cmd, shell=True)
+    # subprocess list bypasses shell arg length limit
+    cmd = [
+        python, "pipeline.py", "train",
+        "-m", cfg.model,
+        "-a", *[str(w) for w in wavs],
+        "-e", str(cfg.epochs),
+        "-b", str(cfg.batch_size),
+    ]
+    run(cmd)
 
     candidates = (
         glob.glob(str(RVC_DIR / "weights" / f"{cfg.model}.pth"))
