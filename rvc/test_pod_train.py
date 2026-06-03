@@ -119,3 +119,43 @@ class TestMarkers:
             _module["OUTPUT_DIR"] = Path(tmp)
             _module["mark_failed"]("disk full")
             assert (Path(tmp) / "FAILED").read_text() == "disk full"
+
+
+class TestE2ELocal:
+    """End-to-end test with real image + one WAV file, no GPU."""
+
+    def test_full_pipeline_one_file(self, tmp_path):
+        """Run pod-train.py in the RunPod container with 1 WAV, 1 epoch."""
+        import subprocess, shutil
+
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+
+        wav_src = Path(__file__).parent.parent / "baseline/stalker/wav/sidorovich/trader1a.wav"
+        if not wav_src.exists():
+            pytest.skip("baseline WAV not found")
+
+        shutil.copy(wav_src, dataset_dir / "trader1a.wav")
+
+        result = subprocess.run(
+            [
+                "podman", "run", "--rm",
+                "-e", "FONI_MODEL=test",
+                "-e", "FONI_EPOCHS=1",
+                "-e", "FONI_DATASET_URL=",
+                "-e", "FONI_WORKSPACE=/workspace",
+                "-v", f"{dataset_dir}:/workspace/dataset:Z",
+                "docker.io/runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04",
+                "bash", "-c",
+                "wget -qO /train.py https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py && python3 /train.py",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+
+        print(result.stdout[-2000:] if len(result.stdout) > 2000 else result.stdout)
+        if result.returncode != 0:
+            print("STDERR:", result.stderr[-1000:])
+
+        assert "[dataset] 1 WAV" in result.stdout, "Dataset not loaded"
