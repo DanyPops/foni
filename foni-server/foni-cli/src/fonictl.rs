@@ -2999,12 +2999,11 @@ fn cmd_train(
 
     eprintln!("  [4/7] Creating pod ({gpu})\u{2026}");
 
-    // Create template with dockerArgs (REST dockerStartCmd is broken)
-    let docker_cmd = "wget -qO /train.py https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py && python3 /train.py; sleep 300";
-    let template_id = match provider.create_template(
+    let template_id = match provider.create_template_rest(
         "foni-train-run",
         "runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04",
-        None,
+        &["bash", "-c", "wget -qO /train.py https://raw.githubusercontent.com/DanyPops/foni/master/rvc/pod-train.py && python3 /train.py; sleep 300"],
+        &[],
     ) {
         Ok(id) => id,
         Err(e) => {
@@ -3012,10 +3011,6 @@ fn cmd_train(
             return;
         }
     };
-    // Update template with dockerArgs via GraphQL (only way that works)
-    let _ = provider.graphql(&format!(
-        r#"mutation {{ saveTemplate(input: {{ id: \"{template_id}\", name: \"foni-train-run\", imageName: \"runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04\", dockerArgs: \"{docker_cmd}\", containerDiskInGb: 20, volumeInGb: 0, isServerless: false, env: [] }}) {{ id }} }}"#
-    ));
 
     let gh_token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
     let pod_opts = cloud::CreatePodOpts {
