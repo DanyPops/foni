@@ -46,7 +46,7 @@ class TrainConfig:
         )
 
 
-WORKSPACE = Path("/workspace")
+WORKSPACE = Path(os.environ.get("FONI_WORKSPACE", "/workspace"))
 DATASET_DIR = WORKSPACE / "dataset"
 OUTPUT_DIR = WORKSPACE / "output"
 RVC_DIR = WORKSPACE / "rvc-no-gui"
@@ -65,9 +65,9 @@ PYTHON = str(CONDA_ENV / "bin" / "python")
 
 
 def setup_python():
-    """Install Python 3.10 via conda if system Python is too new for RVC."""
+    """Find a Python <=3.10 for RVC. Returns path to interpreter."""
     version = sys.version_info
-    if version.minor < 11:
+    if version.minor <= 10:
         print(f"[setup] system Python {version.major}.{version.minor} is compatible")
         return sys.executable
 
@@ -75,9 +75,16 @@ def setup_python():
         print("[setup] conda Python 3.10 already installed")
         return PYTHON
 
-    print(f"[setup] system Python {version.major}.{version.minor} too new, installing 3.10 via conda...")
-    run(["conda", "create", "-y", "-p", str(CONDA_ENV), "python=3.10", "-q"])
-    return PYTHON
+    # Try conda if available
+    import shutil
+    if shutil.which("conda"):
+        print(f"[setup] system Python {version.major}.{version.minor} too new, installing 3.10 via conda...")
+        run(["conda", "create", "-y", "-p", str(CONDA_ENV), "python=3.10", "-q"])
+        return PYTHON
+
+    # No conda — warn and try system Python anyway
+    print(f"[setup] WARNING: Python {version.major}.{version.minor} may be too new for RVC, no conda available")
+    return sys.executable
 
 
 def install_rvc():
