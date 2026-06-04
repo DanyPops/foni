@@ -1,6 +1,15 @@
-import type { AudioProcessor } from "./interfaces.ts";
-import { getLogger }   from "../core/logger.ts";
 import { rms, peak, parseWav } from "./analysis/audio-utils.ts";
+
+interface AudioProcessor {
+  process(input: Buffer): Promise<Buffer>;
+}
+
+const log = {
+  debug: (..._args: unknown[]) => {},
+  info:  (..._args: unknown[]) => {},
+  warn:  (..._args: unknown[]) => {},
+};
+
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -439,7 +448,7 @@ export class SmoothingProcessor implements AudioProcessor {
   // DEAD CODE MARKER — kept for grepping during migration review:
 
   async process(input: Buffer): Promise<Buffer> {
-    const log = getLogger();
+    // logging removed
 
     // 1. Pad silence — gives RVC edge context (pure WAV manipulation, no ffmpeg)
     const padded = padWavSilence(input, this.opts.padSecs);
@@ -493,7 +502,7 @@ export class RVCProcessor implements AudioProcessor {
   ) {}
 
   async process(input: Buffer): Promise<Buffer> {
-    const log   = getLogger();
+    // logging removed
     const start = Date.now();
     try {
       const resp = await fetch(`${this.url}/convert`, {

@@ -121,15 +121,6 @@ async fn process_chunk(
         return;
     }
 
-    let key = cache_key(&clean, &config.rvc_model);
-
-    if let Some(cached) = cache.get(&key).await {
-        play_queue.enqueue(cached).await;
-        let reply = serde_json::json!({"type": "playing", "text": clean});
-        let _ = tx.send(Message::Text(reply.to_string().into())).await;
-        return;
-    }
-
     let translated = if config.input_lang != config.output_lang {
         let glossed = translator::apply_glossary(&clean);
         match translator::ollama_translate(
@@ -148,8 +139,63 @@ async fn process_chunk(
         clean.clone()
     };
 
-    let reply = serde_json::json!({"type": "speak", "text": translated});
-    let _ = tx.send(Message::Text(reply.to_string().into())).await;
+    let key = cache_key(&translated, &config.rvc_model);
+
+    if let Some(cached) = cache.get(&key).await {
+        play_queue.enqueue(cached).await;
+        let reply = serde_json::json!({"type": "playing", "text": translated});
+        let _ = tx.send(Message::Text(reply.to_string().into())).await;
+        return;
+    }
+
+    // Synthesize via local HTTP (calls our own /synthesize endpoint)
+    let addr = std::env::var("FONI_SYNTH_ADDR").unwrap_or_else(|_| "0.0.0.0:5050".into());
+    let synth_url = format!(
+        "http://localhost:{}",
+        addr.rsplit(':').next().unwrap_or("5050")
+    );
+    match synthesize_local(&synth_url, &translated, &config.rvc_model).await {
+        Ok(wav) => {
+            cache.put(key, wav.clone()).await;
+            play_queue.enqueue(wav).await;
+            let reply = serde_json::json!({"type": "playing", "text": translated});
+            let _ = tx.send(Message::Text(reply.to_string().into())).await;
+        }
+        Err(e) => {
+            tracing::warn!("synthesis failed: {e}");
+            let reply = serde_json::json!({"type": "error", "msg": e});
+            let _ = tx.send(Message::Text(reply.to_string().into())).await;
+        }
+    }
+}
+
+async fn synthesize_local(base_url: &str, text: &str, model: &str) -> Result<Vec<u8>, String> {
+    let body = serde_json::json!({
+        "text": text,
+        "model": model,
+        "voice": "ru",
+        "speed": 150,
+        "dsp": true,
+        "prosody": true,
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base_url}/synthesize"))
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("synthesize request: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    resp.bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| e.to_string())
 }
 
 fn now_ms() -> f64 {

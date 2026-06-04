@@ -1,123 +1,107 @@
 /**
- * Foni — pi TTS extension entry point.
+ * Foni — pi TTS extension.
  *
- * This file is a thin adapter: it wires pi lifecycle events and commands
- * to FoniEngine. No domain logic lives here.
- *
- * Domain:  core/engine.ts  (FoniEngine)
- * Config:  core/config.ts  (FoniConfig, DEFAULT_CONFIG)
- * Stream:  core/stream.ts  (drainChunks, StreamState)
- * TUI:     tui/foni-panel.ts, tui/model-picker.ts
+ * Thin WebSocket adapter: forwards pi events to foni-synth Rust engine.
+ * All synthesis, translation, emotion, and playback happen in Rust.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
-
-import { FoniEngine, type FacadeFactory, type TranslatorFactory } from "./core/engine.ts";
-import { DEFAULT_CONFIG }    from "./core/config.ts";
-import type { FoniConfig }   from "./core/config.ts";
-import {
-  IdentityTranslator, LibreTranslateTranslator, PipelineTranslator,
-  makeTranslateMiddleware, makeMatMiddleware, makeInterjectMiddleware, makeITGlossaryMiddleware,
-} from "./pipeline/translators.ts";
-import { BIAS_WORDS, effectiveWeights, currentIntensity } from "./core/emotion.ts";
-import type { EmotionState, Emotion } from "./core/emotion.ts";
-import { IdentityProcessor } from "./pipeline/processors.ts";
-import { SynthBackend }      from "./pipeline/synth-backend.ts";
-import type { SynthBackendOpts } from "./pipeline/synth-backend.ts";
-
-
-import { SpeakFacade }       from "./pipeline/speak-facade.ts";
-import { SystemPlayer }      from "./pipeline/player.ts";
-import { WebSocket }         from "ws";
-
-// ─── Factory implementations (index.ts is the composition root) ───────────────────
-//
-// All concrete backend/processor construction lives here, not in core/engine.ts.
-// This is the Composition Root pattern: one place wires everything together.
-
-// ─── Factory implementations (index.ts is the composition root) ───────────────
-//
-// All concrete construction lives here. FoniEngine receives only abstractions.
-// This is the full Composition Root pattern: one place wires everything together.
-
-const translatorFactory: TranslatorFactory = (cfg, emotion) => {
-  const ew = effectiveWeights(emotion);
-  const matProb       = Math.min(1, cfg.matProb       * ew.matMultiplier);
-  const interjectProb = Math.min(1, cfg.interjectProb * ew.interjectMultiplier);
-  const bias          = ew.wordBias;
-  const stack = [makeITGlossaryMiddleware()];
-  if (cfg.inputLang !== cfg.outputLang) {
-    stack.push(makeTranslateMiddleware(cfg.inputLang, cfg.outputLang));
-  }
-  if (cfg.outputLang === "ru") {
-    if (cfg.matEnabled)       stack.push(makeMatMiddleware(matProb, cfg.matStretch, bias, BIAS_WORDS, cfg.matCooldownMs));
-    if (cfg.interjectEnabled) stack.push(makeInterjectMiddleware(interjectProb, bias, BIAS_WORDS, cfg.interjectCooldownMs));
-  }
-  return new PipelineTranslator(stack, cfg.outputLang);
-};
-
-const RATE_NEUTRAL  = 93;
-
-function lerpRound(a: number, b: number, t: number): number {
-  return Math.round(a + t * (b - a));
-}
-
-/** Compute espeak prosody overrides from the current emotion state. */
-function emotionProsody(
-  emotion: Emotion,
-  intensity: number,
-): { ratePct: number; range: string } {
-  switch (emotion) {
-    case "angry":      return { ratePct: lerpRound(RATE_NEUTRAL, 90,  intensity), range: "x-high" };
-    case "frustrated": return { ratePct: lerpRound(RATE_NEUTRAL, 97,  intensity), range: "high"   };
-    case "sarcastic":  return { ratePct: lerpRound(RATE_NEUTRAL, 95,  intensity), range: "x-high" };
-    case "excited":    return { ratePct: lerpRound(RATE_NEUTRAL, 107, intensity), range: "high"   };
-    case "cute":       return { ratePct: lerpRound(RATE_NEUTRAL, 104, intensity), range: "medium"  };
-    default:           return { ratePct: RATE_NEUTRAL, range: "medium" };
-  }
-}
-
-/** Build SynthBackendOpts, blending emotion state into prosody overrides. */
-function synthBackendOpts(cfg: typeof DEFAULT_CONFIG, emotion: EmotionState): SynthBackendOpts {
-  const base: SynthBackendOpts = {
-    url:     cfg.rvcUrl,
-    model:   cfg.rvcModel,
-    prosody: cfg.prosodyEnabled && cfg.outputLang === "ru",
-  };
-  const intensity = currentIntensity(emotion);
-  if (intensity < 0.3 || emotion.emotion === "neutral") return base;
-  return { ...base, ...emotionProsody(emotion.emotion, intensity) };
-}
-
-const facadeFactory: FacadeFactory = async (cfg, translator, emotion) => {
-  // All synthesis goes through foni-synth. No fallback to bare espeak.
-  const synth = new SynthBackend(synthBackendOpts(cfg, emotion));
-  if (!(await synth.isAvailable())) return null;
-  fetch(`${cfg.rvcUrl}/ssml-params`, { signal: AbortSignal.timeout(2_000) }).catch(() => {});
-  return new SpeakFacade(translator, synth, new IdentityProcessor(), new SystemPlayer(), {
-    voice: cfg.outputLang === "ru" ? "ru" : cfg.voice,
-    speed: cfg.speed,
-  });
-};
-
-
-import { pickModel }         from "./tui/model-picker.ts";
-import { openFoniPanel }     from "./tui/foni-panel.ts";
+import { WebSocket } from "ws";
+import { pickModel } from "./tui/model-picker.ts";
+import { openFoniPanel } from "./tui/foni-panel.ts";
 import type { FoniPanelState, FoniPanelActions } from "./tui/foni-panel.ts";
+
+interface FoniConfig {
+  enabled: boolean;
+  voice: string;
+  speed: number;
+  inputLang: "en" | "ru";
+  outputLang: "en" | "ru";
+  backendPref: "auto" | "espeak" | "say";
+  matEnabled: boolean;
+  matProb: number;
+  matStretch: number;
+  matCooldownMs: number;
+  interjectEnabled: boolean;
+  interjectProb: number;
+  interjectCooldownMs: number;
+  rvcEnabled: boolean;
+  rvcUrl: string;
+  rvcModel: string;
+  prosodyEnabled: boolean;
+}
+
+const DEFAULT_CONFIG: FoniConfig = {
+  enabled: true,
+  voice: "ru",
+  speed: 1.0,
+  inputLang: "en",
+  outputLang: "ru",
+  backendPref: "espeak",
+  matEnabled: true,
+  matProb: 0.35,
+  matStretch: 0.5,
+  matCooldownMs: 20_000,
+  interjectEnabled: true,
+  interjectProb: 0.25,
+  interjectCooldownMs: 12_000,
+  rvcEnabled: true,
+  rvcUrl: "http://localhost:5050",
+  rvcModel: "sidorovich",
+  prosodyEnabled: true,
+};
 
 // ─── Extension entry point ────────────────────────────────────────────────────
 
 export default async function (pi: ExtensionAPI) {
-  const engine = new FoniEngine(
-    { ...DEFAULT_CONFIG },
-    facadeFactory,
-    translatorFactory,
-    (_cfg: FoniConfig) => new IdentityProcessor(),
-  );
-  const config = engine.config;
+  const config: FoniConfig = { ...DEFAULT_CONFIG };
+  let ws: WebSocket | null = null;
+  let muted = false;
+  let emotionEmoji = "";
 
-    // ── Mixer session ───────────────────────────────────────────────────────────
+  // ── WebSocket ─────────────────────────────────────────────────────────────
+
+  function connectWs(): void {
+    const url = config.rvcUrl.replace(/^http/, "ws") + "/ws";
+    try {
+      ws = new WebSocket(url);
+      ws.on("message", (data: Buffer) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "emotion") {
+            emotionEmoji = msg.intensity >= 0.3 ? (msg.emoji ?? "") : "";
+          }
+        } catch { /* malformed */ }
+      });
+      ws.on("error", () => { ws = null; });
+      ws.on("close", () => { ws = null; });
+    } catch { ws = null; }
+  }
+
+  function wsSend(msg: Record<string, unknown>): void {
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg));
+    }
+  }
+
+  // ── Status bar ────────────────────────────────────────────────────────────
+
+  function updateStatus(ctx: { ui: { setStatus: Function; theme: any } }): void {
+    const { theme } = ctx.ui;
+    if (!config.enabled) { ctx.ui.setStatus("tts", undefined); return; }
+    const lang = config.inputLang === config.outputLang
+      ? config.outputLang.toUpperCase()
+      : `${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`;
+    const mat = config.matEnabled ? "+mat" : "";
+    const ij = config.interjectEnabled ? "+oj" : "";
+    const emotion = emotionEmoji ? ` ${emotionEmoji}` : "";
+    ctx.ui.setStatus(
+      "tts",
+      theme.fg("accent", "TTS") + theme.fg("dim", ` ${muted ? "🔇 " : ""}synth${config.rvcModel ? `+${config.rvcModel}` : ""}${mat}${ij} ${lang}${emotion}`),
+    );
+  }
+
+  // ── Mixer session ─────────────────────────────────────────────────────────
 
   interface MixerTrack {
     label: string; rating?: number; winner?: boolean;
@@ -139,148 +123,50 @@ export default async function (pi: ExtensionAPI) {
     } catch { mixerSession = null; }
   }
 
-  async function saveMixerSession(session: MixerSession): Promise<void> {
-    try {
-      const { mkdir, writeFile } = await import("node:fs/promises");
-      const dir = SESSION_PATH.replace(/\/[^\/]+$/, "");
-      await mkdir(dir, { recursive: true });
-      await writeFile(SESSION_PATH, JSON.stringify(session, null, 2));
-    } catch { /* best-effort */ }
-  }
-
   function mixerWinner(): MixerTrack | undefined {
     return mixerSession?.tracks.find(t => t.winner);
   }
 
   function mixerContext(): string {
     if (!mixerSession) return "No mixer session loaded.";
-    const winner = mixerWinner();
-    const rated  = mixerSession.tracks.filter(t => t.rating !== undefined);
+    const rated = mixerSession.tracks.filter(t => t.rating !== undefined);
     return [
       `Mixer QA session — phrase: «${mixerSession.phrase}»`,
       `Saved: ${mixerSession.saved_at}`,
       "",
-      "Rated tracks (human perceptual judgment):",
+      "Rated tracks:",
       ...rated.map(t =>
         `  ${"★".repeat(t.rating ?? 0)}${"☆".repeat(5 - (t.rating ?? 0))} ${t.label}${
           t.winner ? " ✪ winner" : ""}${t.note ? ` — ${t.note}` : ""}`
       ),
-      ...(winner ? ["", `Winner DSP opts (${winner.label}):`,
-        JSON.stringify(winner.opts, null, 2)] : []),
     ].join("\n");
   }
 
-// ── Status bar ─────────────────────────────────────────────────────────────
-
-  function updateStatus(ctx: { ui: { setStatus: Function; theme: any } }): void {
-    const { theme } = ctx.ui;
-    if (!config.enabled) { ctx.ui.setStatus("tts", undefined); return; }
-    const s = engine.status();
-    const lang = s.inputLang === s.outputLang
-      ? s.outputLang.toUpperCase()
-      : `${s.inputLang.toUpperCase()}→${s.outputLang.toUpperCase()}`;
-    const mat = s.matEnabled ? "+mat" : "";
-    const ij  = s.interjectEnabled ? "+oj" : "";
-    const emotion = s.emotionEmoji ? ` ${s.emotionEmoji}` : "";
-    const winner   = mixerWinner();
-    const mix      = winner ? theme.fg("accent", ` ✪${winner.label}`) : "";
-    ctx.ui.setStatus(
-      "tts",
-      theme.fg("accent", "TTS") + theme.fg("dim", ` ${engine.muted ? "🔇 " : ""}${s.backendName}${s.rvcModel ? `+${s.rvcModel}` : ""}${mat}${ij} ${lang}${emotion}`) + mix,
-    );
-  }
-
-  // ── Lifecycle events ───────────────────────────────────────────────────────
+  // ── Lifecycle events ──────────────────────────────────────────────────────
 
   pi.on("session_start", (_event, ctx) => {
-    loadMixerSession().then(() => updateStatus(ctx));
     connectWs();
+    loadMixerSession().then(() => updateStatus(ctx));
     updateStatus(ctx);
-    bootstrapServer(ctx);
+    wsSend({ type: "prewarm" });
   });
-
-  /** Connect to foni-synth, load model if needed, rebuild facade. Retries once after 10s. */
-  async function bootstrapServer(ctx: any, attempt = 0): Promise<void> {
-    try {
-      const r    = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(2_000) });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data      = await r.json() as { models: string[]; onnx_ready?: string[] };
-      const models    = data.models     ?? [];
-      const onnxReady = data.onnx_ready ?? [];
-
-      if (models.length > 0 && !config.rvcModel) config.rvcModel = models[0];
-
-      const needsLoad = config.rvcModel &&
-        (!config.rvcEnabled || !onnxReady.includes(config.rvcModel));
-
-      if (needsLoad) {
-        const load = await fetch(
-          `${config.rvcUrl}/models/${encodeURIComponent(config.rvcModel!)}`,
-          { method: "POST", signal: AbortSignal.timeout(15_000) },
-        );
-        if (load.ok) {
-          config.rvcEnabled = true;
-          engine.invalidateFacade();
-        }
-      }
-
-      updateStatus(ctx);
-      engine.prewarm().catch(() => {});
-    } catch {
-      if (attempt === 0) {
-        // Server may still be starting (ExecStartPost 5s warm-up). Retry once.
-        setTimeout(() => bootstrapServer(ctx, 1), 10_000);
-      }
-      // After second failure stay silent — user can /tts rvc on to retry.
-    }
-  }
-
-  // ── WebSocket to Rust engine for stream chunking ──────────────────────────
-
-  let ws: WebSocket | null = null;
-
-  function connectWs(): void {
-    const url = config.rvcUrl.replace(/^http/, "ws") + "/ws";
-    try {
-      ws = new WebSocket(url);
-      ws.on("message", (data: Buffer) => {
-        try {
-          const msg = JSON.parse(data.toString());
-          if (msg.type === "speak" && msg.text) {
-            engine.enqueue(msg.text);
-          }
-        } catch { /* malformed JSON */ }
-      });
-      ws.on("error", () => { ws = null; });
-      ws.on("close", () => { ws = null; });
-    } catch { ws = null; }
-  }
-
-  function wsSend(msg: Record<string, unknown>): void {
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(msg));
-    } else {
-      if (msg.type === "delta")       engine.onDelta(msg.text as string);
-      if (msg.type === "message_end") engine.onMessageEnd();
-    }
-  }
 
   pi.on("message_update", (_event, _ctx) => {
     if (_event.message.role !== "assistant") return;
     const ev = _event.assistantMessageEvent;
     if (!ev || (ev as any).type !== "text_delta") return;
+    if (!config.enabled || muted) return;
     wsSend({ type: "delta", text: (ev as any).delta ?? "" });
   });
 
   pi.on("message_end", (_event, ctx) => {
     if (_event.message.role === "user") {
-      const raw  = _event.message.content;
-      const text  = Array.isArray(raw)
+      const raw = _event.message.content;
+      const text = Array.isArray(raw)
         ? raw.map((c: any) => c?.text ?? c).filter(Boolean).join(" ")
         : (raw ?? "") as string;
       if (text) {
         wsSend({ type: "user_message", text });
-        engine.onUserMessage(text);
         updateStatus(ctx);
       }
       return;
@@ -291,59 +177,32 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("agent_start", () => {
     wsSend({ type: "reset" });
-    engine.reset();
-    engine.startFiller();
   });
 
-  // ── TUI panel helpers ──────────────────────────────────────────────────────
+  // ── TUI panel ─────────────────────────────────────────────────────────────
 
   function panelState(): FoniPanelState {
     return {
-      enabled:     config.enabled,
-      inputLang:   config.inputLang,
-      outputLang:  config.outputLang,
-      speed:       config.speed,
-      backendName: engine.status().backendName,
+      enabled: config.enabled,
+      inputLang: config.inputLang,
+      outputLang: config.outputLang,
+      speed: config.speed,
+      backendName: "synth",
       backendPref: config.backendPref,
-      rvcEnabled:  config.rvcEnabled,
-      rvcModel:    config.rvcModel,
-      rvcUrl:      config.rvcUrl,
+      rvcEnabled: config.rvcEnabled,
+      rvcModel: config.rvcModel,
+      rvcUrl: config.rvcUrl,
       rvcServerOk: null,
     };
   }
 
   function panelActions(ctx: any): FoniPanelActions {
     return {
-      toggle() {
-        config.enabled = !config.enabled;
-        if (config.enabled) engine.ensureFacade();
-        engine.reset();
-        updateStatus(ctx);
-      },
-      setLang(inputLang, outputLang) {
-        config.inputLang  = inputLang;
-        config.outputLang = outputLang;
-        engine.rebuildTranslator();
-        updateStatus(ctx);
-      },
-      setSpeed(speed) {
-        config.speed = speed;
-        engine.ensureFacade().then(f => f?.setOpts({ speed }));
-        updateStatus(ctx);
-      },
-      setBackendPref(pref) {
-        config.backendPref = pref as typeof config.backendPref;
-        engine.invalidateFacade();
-        engine.ensureFacade().then(() => updateStatus(ctx));
-      },
-      toggleRvc() {
-        if (!config.rvcEnabled && !config.rvcModel) return;
-        config.rvcEnabled = !config.rvcEnabled;
-        engine.ensureFacade().then(f =>
-          f?.swapProcessor(new IdentityProcessor()),
-        );
-        updateStatus(ctx);
-      },
+      toggle() { config.enabled = !config.enabled; updateStatus(ctx); },
+      setLang(i, o) { config.inputLang = i; config.outputLang = o; wsSend({ type: "config", key: "lang", value: `${i},${o}` }); updateStatus(ctx); },
+      setSpeed(s) { config.speed = s; wsSend({ type: "config", key: "speed", value: String(s) }); updateStatus(ctx); },
+      setBackendPref(p) { config.backendPref = p as any; updateStatus(ctx); },
+      toggleRvc() { config.rvcEnabled = !config.rvcEnabled; updateStatus(ctx); },
       async pickRvcModel() {
         try {
           const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(3000) });
@@ -352,335 +211,136 @@ export default async function (pi: ExtensionAPI) {
           const picked = await pickModel(ctx, models, config.rvcModel);
           if (!picked) return;
           config.rvcModel = picked;
-          const lr = await fetch(`${config.rvcUrl}/models/${encodeURIComponent(picked)}`, {
-            method: "POST", signal: AbortSignal.timeout(10_000),
-          });
-          if (lr.ok) {
-            const f = await engine.ensureFacade();
-            f?.swapProcessor(new IdentityProcessor());
-          }
+          await fetch(`${config.rvcUrl}/models/${encodeURIComponent(picked)}`, { method: "POST", signal: AbortSignal.timeout(10_000) });
           updateStatus(ctx);
-        } catch { /* server unreachable */ }
+        } catch {}
       },
       async checkRvcServer() {
-        try {
-          const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) });
-          return r.ok;
-        } catch { return false; }
+        try { const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) }); return r.ok; }
+        catch { return false; }
       },
     };
   }
 
-  // ── Commands ───────────────────────────────────────────────────────────────
+  // ── Commands ──────────────────────────────────────────────────────────────
 
   pi.registerCommand("tts", {
-    description: "Toggle TTS | /tts test | /tts status | /tts voice | /tts speed | /tts lang en|ru | /tts backend espeak|say|auto | /tts rvc on|off|model|url|models | /tts mat on|off|<prob> | /tts interject on|off|<prob> | /tts stop",
+    description: "/tts | status | test | voice | speed | lang | mat | interject | rvc | stop | mute | mix",
     handler: async (args, ctx) => {
       const parts = (args ?? "").trim().split(/\s+/).filter(Boolean);
-      const sub   = parts[0] ?? "";
-      const ok    = (s: string) => `  ok  ${s}`;
-      const err   = (s: string) => `  ERR ${s}`;
-      const warn  = (s: string) => `  !   ${s}`;
-      const on    = (k: string, v: string) => `  ok  ${k.padEnd(12)} ${v}`;
-      const off   = (k: string, v: string) => `  -   ${k.padEnd(12)} ${v}`;
+      const sub = parts[0] ?? "";
 
-      // ── test ──────────────────────────────────────────────────────────────
-      if (sub === "test") {
-        const lines = ["Foni diagnostic:", ""];
-        lines.push(config.enabled ? ok("TTS enabled") : err("TTS disabled -- run /tts to toggle on"));
-        const facade   = await engine.ensureFacade();
-        const backend  = { name: facade?.backendName ?? "none" };
-        const player   = facade?.backendName;
-        lines.push(backend ? ok(`backend: ${backend.name}`) : err("no backend -- install espeak-ng or start Silero/Kokoro"));
-        if (config.inputLang !== config.outputLang) {
-          const t = await new LibreTranslateTranslator(config.inputLang, config.outputLang).translate("Hello stalker");
-          lines.push(t !== "Hello stalker" ? ok(`translation: "${t}"`) : warn("translation unreachable (is LibreTranslate running on :5000?)"));
-        } else {
-          lines.push(ok(`language: ${config.outputLang.toUpperCase()} (passthrough)`));
-        }
-        if (config.rvcEnabled) {
-          try {
-            const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) });
-            const p = await r.json() as { current_model?: string };
-            lines.push(r.ok ? ok(`RVC: ${config.rvcUrl} -- model: ${p.current_model ?? "none"}`) : err(`RVC ${r.status}`));
-          } catch { lines.push(err(`RVC unreachable at ${config.rvcUrl}`)); }
-        } else {
-          lines.push(warn("RVC disabled -- /tts rvc on to enable sidorovich voice"));
-        }
-        ctx.ui.notify(lines.join("\n"), "info");
-        if (backend && 'synthesize' in backend) {
-          const testFacade = new SpeakFacade(new IdentityTranslator(), backend as import("./pipeline/interfaces.ts").TTSBackend, new IdentityProcessor(),
-            (await engine.ensureFacade() as any)?.player ?? { play: async () => {}, detected: () => "none" },
-            { voice: config.voice, speed: config.speed });
-          await testFacade.speak("Test. One two three.", (m) => ctx.ui.notify(`  > ${m}`, "info"));
-        }
-        return;
-      }
-
-      // ── status ─────────────────────────────────────────────────────────────
       if (sub === "status") {
         ctx.ui.notify([
           "Foni status:", "",
-          (config.enabled ? on : off)("enabled", String(config.enabled)),
-          on("backend",  engine.status().backendName),
-          on("voice",    config.voice),
-          on("speed",    String(config.speed)),
-          on("language", config.inputLang === config.outputLang
-            ? config.outputLang.toUpperCase()
-            : `${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`),
-          "",
-          config.rvcEnabled ? on("rvc", `${config.rvcModel} @ ${config.rvcUrl}`) : off("rvc", "disabled"),
-          "",
-          on("audio cache", engine.cacheStats()),
+          `  enabled:   ${config.enabled}`,
+          `  backend:   synth`,
+          `  voice:     ${config.voice}`,
+          `  speed:     ${config.speed}`,
+          `  language:  ${config.inputLang === config.outputLang ? config.outputLang.toUpperCase() : `${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`}`,
+          config.rvcEnabled ? `  rvc:       ${config.rvcModel} @ ${config.rvcUrl}` : `  rvc:       disabled`,
+          `  ws:        ${ws?.readyState === WebSocket.OPEN ? "connected" : "disconnected"}`,
         ].join("\n"), "info");
         return;
       }
 
-      // ── cache ──────────────────────────────────────────────────────────────
-      if (sub === "cache") {
-        if (parts[1] === "clear") {
-          engine.clearCache();
-          ctx.ui.notify("Аудио кэш очищен", "info");
-        } else {
-          ctx.ui.notify(`Audio cache: ${engine.cacheStats()}\nUsage: /tts cache clear`, "info");
-        }
+      if (sub === "test") {
+        try {
+          const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) });
+          ctx.ui.notify(r.ok ? "foni-synth reachable ✅" : `foni-synth HTTP ${r.status}`, r.ok ? "info" : "warning");
+        } catch { ctx.ui.notify(`foni-synth unreachable at ${config.rvcUrl}`, "warning"); }
         return;
       }
 
-      // ── voice / speed / lang ───────────────────────────────────────────────
-      if (sub === "voice") {
-        config.voice = parts[1] ?? config.voice;
-        engine.ensureFacade().then(f => f?.setOpts({ voice: config.voice }));
-        ctx.ui.notify(`voice -> ${config.voice}`, "info");
-        return;
-      }
+      if (sub === "voice") { config.voice = parts[1] ?? config.voice; ctx.ui.notify(`voice → ${config.voice}`, "info"); return; }
       if (sub === "speed") {
         const n = parseFloat(parts[1] ?? "");
-        if (!isNaN(n) && n > 0) {
-          config.speed = Math.max(0.5, Math.min(3.0, n));
-          engine.ensureFacade().then(f => f?.setOpts({ speed: config.speed }));
-          ctx.ui.notify(`speed -> ${config.speed}`, "info");
-        } else {
-          ctx.ui.notify("Usage: /tts speed <0.5-3.0>", "warning");
-        }
+        if (!isNaN(n) && n > 0) { config.speed = Math.max(0.5, Math.min(3.0, n)); ctx.ui.notify(`speed → ${config.speed}`, "info"); }
+        else ctx.ui.notify("Usage: /tts speed <0.5-3.0>", "warning");
         return;
       }
+
       if (sub === "lang") {
         const a = parts[1] as "en" | "ru" | undefined;
         const b = parts[2] as "en" | "ru" | undefined;
         const valid = (x?: string): x is "en" | "ru" => x === "en" || x === "ru";
         if (!valid(a)) { ctx.ui.notify("Usage: /tts lang en|ru [en|ru]", "warning"); return; }
-        config.inputLang  = a;
-        config.outputLang = valid(b) ? b : a;
-        engine.rebuildTranslator();
-        ctx.ui.notify(`language -> ${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`, "info");
+        config.inputLang = a; config.outputLang = valid(b) ? b : a;
+        wsSend({ type: "config", key: "lang", value: `${config.inputLang},${config.outputLang}` });
+        ctx.ui.notify(`language → ${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`, "info");
         updateStatus(ctx);
         return;
       }
 
-      // ── mat ────────────────────────────────────────────────────────────────
       if (sub === "mat") {
-        if (config.outputLang !== "ru") { ctx.ui.notify("Mat only works with Russian output -- /tts lang ru first", "warning"); return; }
         const matSub = parts[1] ?? "";
-        if (matSub === "on" || matSub === "off") {
-          config.matEnabled = matSub === "on";
-          engine.rebuildTranslator();
-          ctx.ui.notify(`Mat ${config.matEnabled ? `включён (prob=${config.matProb})` : "выключен"}`, "info");
-          return;
-        }
-        if (matSub === "stretch") {
-          const sp = parseFloat(parts[2] ?? "");
-          if (!isNaN(sp) && sp >= 0 && sp <= 1) {
-            config.matStretch = sp;
-            engine.rebuildTranslator();
-            ctx.ui.notify(`Mat stretch probability -> ${sp}`, "info");
-          } else {
-            ctx.ui.notify(`Mat stretch: ${config.matStretch}\nUsage: /tts mat stretch 0.0-1.0`, "info");
-          }
-          return;
-        }
+        if (matSub === "on" || matSub === "off") { config.matEnabled = matSub === "on"; ctx.ui.notify(`Mat ${config.matEnabled ? "enabled" : "disabled"}`, "info"); updateStatus(ctx); return; }
         const prob = parseFloat(matSub);
-        if (!isNaN(prob) && prob >= 0 && prob <= 1) {
-          config.matProb = prob;
-          engine.rebuildTranslator();
-          ctx.ui.notify(`Mat probability -> ${prob}`, "info");
-          return;
-        }
-        if (matSub === "cooldown") {
-          const ms = parseInt(parts[2] ?? "");
-          if (!isNaN(ms) && ms >= 0) {
-            config.matCooldownMs = ms;
-            engine.rebuildTranslator();
-            ctx.ui.notify(`Mat cooldown -> ${ms}ms`, "info");
-          } else {
-            ctx.ui.notify(`Mat cooldown: ${config.matCooldownMs}ms\nUsage: /tts mat cooldown <ms>`, "info");
-          }
-          return;
-        }
-        ctx.ui.notify(
-          `Mat: ${config.matEnabled ? "включён" : "выключен"} (prob=${config.matProb}, stretch=${config.matStretch}, cooldown=${config.matCooldownMs}ms)\n` +
-          "Usage: /tts mat on|off | /tts mat 0.0-1.0 | /tts mat stretch 0.0-1.0 | /tts mat cooldown <ms>",
-          "info",
-        );
+        if (!isNaN(prob) && prob >= 0 && prob <= 1) { config.matProb = prob; ctx.ui.notify(`Mat prob → ${prob}`, "info"); return; }
+        ctx.ui.notify(`Mat: ${config.matEnabled ? "on" : "off"} (prob=${config.matProb})`, "info");
         return;
       }
 
-      // ── interject ──────────────────────────────────────────────────────────
       if (sub === "interject") {
-        if (config.outputLang !== "ru") { ctx.ui.notify("Интеръекции работают только с русским выводом -- /tts lang ru", "warning"); return; }
         const ijSub = parts[1] ?? "";
-        if (ijSub === "on" || ijSub === "off") {
-          config.interjectEnabled = ijSub === "on";
-          engine.rebuildTranslator();
-          ctx.ui.notify(`Межметия: ${config.interjectEnabled ? `включены (prob=${config.interjectProb})` : "выключены"}`, "info");
-          return;
-        }
-        const ijProb = parseFloat(ijSub);
-        if (!isNaN(ijProb) && ijProb >= 0 && ijProb <= 1) {
-          config.interjectProb = ijProb;
-          engine.rebuildTranslator();
-          ctx.ui.notify(`Межметия probability -> ${ijProb}`, "info");
-          return;
-        }
-        ctx.ui.notify(
-          `Межметия: ${config.interjectEnabled ? "включены" : "выключены"} (prob=${config.interjectProb})\n` +
-          "Usage: /tts interject on|off | /tts interject 0.0-1.0",
-          "info",
-        );
+        if (ijSub === "on" || ijSub === "off") { config.interjectEnabled = ijSub === "on"; ctx.ui.notify(`Interject ${config.interjectEnabled ? "enabled" : "disabled"}`, "info"); updateStatus(ctx); return; }
+        const prob = parseFloat(ijSub);
+        if (!isNaN(prob) && prob >= 0 && prob <= 1) { config.interjectProb = prob; ctx.ui.notify(`Interject prob → ${prob}`, "info"); return; }
+        ctx.ui.notify(`Interject: ${config.interjectEnabled ? "on" : "off"} (prob=${config.interjectProb})`, "info");
         return;
       }
 
-      // ── backend ────────────────────────────────────────────────────────────
-      if (sub === "backend") {
-        const pref = parts[1];
-        if (!["espeak","say","auto"].includes(pref ?? "")) {
-          ctx.ui.notify("Usage: /tts backend <espeak|say|auto>", "warning");
-          return;
-        }
-        config.backendPref = pref as typeof config.backendPref;
-        engine.invalidateFacade();
-        const f = await engine.ensureFacade();
-        ctx.ui.notify(f ? `backend -> ${f.backendName}` : "no backend available for that preference", f ? "info" : "warning");
-        updateStatus(ctx);
-        return;
-      }
-
-
-
-      // ── rvc ────────────────────────────────────────────────────────────────
       if (sub === "rvc") {
         const rvcSub = parts[1] ?? "";
-        if (rvcSub === "on" || rvcSub === "off") {
-          if (rvcSub === "on" && !config.rvcModel) { ctx.ui.notify("Set a model first: /tts rvc model <name>", "warning"); return; }
-          config.rvcEnabled = rvcSub === "on";
-          const f = await engine.ensureFacade();
-          f?.swapProcessor(new IdentityProcessor());
-          ctx.ui.notify(`RVC ${config.rvcEnabled ? "enabled" : "disabled"}`, "info");
-          updateStatus(ctx);
-          return;
-        }
+        if (rvcSub === "on" || rvcSub === "off") { config.rvcEnabled = rvcSub === "on"; ctx.ui.notify(`RVC ${config.rvcEnabled ? "enabled" : "disabled"}`, "info"); updateStatus(ctx); return; }
+        if (rvcSub === "url") { config.rvcUrl = parts[2] ?? config.rvcUrl; ctx.ui.notify(`RVC URL → ${config.rvcUrl}`, "info"); return; }
         if (rvcSub === "model") {
           if (!parts[2]) {
             try {
-              const r    = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(3000) });
-              const data = await r.json() as { models?: string[] };
-              const models = data.models ?? [];
-              if (!models.length) { ctx.ui.notify("No models on RVC server -- download one first", "warning"); return; }
+              const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(3000) });
+              const models = ((await r.json()) as { models?: string[] }).models ?? [];
               const picked = await pickModel(ctx, models, config.rvcModel);
-              if (!picked) return;
-              config.rvcModel = picked;
-            } catch { ctx.ui.notify(`RVC unreachable at ${config.rvcUrl}`, "warning"); return; }
-          } else {
-            config.rvcModel = parts[2];
-          }
-          try {
-            const r = await fetch(`${config.rvcUrl}/models/${encodeURIComponent(config.rvcModel)}`, {
-              method: "POST", signal: AbortSignal.timeout(10_000),
-            });
-            ctx.ui.notify(r.ok ? `RVC model loaded: ${config.rvcModel}` : `RVC server ${r.status}`, r.ok ? "info" : "warning");
-            if (r.ok) {
-              const f = await engine.ensureFacade();
-              f?.swapProcessor(new IdentityProcessor());
-            }
-          } catch { ctx.ui.notify(`RVC unreachable at ${config.rvcUrl}`, "warning"); }
+              if (picked) { config.rvcModel = picked; await fetch(`${config.rvcUrl}/models/${encodeURIComponent(picked)}`, { method: "POST", signal: AbortSignal.timeout(10_000) }); }
+            } catch { ctx.ui.notify(`RVC unreachable at ${config.rvcUrl}`, "warning"); }
+          } else { config.rvcModel = parts[2]; }
           updateStatus(ctx);
           return;
         }
-        if (rvcSub === "url")    { config.rvcUrl = parts[2] ?? config.rvcUrl; ctx.ui.notify(`RVC URL -> ${config.rvcUrl}`, "info"); return; }
         if (rvcSub === "models") {
           try {
-            const r    = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(5_000) });
-            const data = await r.json() as { models?: string[] } | string[];
-            const list = Array.isArray(data) ? data : (data.models ?? []);
-            ctx.ui.notify(list.length ? `RVC models:\n${list.join("\n")}` : "No models found", "info");
-          } catch (e: any) { ctx.ui.notify(`RVC unreachable: ${e?.message}`, "warning"); }
+            const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(5_000) });
+            const data = await r.json() as { models?: string[] };
+            ctx.ui.notify((data.models ?? []).join("\n") || "No models", "info");
+          } catch { ctx.ui.notify("RVC unreachable", "warning"); }
           return;
         }
-        ctx.ui.notify("Usage: /tts rvc on|off | model <name> | url <url> | models", "warning");
+        ctx.ui.notify("Usage: /tts rvc on|off|model|url|models", "warning");
         return;
       }
 
-      // ── stop ───────────────────────────────────────────────────────────────
-      if (sub === "stop")   { engine.stop();   ctx.ui.notify("TTS stopped", "info"); return; }
-      if (sub === "mute")   { engine.mute();   ctx.ui.notify("TTS muted — audio tests safe", "info"); return; }
-      if (sub === "unmute") { engine.unmute(); ctx.ui.notify("TTS unmuted", "info"); return; }
+      if (sub === "stop") { wsSend({ type: "reset" }); ctx.ui.notify("TTS stopped", "info"); return; }
+      if (sub === "mute") { muted = true; ctx.ui.notify("TTS muted", "info"); updateStatus(ctx); return; }
+      if (sub === "unmute") { muted = false; ctx.ui.notify("TTS unmuted", "info"); updateStatus(ctx); return; }
+      if (sub === "cache") { ctx.ui.notify("/tts cache — managed by Rust engine", "info"); return; }
 
-      // ── mix ─────────────────────────────────────────────────────────────────────
       if (sub === "mix") {
         const mixSub = parts[1] ?? "";
-
-        if (mixSub === "status") {
-          await loadMixerSession();
-          ctx.ui.notify(mixerContext(), "info");
-          updateStatus(ctx);
-          return;
-        }
-
+        if (mixSub === "status") { await loadMixerSession(); ctx.ui.notify(mixerContext(), "info"); updateStatus(ctx); return; }
         if (mixSub === "apply") {
-          const winner = mixerWinner();
-          if (!winner) { ctx.ui.notify("No winner set in mixer session. Rate tracks with fonictl mix.", "warning"); return; }
-          ctx.ui.notify(
-            `Applying winner DSP opts from «${winner.label}»\n` +
-            JSON.stringify(winner.opts, null, 2),
-            "info",
-          );
+          const w = mixerWinner();
+          ctx.ui.notify(w ? `Winner: ${w.label}\n${JSON.stringify(w.opts, null, 2)}` : "No winner set", w ? "info" : "warning");
           return;
         }
-
-        if (mixSub === "suggest") {
-          if (!mixerSession) { await loadMixerSession(); }
-          if (!mixerSession) { ctx.ui.notify("No mixer session. Run fonictl mix first.", "warning"); return; }
-          const rated   = mixerSession.tracks.filter(t => t.rating !== undefined);
-          const winner  = mixerWinner();
-          if (!rated.length) { ctx.ui.notify("No rated tracks yet. Use rate N 1-5 in fonictl mix.", "warning"); return; }
-
-          // Build suggestion prompt from session context.
-          const prompt  = mixerContext() + "\n\nBased on the ratings and notes above, suggest 2-3 new DSP variants to try next. " +
-            "Format each as JSON: { label, rationale, opts }. opts keys match fonictl mix scratchpad params.";
-          ctx.ui.notify(`⚠ Sending mixer context to agent...\n\n${prompt}`, "info");
-          return;
-        }
-
-        ctx.ui.notify(
-          "Usage: /tts mix status | apply | suggest\n" +
-          "  status  — show current mixer QA session\n" +
-          "  apply   — surface winner DSP opts\n" +
-          "  suggest — ask agent to propose next experiments",
-          "info",
-        );
+        ctx.ui.notify("Usage: /tts mix status | apply", "info");
         return;
       }
 
-      // ── toggle (no sub) / open panel ───────────────────────────────────────
       if (sub === "") {
         config.enabled = !config.enabled;
-        if (config.enabled) engine.ensureFacade();
-        engine.reset();
         updateStatus(ctx);
         return;
       }
 
-      await engine.ensureFacade();
       await openFoniPanel(ctx, panelState(), panelActions(ctx));
       updateStatus(ctx);
     },

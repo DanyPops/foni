@@ -4,6 +4,5 @@ export default defineConfig({
   test: {
     environment: "node",
     globals:     true,
-    globalSetup: "./test/preflight.ts",
   },
 });
