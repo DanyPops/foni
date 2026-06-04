@@ -29,6 +29,7 @@ import type { SynthBackendOpts } from "./pipeline/synth-backend.ts";
 
 import { SpeakFacade }       from "./pipeline/speak-facade.ts";
 import { SystemPlayer }      from "./pipeline/player.ts";
+import { WebSocket }         from "ws";
 
 // ─── Factory implementations (index.ts is the composition root) ───────────────────
 //
@@ -193,6 +194,7 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     loadMixerSession().then(() => updateStatus(ctx));
+    connectWs();
     updateStatus(ctx);
     bootstrapServer(ctx);
   });
@@ -233,16 +235,45 @@ export default async function (pi: ExtensionAPI) {
     }
   }
 
+  // ── WebSocket to Rust engine for stream chunking ──────────────────────────
+
+  let ws: WebSocket | null = null;
+
+  function connectWs(): void {
+    const url = config.rvcUrl.replace(/^http/, "ws") + "/ws";
+    try {
+      ws = new WebSocket(url);
+      ws.on("message", (data: Buffer) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (msg.type === "speak" && msg.text) {
+            engine.enqueue(msg.text);
+          }
+        } catch { /* malformed JSON */ }
+      });
+      ws.on("error", () => { ws = null; });
+      ws.on("close", () => { ws = null; });
+    } catch { ws = null; }
+  }
+
+  function wsSend(msg: Record<string, unknown>): void {
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg));
+    } else {
+      if (msg.type === "delta")       engine.onDelta(msg.text as string);
+      if (msg.type === "message_end") engine.onMessageEnd();
+    }
+  }
+
   pi.on("message_update", (_event, _ctx) => {
     if (_event.message.role !== "assistant") return;
     const ev = _event.assistantMessageEvent;
     if (!ev || (ev as any).type !== "text_delta") return;
-    engine.onDelta((ev as any).delta ?? "");
+    wsSend({ type: "delta", text: (ev as any).delta ?? "" });
   });
 
   pi.on("message_end", (_event, ctx) => {
     if (_event.message.role === "user") {
-      // Detect emotion from user input, update decay state, rebuild translator
       const raw  = _event.message.content;
       const text  = Array.isArray(raw)
         ? raw.map((c: any) => c?.text ?? c).filter(Boolean).join(" ")
@@ -254,10 +285,11 @@ export default async function (pi: ExtensionAPI) {
       return;
     }
     if (_event.message.role !== "assistant") return;
-    engine.onMessageEnd();
+    wsSend({ type: "message_end" });
   });
 
   pi.on("agent_start", () => {
+    wsSend({ type: "reset" });
     engine.reset();
     engine.startFiller();
   });
