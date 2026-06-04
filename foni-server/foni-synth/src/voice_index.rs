@@ -1,3 +1,5 @@
+//! DEPRECATED: FAISS voice index for RVC. Will be removed with Fish Speech migration.
+//! See FON-TSK-167.
 //! Voice index: k-NN blending of ContentVec features with reference speaker vectors.
 //!
 //! Mirrors Python rvc_python pipeline.py:

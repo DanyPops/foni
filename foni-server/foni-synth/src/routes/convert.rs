@@ -1,3 +1,5 @@
+//! DEPRECATED: RVC ONNX voice conversion. Will be replaced by Fish Speech.
+//! See FON-TSK-167.
 /// POST /convert — ContentVec → RMVPE → Generator. Returns raw WAV bytes (audio/wav).
 use axum::{
     body::Body,

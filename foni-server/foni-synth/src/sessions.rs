@@ -1,3 +1,5 @@
+//! DEPRECATED: ONNX session pool for RVC models. Will be removed with Fish Speech migration.
+//! See FON-TSK-167.
 //! ONNX session pool loader.
 //!
 //! `ensure()` fills every slot in the pool with loaded sessions for `model_name`.
