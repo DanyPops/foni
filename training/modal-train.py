@@ -137,7 +137,6 @@ def train(model: str = "sidorovich", steps: int = 100):
     t0 = time.time()
     subprocess.run([
         "/app/.venv/bin/python", "fish_speech/train.py",
-        "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
         "--config-name", "text2semantic_finetune",
         f"project={model}",
         "+lora@model.model.lora_config=r_32_alpha_16_fast",
