@@ -17,7 +17,7 @@ use foni_analyse::{
     decode_wav,
     timeline::{merge_short_silences, pauses, segment, voiced_segments},
 };
-use foni_synth::ssml;
+use foni_synth::expression::ssml;
 
 use std::path::Path;
 use std::process::Command;

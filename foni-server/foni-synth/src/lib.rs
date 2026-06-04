@@ -1,9 +1,9 @@
-/// foni-synth public library surface — exposed for integration tests.
 pub mod config;
-pub mod dsp;
-pub mod routes;
-pub mod ssml;
+pub mod expression;
+mod metrics;
+pub mod quality;
 pub mod state;
+pub mod synth;
 pub mod wav;
 
 use axum::{
@@ -11,33 +11,35 @@ use axum::{
     Router,
 };
 
-/// Build the production router with explicit config. Used by main().
 pub async fn build_router_with(cfg: config::ResolvedConfig) -> Router {
     build_router_from_state(state::AppState::from_config(cfg))
 }
 
-/// Build the production router with auto-loaded config. Used by integration tests.
 pub async fn build_router() -> Router {
     build_router_with(config::ServerConfig::load()).await
 }
 
 fn build_router_from_state(state: state::AppState) -> Router {
     Router::new()
-        .route("/models", get(routes::models::list))
-        .route("/models/:name", post(routes::models::load))
+        .route("/models", get(synth::models_route::list))
+        .route("/models/:name", post(synth::models_route::load))
         .route(
             "/params",
-            get(routes::params::get_params).post(routes::params::set_params),
+            get(synth::params_route::get_params).post(synth::params_route::set_params),
         )
-        .route("/ssml-params", get(routes::ssml_params::get_ssml_params))
-        .route("/metrics", get(routes::metrics::metrics))
-        .route("/synthesize", post(routes::synthesize::synthesize))
-        .route("/analyse", post(routes::analyse::analyse))
-        .route("/process", post(routes::process::process))
-        .route("/breath", post(routes::breath::breath))
+        .route(
+            "/ssml-params",
+            get(expression::ssml_params_route::get_ssml_params),
+        )
+        .route("/metrics", get(metrics::metrics))
+        .route("/synthesize", post(synth::synthesize_route::synthesize))
+        .route("/analyse", post(quality::analyse_route::analyse))
+        .route("/process", post(synth::process_route::process))
+        .route("/breath", post(expression::breath_route::breath))
         .route(
             "/controller",
-            get(routes::controller::get_controller).post(routes::controller::set_controller),
+            get(quality::controller_route::get_controller)
+                .post(quality::controller_route::set_controller),
         )
         .with_state(state)
 }

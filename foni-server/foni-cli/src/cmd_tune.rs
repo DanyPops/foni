@@ -389,7 +389,7 @@ pub fn cmd_test_policy(script: &PathBuf, brightness: f32, loudness: f32, bass: f
     use owo_colors::OwoColorize;
     use tabled::{settings::Style, Table, Tabled};
 
-    let engine = match foni_synth::dsp::policy::PolicyEngine::load(script) {
+    let engine = match foni_synth::quality::dsp::policy::PolicyEngine::load(script) {
         Some(e) => e,
         None => {
             eprintln!("  Failed to load script: {}", script.display());
@@ -397,8 +397,8 @@ pub fn cmd_test_policy(script: &PathBuf, brightness: f32, loudness: f32, bass: f
         }
     };
 
-    let cfg = foni_synth::dsp::controller::ControllerConfig::default();
-    let base = foni_synth::dsp::SmoothingOptions::default();
+    let cfg = foni_synth::quality::dsp::controller::ControllerConfig::default();
+    let base = foni_synth::quality::dsp::SmoothingOptions::default();
 
     let mut analysis = foni_analyse::AnalysisResult {
         temporal: Default::default(),

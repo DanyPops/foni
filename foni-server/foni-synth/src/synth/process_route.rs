@@ -3,7 +3,7 @@ use axum::{extract::State, http::StatusCode, Json};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
 
-use crate::{dsp, state::AppState, wav};
+use crate::{quality::dsp, state::AppState, wav};
 
 /// Subset of `SmoothingOptions` accepted over the wire (camelCase, matching TS).
 /// Unknown fields are ignored. Omitted fields fall back to `Default`.

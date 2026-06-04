@@ -12,7 +12,7 @@ use axum::{http::StatusCode, Json};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
 
-use crate::{dsp::filters::Biquad, wav};
+use crate::{quality::dsp::filters::Biquad, wav};
 
 #[derive(Deserialize)]
 pub struct BreathRequest {

@@ -1,8 +1,8 @@
 use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;
 
+use super::dsp::controller::ControllerConfig;
 use crate::config::{BreaksConfig, DspDefaults, EspeakConfig};
-use crate::dsp::controller::ControllerConfig;
 use crate::state::AppState;
 
 /// GET /controller — current config + enabled state.
@@ -40,9 +40,9 @@ pub struct ControllerUpdate {
     pub espeak: Option<EspeakConfig>,
     pub breaks: Option<BreaksConfig>,
     pub dsp_defaults: Option<DspDefaults>,
-    pub targets: Option<crate::dsp::controller::ControllerTargets>,
-    pub sensitivity: Option<crate::dsp::controller::ControllerSensitivity>,
-    pub ranges: Option<crate::dsp::controller::ControllerRanges>,
+    pub targets: Option<super::dsp::controller::ControllerTargets>,
+    pub sensitivity: Option<super::dsp::controller::ControllerSensitivity>,
+    pub ranges: Option<super::dsp::controller::ControllerRanges>,
     pub reload: Option<bool>,
 }
 
@@ -60,8 +60,8 @@ pub async fn set_controller(
             std::sync::atomic::Ordering::Relaxed,
         );
         // Reload policy script
-        let new_policy = crate::dsp::policy::find_policy_script()
-            .and_then(|p| crate::dsp::policy::PolicyEngine::load(&p))
+        let new_policy = super::dsp::policy::find_policy_script()
+            .and_then(|p| super::dsp::policy::PolicyEngine::load(&p))
             .map(std::sync::Arc::new);
         let had_policy = state.0.policy_engine.read().await.is_some();
         let has_policy = new_policy.is_some();

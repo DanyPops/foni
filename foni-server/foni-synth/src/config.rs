@@ -12,7 +12,7 @@ use figment::providers::{Env, Format, Json, Serialized, Yaml};
 use figment::Figment;
 use serde::{Deserialize, Serialize};
 
-use crate::dsp::controller::ControllerConfig;
+use crate::quality::dsp::controller::ControllerConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

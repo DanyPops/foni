@@ -14,9 +14,9 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::process::Command;
 
-use crate::{dsp, ssml, state::AppState, wav};
+use crate::{expression::ssml, quality::dsp, state::AppState, wav};
 
-use super::process::WireOpts;
+use super::process_route::WireOpts;
 
 #[derive(Deserialize)]
 pub struct SynthRequest {

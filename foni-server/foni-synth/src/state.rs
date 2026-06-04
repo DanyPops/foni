@@ -22,11 +22,11 @@ pub struct Inner {
     pub wav_cache: WavCache,
     pub dsp_enabled: std::sync::atomic::AtomicBool,
     pub controller_enabled: std::sync::atomic::AtomicBool,
-    pub controller_config: RwLock<crate::dsp::controller::ControllerConfig>,
+    pub controller_config: RwLock<crate::quality::dsp::controller::ControllerConfig>,
     pub espeak_config: RwLock<crate::config::EspeakConfig>,
     pub breaks_config: RwLock<crate::config::BreaksConfig>,
     pub dsp_defaults: RwLock<crate::config::DspDefaults>,
-    pub policy_engine: RwLock<Option<std::sync::Arc<crate::dsp::policy::PolicyEngine>>>,
+    pub policy_engine: RwLock<Option<std::sync::Arc<crate::quality::dsp::policy::PolicyEngine>>>,
 }
 
 impl AppState {
@@ -46,8 +46,8 @@ impl AppState {
             breaks_config: RwLock::new(cfg.breaks),
             dsp_defaults: RwLock::new(cfg.dsp),
             policy_engine: RwLock::new(
-                crate::dsp::policy::find_policy_script()
-                    .and_then(|p| crate::dsp::policy::PolicyEngine::load(&p))
+                crate::quality::dsp::policy::find_policy_script()
+                    .and_then(|p| crate::quality::dsp::policy::PolicyEngine::load(&p))
                     .map(std::sync::Arc::new),
             ),
         }))

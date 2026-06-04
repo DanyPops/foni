@@ -6,7 +6,7 @@
 //! All configuration (targets, sensitivity, damping, ranges) loaded from
 //! `rvc/dsp-defaults.json` at startup — no recompilation needed to tune.
 
-use crate::dsp::SmoothingOptions;
+use crate::quality::dsp::SmoothingOptions;
 use foni_analyse::AnalysisResult;
 use serde::{Deserialize, Serialize};
 
