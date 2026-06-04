@@ -90,39 +90,38 @@ fn cache_key(req: &SynthRequest) -> [u8; 32] {
     h.finalize().into()
 }
 
-fn fish_speech_url() -> Option<String> {
+fn tts_url() -> Option<String> {
     std::env::var("FISH_SPEECH_URL").ok()
 }
 
-async fn fish_speech(text: &str, reference_id: Option<&str>) -> Result<Vec<u8>, String> {
-    let base_url = fish_speech_url().ok_or("FISH_SPEECH_URL not set")?;
+fn tts_token() -> Option<String> {
+    std::env::var("FONI_TTS_TOKEN").ok()
+}
 
-    let mut form = reqwest::multipart::Form::new()
-        .text("text", text.to_string())
-        .text("format", "wav")
-        .text("latency", "balanced");
+async fn cloud_tts(text: &str, _reference_id: Option<&str>) -> Result<Vec<u8>, String> {
+    let url = tts_url().ok_or("FISH_SPEECH_URL not set")?;
+    let mut body = serde_json::json!({"text": text, "language": "ru"});
 
-    if let Some(ref_id) = reference_id {
-        form = form.text("reference_id", ref_id.to_string());
+    if let Some(token) = tts_token() {
+        body["token"] = serde_json::Value::String(token);
     }
 
     let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{base_url}/v1/tts"))
-        .multipart(form)
-        .timeout(std::time::Duration::from_secs(FISH_SPEECH_TIMEOUT_SECS))
-        .send()
-        .await
-        .map_err(|e| format!("Fish Speech request: {e}"))?;
+    let req = client
+        .post(&url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(FISH_SPEECH_TIMEOUT_SECS));
+
+    let resp = req.send().await.map_err(|e| format!("TTS request: {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!("Fish Speech HTTP {}", resp.status()));
+        return Err(format!("TTS HTTP {}", resp.status()));
     }
 
     resp.bytes()
         .await
         .map(|b| b.to_vec())
-        .map_err(|e| format!("Fish Speech body: {e}"))
+        .map_err(|e| format!("TTS body: {e}"))
 }
 
 fn espeak(text: &str, voice: &str, speed: u32) -> Result<Vec<u8>, String> {
@@ -159,8 +158,8 @@ async fn synthesize_text(
     speed: u32,
     reference_id: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    if fish_speech_url().is_some() {
-        match fish_speech(text, reference_id).await {
+    if tts_url().is_some() {
+        match cloud_tts(text, reference_id).await {
             Ok(wav) => return Ok(wav),
             Err(e) => tracing::warn!("Fish Speech failed, falling back to espeak: {e}"),
         }

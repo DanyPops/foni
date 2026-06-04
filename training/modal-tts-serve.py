@@ -13,6 +13,7 @@ import modal
 import os
 import io
 
+
 app = modal.App("foni-tts-serve")
 
 chatterbox_image = (
@@ -33,8 +34,12 @@ fish_image = (
 )
 
 volume = modal.Volume.from_name("foni-training", create_if_missing=True)
+tts_secret = modal.Secret.from_name("foni-tts-auth")
 
 REF_WAV = "/data/dataset-raw/trader1a.wav"
+
+
+
 
 
 @app.function(
@@ -42,10 +47,17 @@ REF_WAV = "/data/dataset-raw/trader1a.wav"
     gpu="T4",
     volumes={"/data": volume},
     scaledown_window=300,
+    secrets=[tts_secret],
 )
 @modal.fastapi_endpoint(method="POST", label="chatterbox")
 async def chatterbox(request: dict):
     """POST /chatterbox — Chatterbox Multilingual zero-shot."""
+    from fastapi.responses import JSONResponse
+    expected = os.environ.get("TTS_AUTH_TOKEN", "")
+    token = request.get("token", "")
+    if expected and token != expected:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
     import torch
     import torchaudio as ta
     from chatterbox.mtl_tts import ChatterboxMultilingualTTS
@@ -77,10 +89,17 @@ async def chatterbox(request: dict):
     gpu="T4",
     volumes={"/data": volume},
     scaledown_window=300,
+    secrets=[tts_secret],
 )
 @modal.fastapi_endpoint(method="POST", label="fish")
 async def fish(request: dict):
     """POST /fish — Fish Speech S2-Pro fine-tuned on Sidorovich."""
+    from fastapi.responses import JSONResponse
+    expected = os.environ.get("TTS_AUTH_TOKEN", "")
+    token = request.get("token", "")
+    if expected and token != expected:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
     import subprocess
     import time
     import requests as http_requests
