@@ -1,76 +1,88 @@
 {
-  "_doc": "All tunable knobs. Loaded once at startup. Hot-swap via POST /controller {reload:true}.",
-
-  "espeak": {
-    "speed":    135,
-    "voice":    "ru",
-    "rate_pct": 93
-  },
-
-  "breaks": {
-    "comma":       150,
-    "semicolon":   220,
-    "colon":       180,
-    "dash":        200,
-    "ellipsis":    420,
-    "period":      320,
-    "exclamation": 300,
-    "question":    350
-  },
-
-  "dsp": {
-    "tiltLowDb":              0.0,
-    "tiltHighDb":             0.0,
-    "rmsTargetLufs":        -16.0,
-    "compressionRatio":       2.0,
-    "compressionAttackMs":   10.0,
-    "compressionReleaseMs":  80.0,
-    "compressionThresholdDb":-12.0,
-    "compressionMakeupDb":    2.0,
-    "presenceDb":             0.0,
-    "deEssDb":                2.0,
-    "deHarshDb":             -2.0,
-    "deHarshFreq":         3500.0,
-    "deHarshQ":               0.7,
-    "vibratoFreq":            0.0,
-    "vibratoDepth":           0.0,
-    "highpassFreq":          80.0,
-    "warmthBoostDb":          0.0,
-    "warmthFreq":           200.0,
-    "airBoostDb":             0.0,
-    "airFreq":             8000.0,
-    "reverbMs":               6.0,
-    "reverbDecay":            0.03,
-    "reverbInGain":           0.8,
-    "reverbOutGain":          0.88,
-    "fadeSecs":               0.04,
-    "limiterDb":             -1.0
-  },
-  "controller": {
-    "enabled":    true,
-    "damping":    0.9,
-    "_doc_targets": "Computed from baseline/stalker/wav/sidorovich/trader1a.wav",
-    "targets": {
-      "brightness_hz":        2288.0,
-      "loudness_db":         -13.5,
-      "bass_balance_db":       2.8,
-      "vocal_darkness_db_oct":-6.4
+    "_doc": "All tunable knobs. Loaded once at startup. Hot-swap via POST /controller {reload:true}.",
+    "espeak": {
+        "speed": 135,
+        "voice": "ru",
+        "rate_pct": 93
     },
-    "_doc_sensitivity": "Measured via fonictl calibrate. Row = knob, Col = metric.",
-    "sensitivity": {
-      "brightness_per_tilt_high":    92.0,
-      "brightness_per_de_harsh":     0.16,
-      "loudness_per_rms_lufs":        0.975,
-      "bass_balance_per_tilt_low":    0.21,
-      "bass_balance_per_presence":   -0.36,
-      "darkness_per_tilt_high":       0.073
+    "breaks": {
+        "comma": 150,
+        "semicolon": 220,
+        "colon": 180,
+        "dash": 200,
+        "ellipsis": 420,
+        "period": 320,
+        "exclamation": 300,
+        "question": 350
     },
-    "ranges": {
-      "tilt_low_db":     [-4.0, 16.0],
-      "tilt_high_db":    [-24.0, 0.0],
-      "rms_target_lufs": [-22.0, -4.0],
-      "presence_db":     [-6.0, 6.0],
-      "de_harsh_db":     [-12.0, 0.0]
+    "dsp": {
+        "tiltLowDb": 0.0,
+        "tiltHighDb": 0.0,
+        "rmsTargetLufs": -22.0,
+        "compressionRatio": 1.0,
+        "compressionAttackMs": 10.0,
+        "compressionReleaseMs": 80.0,
+        "compressionThresholdDb": -12.0,
+        "compressionMakeupDb": 0.0,
+        "presenceDb": 0.0,
+        "deEssDb": 2.0,
+        "deHarshDb": -2.0,
+        "deHarshFreq": 3500.0,
+        "deHarshQ": 0.7,
+        "vibratoFreq": 0.0,
+        "vibratoDepth": 0.0,
+        "highpassFreq": 80.0,
+        "warmthBoostDb": 0.0,
+        "warmthFreq": 200.0,
+        "airBoostDb": 0.0,
+        "airFreq": 8000.0,
+        "reverbMs": 6.0,
+        "reverbDecay": 0.03,
+        "reverbInGain": 0.8,
+        "reverbOutGain": 0.88,
+        "fadeSecs": 0.04,
+        "limiterDb": -1.0
+    },
+    "controller": {
+        "enabled": true,
+        "damping": 0.9,
+        "_doc_targets": "Computed from baseline/stalker/wav/sidorovich/trader1a.wav",
+        "targets": {
+            "brightness_hz": 2288.0,
+            "loudness_db": -13.5,
+            "bass_balance_db": 2.8,
+            "vocal_darkness_db_oct": -6.4
+        },
+        "_doc_sensitivity": "Measured via fonictl calibrate. Row = knob, Col = metric.",
+        "sensitivity": {
+            "brightness_per_tilt_high": 92.0,
+            "brightness_per_de_harsh": 0.16,
+            "loudness_per_rms_lufs": 0.975,
+            "bass_balance_per_tilt_low": 0.21,
+            "bass_balance_per_presence": -0.36,
+            "darkness_per_tilt_high": 0.073
+        },
+        "ranges": {
+            "tilt_low_db": [
+                -4.0,
+                16.0
+            ],
+            "tilt_high_db": [
+                -24.0,
+                0.0
+            ],
+            "rms_target_lufs": [
+                -22.0,
+                -4.0
+            ],
+            "presence_db": [
+                -6.0,
+                6.0
+            ],
+            "de_harsh_db": [
+                -12.0,
+                0.0
+            ]
+        }
     }
-  }
 }
