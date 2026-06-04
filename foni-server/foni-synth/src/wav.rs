@@ -118,3 +118,79 @@ mod tests {
         assert!(result.is_err());
     }
 }
+
+const TAIL_TRIM_THRESHOLD_DB: f32 = -30.0;
+const TAIL_TRIM_FRAME_MS: usize = 100;
+const TAIL_TRIM_MIN_SILENT_FRAMES: usize = 2;
+
+/// Trim trailing silence/breath from audio samples.
+/// Walks backwards from the end, finds where energy drops below threshold
+/// for N consecutive frames, and cuts there.
+pub fn trim_tail(samples: &mut Vec<f32>, sample_rate: u32) {
+    let frame_size = (sample_rate as usize * TAIL_TRIM_FRAME_MS) / 1000;
+    if samples.len() < frame_size * 2 {
+        return;
+    }
+
+    let threshold = 10.0_f32.powf(TAIL_TRIM_THRESHOLD_DB / 20.0);
+    let n_frames = samples.len() / frame_size;
+    let mut last_loud_frame = n_frames;
+
+    for i in (0..n_frames).rev() {
+        let start = i * frame_size;
+        let end = (start + frame_size).min(samples.len());
+        let rms =
+            (samples[start..end].iter().map(|s| s * s).sum::<f32>() / (end - start) as f32).sqrt();
+
+        if rms >= threshold {
+            last_loud_frame = i + 1;
+            break;
+        }
+    }
+
+    let silent_tail_frames = n_frames - last_loud_frame;
+    if silent_tail_frames >= TAIL_TRIM_MIN_SILENT_FRAMES {
+        let trim_to = (last_loud_frame + 1) * frame_size;
+        samples.truncate(trim_to.min(samples.len()));
+    }
+}
+
+#[cfg(test)]
+mod tail_tests {
+    use super::*;
+
+    #[test]
+    fn trim_removes_silent_tail() {
+        let sr = 24000;
+        let mut samples: Vec<f32> = (0..sr * 2)
+            .map(|i| {
+                if i < sr {
+                    (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sr as f32).sin() * 0.5
+                } else {
+                    0.001 * (i as f32 / sr as f32) // quiet tail
+                }
+            })
+            .collect();
+        let original_len = samples.len();
+        trim_tail(&mut samples, sr as u32);
+        assert!(samples.len() < original_len, "should have trimmed");
+    }
+
+    #[test]
+    fn trim_keeps_all_speech() {
+        let sr = 24000;
+        let mut samples: Vec<f32> = (0..sr)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sr as f32).sin() * 0.5)
+            .collect();
+        let original_len = samples.len();
+        trim_tail(&mut samples, sr as u32);
+        assert_eq!(samples.len(), original_len, "no silent tail to trim");
+    }
+
+    #[test]
+    fn trim_handles_short_audio() {
+        let mut samples = vec![0.1, 0.2, 0.3];
+        trim_tail(&mut samples, 24000);
+        assert_eq!(samples.len(), 3, "too short to trim");
+    }
+}

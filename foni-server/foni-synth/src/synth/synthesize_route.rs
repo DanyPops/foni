@@ -218,14 +218,22 @@ pub async fn synthesize(
     } else {
         "espeak"
     };
-    let tts_bytes = synthesize_text(&text, &voice, speed, reference_id.as_deref())
+    let raw_tts = synthesize_text(&text, &voice, speed, reference_id.as_deref())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let tts_bytes = if backend == "cloud" {
+        wav::roundtrip(&raw_tts, |samples, sr| {
+            wav::trim_tail(samples, sr);
+        })
+        .unwrap_or(raw_tts)
+    } else {
+        raw_tts
+    };
     tracing::info!(
         tts_ms = t_tts.elapsed().as_millis() as u64,
         backend,
         bytes = tts_bytes.len(),
-        "synthesize: tts done"
+        "synthesize: tts done (tail trimmed)"
     );
 
     let t_dsp = std::time::Instant::now();
