@@ -281,3 +281,92 @@ async fn cache_hit_on_second_request() {
         "cache hit should be faster: cold={d1:?} hot={d2:?}"
     );
 }
+
+#[tokio::test]
+async fn full_pipeline_mat_injection() {
+    let ollama_url = start_mock_ollama().await;
+    let fish_url = start_mock_fish_speech().await;
+    std::env::set_var("FISH_SPEECH_URL", &fish_url);
+    std::env::set_var("FONI_OLLAMA_URL", &ollama_url);
+    // Disable dry_run so mat injection runs
+    std::env::set_var("FONI_DRY_RUN", "0");
+
+    let (ws_url, _) = start_foni_synth().await;
+    let (mut ws, _) = connect_async(&ws_url).await.expect("WS connect");
+
+    // Send multiple sentences to increase chance of mat injection (prob=0.35 per opportunity)
+    for i in 0..5 {
+        ws.send(Message::Text(
+            json!({"type": "delta", "text": format!("Sentence number {i}. ")})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    }
+
+    // Collect all responses
+    let mut texts = Vec::new();
+    for _ in 0..10 {
+        if let Some(msg) = recv(&mut ws, 10_000).await {
+            let t = msg["type"].as_str().unwrap_or("");
+            if t == "playing" || t == "speak" {
+                if let Some(text) = msg["text"].as_str() {
+                    texts.push(text.to_string());
+                }
+            }
+        } else {
+            break;
+        }
+    }
+
+    eprintln!("  [mat test] got {} responses:", texts.len());
+    for t in &texts {
+        eprintln!("    {t}");
+    }
+
+    // At least some responses should exist
+    assert!(!texts.is_empty(), "expected at least one response");
+}
+
+#[tokio::test]
+async fn full_pipeline_emotion_affects_injection() {
+    let ollama_url = start_mock_ollama().await;
+    let fish_url = start_mock_fish_speech().await;
+    std::env::set_var("FISH_SPEECH_URL", &fish_url);
+    std::env::set_var("FONI_OLLAMA_URL", &ollama_url);
+    std::env::set_var("FONI_DRY_RUN", "0");
+
+    let (ws_url, _) = start_foni_synth().await;
+    let (mut ws, _) = connect_async(&ws_url).await.expect("WS connect");
+
+    // Make user angry first — boosts mat probability to 2x
+    ws.send(Message::Text(
+        json!({"type": "user_message", "text": "WHAT THE FUCK is broken!!"})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+
+    let emotion = recv(&mut ws, 2000).await.expect("expected emotion");
+    assert_eq!(emotion["emotion"], "angry");
+    eprintln!("  [emotion] angry, intensity={}", emotion["intensity"]);
+
+    // Now send text — mat injection should be boosted
+    ws.send(Message::Text(
+        json!({"type": "delta", "text": "Fix the deployment pipeline. "})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+
+    let msg = recv(&mut ws, 10_000).await.expect("expected speak/playing");
+    let text = msg["text"].as_str().unwrap_or("");
+    eprintln!("  [angry speech] {text}");
+
+    // We can't assert mat was injected (it's probabilistic)
+    // but we prove the pipeline doesn't crash with emotion + mat + synthesis
+    assert!(!text.is_empty());
+}

@@ -15,6 +15,7 @@ path = "src/fonictl.rs"
 [dependencies]
 foni-analyse = { path = "../foni-analyse" }
 foni-synth   = { path = "../foni-synth" }
+modal-rs     = { workspace = true }
 clap         = { workspace = true }
 dialoguer    = { workspace = true }
 indicatif    = { workspace = true }

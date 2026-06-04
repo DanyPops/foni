@@ -9,13 +9,13 @@ use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
 
 use super::emotion::{
-    current_intensity, detect_emotion, emotion_emoji, neutral_state, update_emotion_state,
-    EmotionState,
+    current_intensity, detect_emotion, effective_weights, emotion_emoji, neutral_state,
+    update_emotion_state, EmotionState,
 };
 use super::engine_config::FoniConfig;
 use super::facade::{cache_key, new_shared_cache, PlayQueue, SharedCache};
 use super::stream::{drain_chunks, feed_delta, fresh_state, strip_markdown, StreamState};
-use super::translator;
+use super::translator::{self, WordDiversifier};
 use crate::state::AppState;
 
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
@@ -38,6 +38,8 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
     }
     let cache = new_shared_cache();
     let (play_queue, _play_handle) = PlayQueue::new();
+    let mut mat_diversifier = WordDiversifier::new();
+    let mut interject_diversifier = WordDiversifier::new();
 
     while let Some(Ok(msg)) = rx.next().await {
         let text = match msg {
@@ -58,10 +60,13 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                     handle_delta(
                         delta,
                         &mut stream_state,
+                        &emotion_state,
                         &config,
                         &cache,
                         &play_queue,
                         &app_state,
+                        &mut mat_diversifier,
+                        &mut interject_diversifier,
                         &mut tx,
                     )
                     .await;
@@ -71,8 +76,18 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                 let leftover = stream_state.buffer.trim().to_string();
                 stream_state = fresh_state();
                 if leftover.len() > 2 {
-                    process_chunk(&leftover, &config, &cache, &play_queue, &app_state, &mut tx)
-                        .await;
+                    process_chunk(
+                        &leftover,
+                        &emotion_state,
+                        &config,
+                        &cache,
+                        &play_queue,
+                        &app_state,
+                        &mut mat_diversifier,
+                        &mut interject_diversifier,
+                        &mut tx,
+                    )
+                    .await;
                 }
             }
             "user_message" => {
@@ -100,29 +115,48 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_delta(
     delta: &str,
     stream_state: &mut StreamState,
+    emotion_state: &EmotionState,
     config: &FoniConfig,
     cache: &SharedCache,
     play_queue: &PlayQueue,
     app_state: &AppState,
+    mat_div: &mut WordDiversifier,
+    interject_div: &mut WordDiversifier,
     tx: &mut (impl SinkExt<Message> + Unpin),
 ) {
     feed_delta(stream_state, delta);
     let result = drain_chunks(&stream_state.buffer);
     stream_state.buffer = result.remainder;
     for chunk in result.chunks {
-        process_chunk(&chunk, config, cache, play_queue, app_state, tx).await;
+        process_chunk(
+            &chunk,
+            emotion_state,
+            config,
+            cache,
+            play_queue,
+            app_state,
+            mat_div,
+            interject_div,
+            tx,
+        )
+        .await;
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_chunk(
     chunk: &str,
+    emotion_state: &EmotionState,
     config: &FoniConfig,
     cache: &SharedCache,
     play_queue: &PlayQueue,
     _app_state: &AppState,
+    mat_div: &mut WordDiversifier,
+    interject_div: &mut WordDiversifier,
     tx: &mut (impl SinkExt<Message> + Unpin),
 ) {
     let clean = strip_markdown(chunk);
@@ -131,7 +165,7 @@ async fn process_chunk(
     }
 
     // Translate (skip Ollama in dry_run or same-lang mode)
-    let translated = if config.dry_run || config.input_lang == config.output_lang {
+    let mut text = if config.dry_run || config.input_lang == config.output_lang {
         translator::apply_glossary(&clean)
     } else {
         let glossed = translator::apply_glossary(&clean);
@@ -145,6 +179,24 @@ async fn process_chunk(
         .await
         .unwrap_or(glossed)
     };
+
+    // Inject personality based on emotion state
+    if !config.dry_run {
+        let now = now_ms();
+        let weights = effective_weights(emotion_state, now);
+        let mat_prob = config.mat_prob * weights.mat_multiplier;
+        let interject_prob = config.interject_prob * weights.interject_multiplier;
+        let bias = Some(weights.word_bias);
+
+        if config.mat_enabled && mat_prob > 0.0 {
+            text = translator::inject_mat(&text, mat_prob, config.mat_stretch, mat_div, bias);
+        }
+        if config.interject_enabled && interject_prob > 0.0 {
+            text = translator::inject_interject(&text, interject_prob, interject_div, bias);
+        }
+    }
+
+    let translated = text;
 
     // In dry_run mode: skip synthesis and playback, just report what would be spoken
     if config.dry_run {

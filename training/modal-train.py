@@ -2,11 +2,8 @@
 Fish Speech S2 fine-tuning on Modal.
 
 Usage:
-    modal run rvc/modal-train.py --model sidorovich --epochs 100
-
-Prerequisites:
-    pip install modal
-    modal token new
+    modal run training/modal-train.py --model sidorovich --steps 10      # smoke test
+    modal run training/modal-train.py --model sidorovich --steps 500     # real training
 """
 
 import modal
@@ -14,62 +11,55 @@ import os
 
 app = modal.App("foni-fish-finetune")
 
-# Image with fish-speech and all deps pre-installed
 image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .apt_install("git", "ffmpeg", "libsndfile1", "wget")
-    .pip_install("torch", "torchaudio", index_url="https://download.pytorch.org/whl/cu126")
+    modal.Image.from_registry("fishaudio/fish-speech:latest", add_python="3.12")
+    .apt_install("curl")
+    .pip_install("huggingface_hub")
     .run_commands(
-        "git clone --depth=1 https://github.com/fishaudio/fish-speech.git /opt/fish-speech",
-        "cd /opt/fish-speech && pip install -e .",
-        "huggingface-cli download fishaudio/openaudio-s1-mini --local-dir /opt/fish-speech/checkpoints/openaudio-s1-mini",
+        # s2-pro is public, no approval needed
+        "hf download fishaudio/s2-pro --local-dir /opt/fish-speech/checkpoints/s2-pro",
     )
 )
 
-# Persistent volume for dataset + model output
-volume = modal.Volume.from_name("foni-training", create_if_missing=True)
+CHECKPOINT = "checkpoints/s2-pro"
 
-DATASET_URL = "https://github.com/DanyPops/foni/releases/download/dataset-fish/foni-dataset-fish.tar.gz"
+volume = modal.Volume.from_name("foni-training", create_if_missing=True)
 
 
 @app.function(
     image=image,
-    gpu="A100",
-    timeout=3600,
+    gpu="L4",
+    timeout=7200,
     volumes={"/data": volume},
 )
-def train(model: str = "sidorovich", epochs: int = 100):
+def train(model: str = "sidorovich", steps: int = 100):
     """Fine-tune Fish Speech S2 with LoRA on Sidorovich dataset."""
     import glob
     import shutil
     import subprocess
     import time
 
-    data_dir = f"/data/{model}"
     raw_dir = "/data/dataset-raw"
-
+    data_dir = f"/data/{model}"
     os.makedirs(data_dir, exist_ok=True)
-    os.makedirs(raw_dir, exist_ok=True)
 
-    # Download dataset if not cached in volume
-    if not glob.glob(f"{raw_dir}/*.wav"):
-        print(f"[train] downloading dataset...")
-        subprocess.run(
-            f"curl -sL {DATASET_URL} | tar xzf - --no-same-owner -C {raw_dir}",
-            shell=True,
-        )
+    wavs = sorted(glob.glob(f"{raw_dir}/*.wav"))
+    if not wavs:
+        raise RuntimeError(f"No WAV files in {raw_dir} — upload dataset to volume first")
 
-    # Read transcripts and create .lab files
+    print(f"[train] {len(wavs)} WAV files in {raw_dir}")
+
+    # Read transcripts → .lab files
     transcripts = {}
-    transcripts_path = f"{raw_dir}/transcripts.txt"
-    if os.path.exists(transcripts_path):
-        for line in open(transcripts_path, encoding="utf-8"):
+    tx_path = f"{raw_dir}/transcripts.txt"
+    if os.path.exists(tx_path):
+        for line in open(tx_path, encoding="utf-8"):
             if "|" in line:
                 fname, text = line.strip().split("|", 1)
                 transcripts[fname] = text
 
     count = 0
-    for wav in sorted(glob.glob(f"{raw_dir}/*.wav")):
+    for wav in wavs:
         name = os.path.basename(wav)
         text = transcripts.get(name)
         if not text:
@@ -80,9 +70,8 @@ def train(model: str = "sidorovich", epochs: int = 100):
             f.write(text)
         count += 1
 
-    print(f"[train] {count} files with transcripts")
+    print(f"[train] {count} files with transcripts ready")
 
-    # Run Fish Speech fine-tuning pipeline
     os.chdir("/opt/fish-speech")
 
     print("[train] extracting semantic tokens...")
@@ -90,10 +79,10 @@ def train(model: str = "sidorovich", epochs: int = 100):
         "python", "tools/vqgan/extract_vq.py", "/data",
         "--num-workers", "1", "--batch-size", "16",
         "--config-name", "modded_dac_vq",
-        "--checkpoint-path", "checkpoints/openaudio-s1-mini/codec.pth",
+        "--checkpoint-path", "checkpoints/s2-pro/codec.pth",
     ], check=True)
 
-    print("[train] building dataset...")
+    print("[train] building protobuf dataset...")
     subprocess.run([
         "python", "tools/llama/build_dataset.py",
         "--input", "/data",
@@ -102,14 +91,14 @@ def train(model: str = "sidorovich", epochs: int = 100):
         "--num-workers", "4",
     ], check=True)
 
-    print(f"[train] fine-tuning {epochs} steps...")
+    print(f"[train] fine-tuning {steps} steps...")
     t0 = time.time()
     subprocess.run([
         "python", "fish_speech/train.py",
         "--config-name", "text2semantic_finetune",
         f"project={model}",
         "+lora@model.model.lora_config=r_8_alpha_16",
-        f"trainer.max_steps={epochs}",
+        f"trainer.max_steps={steps}",
     ], check=True)
     elapsed = time.time() - t0
     print(f"[train] training done in {elapsed:.0f}s")
@@ -119,11 +108,12 @@ def train(model: str = "sidorovich", epochs: int = 100):
     checkpoints = sorted(glob.glob(f"{ckpt_dir}/*.ckpt"))
     if checkpoints:
         output_dir = f"/data/output/{model}"
+        os.makedirs(output_dir, exist_ok=True)
         print(f"[train] merging LoRA: {checkpoints[-1]}")
         subprocess.run([
             "python", "tools/llama/merge_lora.py",
             "--lora-config", "r_8_alpha_16",
-            "--base-weight", "checkpoints/openaudio-s1-mini",
+            "--base-weight", "checkpoints/s2-pro",
             "--lora-weight", checkpoints[-1],
             "--output", output_dir,
         ], check=True)
@@ -137,7 +127,7 @@ def train(model: str = "sidorovich", epochs: int = 100):
 
 
 @app.local_entrypoint()
-def main(model: str = "sidorovich", epochs: int = 100):
-    print(f"Starting Fish Speech fine-tuning: {model}, {epochs} steps")
-    result = train.remote(model=model, epochs=epochs)
-    print(f"Model at: {result}")
+def main(model: str = "sidorovich", steps: int = 100):
+    print(f"Fish Speech fine-tuning: model={model}, steps={steps}")
+    result = train.remote(model=model, steps=steps)
+    print(f"Result: {result}")

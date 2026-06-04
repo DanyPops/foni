@@ -6,6 +6,7 @@ mod cmd_synth;
 mod cmd_train;
 mod cmd_tune;
 pub mod cost;
+pub mod modal_cloud;
 mod tui;
 
 use cmd_common::{cache_dir, data_dir, play_wav};
