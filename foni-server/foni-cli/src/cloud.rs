@@ -86,11 +86,21 @@ impl RunPodProvider {
         image: &str,
         registry_auth_id: Option<&str>,
     ) -> Result<String, String> {
+        self.create_template_graphql(name, image, "", registry_auth_id)
+    }
+
+    pub fn create_template_graphql(
+        &self,
+        name: &str,
+        image: &str,
+        docker_args: &str,
+        registry_auth_id: Option<&str>,
+    ) -> Result<String, String> {
         let reg = registry_auth_id
             .map(|id| format!(r#", containerRegistryAuthId: "{id}""#))
             .unwrap_or_default();
         let q = format!(
-            r#"mutation {{ saveTemplate(input: {{ name: "{name}", imageName: "{image}"{reg}, dockerArgs: "", containerDiskInGb: 30, volumeInGb: 0, isServerless: true, env: [] }}) {{ id name }} }}"#
+            r#"mutation {{ saveTemplate(input: {{ name: "{name}", imageName: "{image}"{reg}, dockerArgs: "{docker_args}", containerDiskInGb: 30, volumeInGb: 0, isServerless: false, env: [] }}) {{ id name }} }}"#
         );
         let data = self.graphql(&q)?;
         data["saveTemplate"]["id"]

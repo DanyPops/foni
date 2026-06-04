@@ -1,10 +1,10 @@
 """
-RVC voice model training on Modal.
+Fish Speech S2 fine-tuning on Modal.
 
 Usage:
-    modal run rvc/modal-train.py --model sidorovich --epochs 500
+    modal run rvc/modal-train.py --model sidorovich --epochs 100
 
-Requires:
+Prerequisites:
     pip install modal
     modal token new
 """
@@ -12,78 +12,132 @@ Requires:
 import modal
 import os
 
-app = modal.App("foni-rvc-train")
+app = modal.App("foni-fish-finetune")
 
+# Image with fish-speech and all deps pre-installed
 image = (
-    modal.Image.from_registry(
-        "docker.io/runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04",
-        add_python="3.10",
-    )
-    .apt_install("wget", "git", "ffmpeg")
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install("git", "ffmpeg", "libsndfile1", "wget")
+    .pip_install("torch", "torchaudio", index_url="https://download.pytorch.org/whl/cu126")
     .run_commands(
-        "git clone --depth=1 https://github.com/nakshatra-garg/rvc-no-gui.git /opt/rvc-no-gui",
-        "cd /opt/rvc-no-gui && python pipeline.py setup",
+        "git clone --depth=1 https://github.com/fishaudio/fish-speech.git /opt/fish-speech",
+        "cd /opt/fish-speech && pip install -e .",
+        "huggingface-cli download fishaudio/openaudio-s1-mini --local-dir /opt/fish-speech/checkpoints/openaudio-s1-mini",
     )
 )
 
-volume = modal.Volume.from_name("foni-training-data", create_if_missing=True)
+# Persistent volume for dataset + model output
+volume = modal.Volume.from_name("foni-training", create_if_missing=True)
 
-DATASET_URL = "https://github.com/DanyPops/foni/releases/download/dataset-v1/foni-dataset.tar.gz"
+DATASET_URL = "https://github.com/DanyPops/foni/releases/download/dataset-fish/foni-dataset-fish.tar.gz"
 
 
 @app.function(
     image=image,
-    gpu="T4",
+    gpu="A100",
     timeout=3600,
     volumes={"/data": volume},
 )
-def train(model: str = "sidorovich", epochs: int = 500, batch_size: int = 8):
-    import subprocess
+def train(model: str = "sidorovich", epochs: int = 100):
+    """Fine-tune Fish Speech S2 with LoRA on Sidorovich dataset."""
     import glob
     import shutil
+    import subprocess
+    import time
 
-    dataset_dir = "/data/dataset"
-    output_dir = "/data/output"
+    data_dir = f"/data/{model}"
+    raw_dir = "/data/dataset-raw"
 
-    os.makedirs(dataset_dir, exist_ok=True)
-    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(raw_dir, exist_ok=True)
 
     # Download dataset if not cached in volume
-    wavs = glob.glob(f"{dataset_dir}/*.wav")
-    if not wavs:
-        print(f"[train] downloading dataset from {DATASET_URL}")
+    if not glob.glob(f"{raw_dir}/*.wav"):
+        print(f"[train] downloading dataset...")
         subprocess.run(
-            f"curl -sL {DATASET_URL} | tar xzf - --no-same-owner -C {dataset_dir}",
+            f"curl -sL {DATASET_URL} | tar xzf - --no-same-owner -C {raw_dir}",
             shell=True,
         )
-        wavs = glob.glob(f"{dataset_dir}/*.wav")
 
-    print(f"[train] {len(wavs)} WAV files, {epochs} epochs, batch={batch_size}")
+    # Read transcripts and create .lab files
+    transcripts = {}
+    transcripts_path = f"{raw_dir}/transcripts.txt"
+    if os.path.exists(transcripts_path):
+        for line in open(transcripts_path, encoding="utf-8"):
+            if "|" in line:
+                fname, text = line.strip().split("|", 1)
+                transcripts[fname] = text
 
-    os.chdir("/opt/rvc-no-gui")
-    wav_args = " ".join(f'"{w}"' for w in sorted(wavs))
-    cmd = f"python pipeline.py train -m {model} -a {wav_args} -e {epochs} -b {batch_size}"
-    print(f"[train] {cmd[:100]}...")
-    subprocess.run(cmd, shell=True, check=True)
+    count = 0
+    for wav in sorted(glob.glob(f"{raw_dir}/*.wav")):
+        name = os.path.basename(wav)
+        text = transcripts.get(name)
+        if not text:
+            continue
+        shutil.copy(wav, f"{data_dir}/{name}")
+        stem = os.path.splitext(name)[0]
+        with open(f"{data_dir}/{stem}.lab", "w", encoding="utf-8") as f:
+            f.write(text)
+        count += 1
 
-    # Copy model to output
-    candidates = (
-        glob.glob(f"weights/{model}.pth")
-        + glob.glob(f"logs/{model}/*.pth")
-    )
-    if candidates:
-        shutil.copy(candidates[0], f"{output_dir}/{model}.pth")
-        size = os.path.getsize(f"{output_dir}/{model}.pth")
-        print(f"[train] model saved: {output_dir}/{model}.pth ({size} bytes)")
+    print(f"[train] {count} files with transcripts")
+
+    # Run Fish Speech fine-tuning pipeline
+    os.chdir("/opt/fish-speech")
+
+    print("[train] extracting semantic tokens...")
+    subprocess.run([
+        "python", "tools/vqgan/extract_vq.py", "/data",
+        "--num-workers", "1", "--batch-size", "16",
+        "--config-name", "modded_dac_vq",
+        "--checkpoint-path", "checkpoints/openaudio-s1-mini/codec.pth",
+    ], check=True)
+
+    print("[train] building dataset...")
+    subprocess.run([
+        "python", "tools/llama/build_dataset.py",
+        "--input", "/data",
+        "--output", "/data/protos",
+        "--text-extension", ".lab",
+        "--num-workers", "4",
+    ], check=True)
+
+    print(f"[train] fine-tuning {epochs} steps...")
+    t0 = time.time()
+    subprocess.run([
+        "python", "fish_speech/train.py",
+        "--config-name", "text2semantic_finetune",
+        f"project={model}",
+        "+lora@model.model.lora_config=r_8_alpha_16",
+        f"trainer.max_steps={epochs}",
+    ], check=True)
+    elapsed = time.time() - t0
+    print(f"[train] training done in {elapsed:.0f}s")
+
+    # Merge LoRA
+    ckpt_dir = f"/opt/fish-speech/results/{model}/checkpoints"
+    checkpoints = sorted(glob.glob(f"{ckpt_dir}/*.ckpt"))
+    if checkpoints:
+        output_dir = f"/data/output/{model}"
+        print(f"[train] merging LoRA: {checkpoints[-1]}")
+        subprocess.run([
+            "python", "tools/llama/merge_lora.py",
+            "--lora-config", "r_8_alpha_16",
+            "--base-weight", "checkpoints/openaudio-s1-mini",
+            "--lora-weight", checkpoints[-1],
+            "--output", output_dir,
+        ], check=True)
+        print(f"[train] model saved to {output_dir}")
     else:
-        print("[train] WARNING: no model file found")
+        print("[train] WARNING: no checkpoints found")
 
     volume.commit()
     print("[train] DONE")
-    return f"{output_dir}/{model}.pth"
+    return f"/data/output/{model}"
 
 
 @app.local_entrypoint()
-def main(model: str = "sidorovich", epochs: int = 500, batch_size: int = 8):
-    result = train.remote(model=model, epochs=epochs, batch_size=batch_size)
+def main(model: str = "sidorovich", epochs: int = 100):
+    print(f"Starting Fish Speech fine-tuning: {model}, {epochs} steps")
+    result = train.remote(model=model, epochs=epochs)
     print(f"Model at: {result}")

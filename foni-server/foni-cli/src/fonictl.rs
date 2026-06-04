@@ -430,6 +430,24 @@ enum CloudAction {
     Pods,
     /// Terminate all running pods
     KillAll,
+    /// Create a training template
+    CreateTemplate {
+        /// Template name
+        #[arg(long, default_value = "foni-train")]
+        name: String,
+        /// Container image
+        #[arg(
+            long,
+            default_value = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
+        )]
+        image: String,
+        /// Start command (run inside bash -c)
+        #[arg(
+            long,
+            default_value = "wget -qO /finetune.py https://raw.githubusercontent.com/DanyPops/foni/master/rvc/fish-finetune.py && python3 /finetune.py; sleep 300"
+        )]
+        cmd: String,
+    },
 }
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -3578,6 +3596,15 @@ fn cmd_cloud(action: CloudAction) {
             }
             Err(e) => eprintln!("  {e}"),
         },
+        CloudAction::CreateTemplate { name, image, cmd } => {
+            match provider.create_template_graphql(&name, &image, &cmd, None) {
+                Ok(id) => {
+                    println!("{id}");
+                    eprintln!("  Template created. Set: export FONI_TEMPLATE_ID={id}");
+                }
+                Err(e) => eprintln!("  {e}"),
+            }
+        }
         CloudAction::History => unreachable!(),
     }
 }
