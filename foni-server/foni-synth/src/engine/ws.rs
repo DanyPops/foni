@@ -7,6 +7,9 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 
+use super::emotion::{
+    current_intensity, detect_emotion, emotion_emoji, neutral_state, update_emotion_state,
+};
 use super::stream::{drain_chunks, feed_delta, fresh_state, strip_markdown};
 use crate::state::AppState;
 
@@ -17,6 +20,7 @@ pub async fn ws_handler(ws: WebSocketUpgrade, State(_state): State<AppState>) ->
 async fn handle_socket(socket: WebSocket) {
     let (mut tx, mut rx) = socket.split();
     let mut stream_state = fresh_state();
+    let mut emotion_state = neutral_state();
 
     while let Some(Ok(msg)) = rx.next().await {
         let text = match msg {
@@ -69,8 +73,35 @@ async fn handle_socket(socket: WebSocket) {
                     }
                 }
             }
+            "user_message" => {
+                if let Some(text) = msg["text"].as_str() {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs_f64()
+                        * 1000.0;
+                    let reading = detect_emotion(text);
+                    emotion_state = update_emotion_state(&emotion_state, &reading, now);
+                    let intensity = current_intensity(&emotion_state, now);
+                    let reply = serde_json::json!({
+                        "type": "emotion",
+                        "emotion": emotion_state.emotion,
+                        "emoji": emotion_emoji(emotion_state.emotion),
+                        "intensity": intensity,
+                        "signals": reading.signals,
+                    });
+                    if tx
+                        .send(Message::Text(reply.to_string().into()))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
             "reset" => {
                 stream_state = fresh_state();
+                emotion_state = neutral_state();
             }
             _ => {}
         }

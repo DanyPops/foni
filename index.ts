@@ -279,6 +279,7 @@ export default async function (pi: ExtensionAPI) {
         ? raw.map((c: any) => c?.text ?? c).filter(Boolean).join(" ")
         : (raw ?? "") as string;
       if (text) {
+        wsSend({ type: "user_message", text });
         engine.onUserMessage(text);
         updateStatus(ctx);
       }
