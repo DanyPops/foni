@@ -61,11 +61,17 @@ export default async function (pi: ExtensionAPI) {
 
   // ── WebSocket ─────────────────────────────────────────────────────────────
 
+  let wsRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
   function connectWs(): void {
+    if (ws?.readyState === WebSocket.OPEN) return;
     const url = config.rvcUrl.replace(/^http/, "ws") + "/ws";
     try {
       const sock = new WebSocket(url);
-      sock.on("open", () => { ws = sock; });
+      sock.on("open", () => {
+        ws = sock;
+        if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
+      });
       sock.on("message", (data: Buffer) => {
         try {
           const msg = JSON.parse(data.toString());
@@ -74,9 +80,14 @@ export default async function (pi: ExtensionAPI) {
           }
         } catch { /* malformed */ }
       });
-      sock.on("error", () => { ws = null; });
-      sock.on("close", () => { ws = null; });
-    } catch { ws = null; }
+      sock.on("error", () => { ws = null; scheduleReconnect(); });
+      sock.on("close", () => { ws = null; scheduleReconnect(); });
+    } catch { ws = null; scheduleReconnect(); }
+  }
+
+  function scheduleReconnect(): void {
+    if (wsRetryTimer) return;
+    wsRetryTimer = setTimeout(() => { wsRetryTimer = null; connectWs(); }, 5_000);
   }
 
   function wsSend(msg: Record<string, unknown>): void {
