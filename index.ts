@@ -54,6 +54,12 @@ const DEFAULT_CONFIG: FoniConfig = {
 // ─── Extension entry point ────────────────────────────────────────────────────
 
 export default async function (pi: ExtensionAPI) {
+  // Guard against EPIPE crashing the process
+  process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EPIPE") return; // swallow broken pipe
+    throw err; // re-throw everything else
+  });
+
   const config: FoniConfig = { ...DEFAULT_CONFIG };
   let ws: WebSocket | null = null;
   let muted = false;
@@ -80,7 +86,11 @@ export default async function (pi: ExtensionAPI) {
 
   function wsSend(msg: Record<string, unknown>): void {
     if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(msg));
+      try {
+        ws.send(JSON.stringify(msg));
+      } catch {
+        ws = null;
+      }
     }
   }
 
