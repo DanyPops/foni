@@ -30,6 +30,12 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
     config.dry_run = std::env::var("FONI_DRY_RUN")
         .map(|v| v == "1")
         .unwrap_or(false);
+    if let Ok(url) = std::env::var("FONI_OLLAMA_URL") {
+        config.ollama_url = url;
+    }
+    if let Ok(model) = std::env::var("FONI_OLLAMA_MODEL") {
+        config.ollama_model = model;
+    }
     let cache = new_shared_cache();
     let (play_queue, _play_handle) = PlayQueue::new();
 
