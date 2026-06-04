@@ -18,16 +18,17 @@ app = modal.App("foni-tts-serve")
 chatterbox_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg", "libsndfile1")
-    .pip_install("chatterbox-tts", "torchaudio", "scipy")
+    .pip_install("chatterbox-tts", "torchaudio", "scipy", "fastapi[standard]")
 )
 
 fish_image = (
-    modal.Image.from_registry(
-        "fishaudio/fish-speech:latest",
-        setup_dockerfile_commands=[
-            'ENTRYPOINT []',
-            'ENV PATH="/app/.venv/bin:$PATH"',
-        ],
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("git", "ffmpeg", "libsndfile1")
+    .run_commands(
+        "git clone --depth=1 https://github.com/groxaxo/fish-speech-int4-patch.git /app",
+        "cd /app && pip install -e '.[stable]' bitsandbytes 2>&1 | tail -5",
+        'pip install huggingface_hub "fastapi[standard]" requests',
+        "hf download groxaxo/s2-pro-BnB-4Bits --local-dir /app/checkpoints/s2-pro",
     )
 )
 
@@ -73,7 +74,7 @@ async def chatterbox(request: dict):
 
 @app.function(
     image=fish_image,
-    gpu="A10G",
+    gpu="T4",
     volumes={"/data": volume},
     scaledown_window=300,
 )
@@ -81,7 +82,8 @@ async def chatterbox(request: dict):
 async def fish(request: dict):
     """POST /fish — Fish Speech S2-Pro fine-tuned on Sidorovich."""
     import subprocess
-    import tempfile
+    import time
+    import requests as http_requests
     from fastapi.responses import Response
 
     text = request.get("text", "")
@@ -90,53 +92,48 @@ async def fish(request: dict):
 
     os.chdir("/app")
 
-    # Symlink fine-tuned model
-    ckpt = "/app/checkpoints/sidorovich"
-    if not os.path.exists(ckpt):
+    # Symlink checkpoints
+    if not os.path.exists("/app/checkpoints/s2-pro"):
         os.makedirs("/app/checkpoints", exist_ok=True)
-        if os.path.exists("/data/output/sidorovich"):
-            os.symlink("/data/output/sidorovich", ckpt)
-        elif os.path.exists("/data/checkpoints/s2-pro"):
-            os.symlink("/data/checkpoints/s2-pro", ckpt)
+        os.symlink("/data/checkpoints/s2-pro", "/app/checkpoints/s2-pro")
 
-    # Generate reference VQ tokens
-    ref_npy = "/tmp/ref.npy"
-    if not os.path.exists(ref_npy):
-        subprocess.run([
-            "/app/.venv/bin/python", "fish_speech/models/dac/inference.py",
-            "-i", REF_WAV,
-            "--checkpoint-path", f"{ckpt}/codec.pth",
-            "--output-path", "/tmp/ref",
-        ], check=True, capture_output=True)
+    # Start API server in background if not running
+    try:
+        http_requests.get("http://localhost:8080/v1/health", timeout=2)
+    except Exception:
+        print("[fish] starting API server...")
+        subprocess.Popen(
+            ["python", "tools/api_server.py",
+             "--llama-checkpoint-path", "checkpoints/s2-pro",
+             "--decoder-checkpoint-path", "checkpoints/s2-pro/codec.pth",
+             "--bnb4", "--half",
+             "--listen", "0.0.0.0:8080"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        # Wait for server to start
+        for _ in range(60):
+            try:
+                http_requests.get("http://localhost:8080/v1/health", timeout=1)
+                print("[fish] API server ready")
+                break
+            except Exception:
+                time.sleep(2)
 
-    # Generate semantic tokens
-    with tempfile.TemporaryDirectory() as tmp:
-        subprocess.run([
-            "/app/.venv/bin/python", "fish_speech/models/text2semantic/inference.py",
-            "--text", text,
-            "--prompt-tokens", ref_npy,
-            "--checkpoint-path", ckpt,
-            "--num-samples", "1",
-        ], check=True, capture_output=True, cwd=tmp)
+    # Call the API server
+    resp = http_requests.post(
+        "http://localhost:8080/v1/tts",
+        files={
+            "text": (None, text),
+            "format": (None, "wav"),
+            "reference_id": (None, "sidorovich"),
+        },
+        timeout=120,
+    )
 
-        codes = os.path.join(tmp, "codes_0.npy")
-        if not os.path.exists(codes):
-            return {"error": "no codes generated"}
+    if resp.status_code != 200:
+        return {"error": f"API server returned {resp.status_code}: {resp.text[:200]}"}
 
-        # Decode to audio
-        subprocess.run([
-            "/app/.venv/bin/python", "fish_speech/models/dac/inference.py",
-            "-i", codes,
-            "--checkpoint-path", f"{ckpt}/codec.pth",
-            "--output-path", os.path.join(tmp, "output"),
-        ], check=True, capture_output=True)
-
-        wav_path = os.path.join(tmp, "output.wav")
-        if not os.path.exists(wav_path):
-            return {"error": "no audio generated"}
-
-        with open(wav_path, "rb") as f:
-            return Response(content=f.read(), media_type="audio/wav")
+    return Response(content=resp.content, media_type="audio/wav")
 
 
 @app.function(image=chatterbox_image, volumes={"/data": volume})
