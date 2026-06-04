@@ -156,15 +156,6 @@ impl RunPodProvider {
         resp.json().map_err(|e| e.to_string())
     }
 
-    /// Set SSH public key on the account.
-    pub fn set_ssh_key(&self, pub_key: &str) -> Result<(), String> {
-        let q = format!(
-            r#"mutation {{ updateUserSettings(input: {{ pubKey: "{pub_key}" }}) {{ id }} }}"#
-        );
-        self.graphql(&q)?;
-        Ok(())
-    }
-
     pub fn graphql(&self, query: &str) -> Result<serde_json::Value, String> {
         let resp = self
             .client
@@ -331,142 +322,6 @@ impl RunPodProvider {
             eprint!("\r  Waiting for pod... {status}  ");
             std::io::Write::flush(&mut std::io::stderr()).ok();
             std::thread::sleep(std::time::Duration::from_secs(3));
-        }
-    }
-}
-
-// ── Pod SSH/SCP helpers ─────────────────────────────────────────────────────
-
-/// SSH connection info extracted from a pod.
-#[derive(Debug, Clone)]
-pub struct PodSsh {
-    pub pod_id: String,
-    pub account_hash: String,
-}
-
-impl PodSsh {
-    pub fn new(pod_id: &str) -> Self {
-        let hash = std::env::var("RUNPOD_SSH_HASH").unwrap_or_else(|_| "64410b27".into());
-        Self {
-            pod_id: pod_id.to_string(),
-            account_hash: hash,
-        }
-    }
-
-    pub fn ssh_dest(&self) -> String {
-        format!("{}-{}@ssh.runpod.io", self.pod_id, self.account_hash)
-    }
-
-    pub fn ssh_opts_static() -> Vec<String> {
-        vec![
-            "-tt".into(),
-            "-o".into(),
-            "StrictHostKeyChecking=no".into(),
-            "-o".into(),
-            "UserKnownHostsFile=/dev/null".into(),
-            "-o".into(),
-            "LogLevel=ERROR".into(),
-        ]
-    }
-
-    pub fn run(&self, cmd: &str) -> Result<(), String> {
-        eprintln!("  \u{25b6} {}", cmd);
-        let status = std::process::Command::new("ssh")
-            .args(Self::ssh_opts_static())
-            .arg(&self.ssh_dest())
-            .arg(cmd)
-            .status()
-            .map_err(|e| format!("ssh: {e}"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("ssh failed: exit {}", status.code().unwrap_or(-1)))
-        }
-    }
-
-    pub fn upload(&self, local: &str, remote: &str) -> Result<(), String> {
-        eprintln!("  \u{2191} {} \u{2192} {}", local, remote);
-        self.run(&format!("mkdir -p {remote}"))?;
-        let tar = std::process::Command::new("tar")
-            .args(["czf", "-", "-C", local, "."])
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("tar: {e}"))?;
-        let status = std::process::Command::new("ssh")
-            .args(Self::ssh_opts_static())
-            .arg(&self.ssh_dest())
-            .arg(format!("tar xzf - -C {remote}"))
-            .stdin(tar.stdout.ok_or("no tar stdout")?)
-            .status()
-            .map_err(|e| format!("ssh upload: {e}"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "upload failed: exit {}",
-                status.code().unwrap_or(-1)
-            ))
-        }
-    }
-
-    pub fn download(&self, remote: &str, local: &str) -> Result<(), String> {
-        eprintln!("  \u{2193} {} \u{2192} {}", remote, local);
-        let local_path = std::path::Path::new(local);
-        let local_dir = local_path.parent().unwrap_or(std::path::Path::new("."));
-        std::fs::create_dir_all(local_dir).ok();
-        let remote_dir = std::path::Path::new(remote)
-            .parent()
-            .and_then(|p| p.to_str())
-            .unwrap_or("/");
-        let remote_name = std::path::Path::new(remote)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file");
-        let ssh = std::process::Command::new("ssh")
-            .args(Self::ssh_opts_static())
-            .arg(&self.ssh_dest())
-            .arg(format!("tar czf - -C {remote_dir} {remote_name}"))
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("ssh download: {e}"))?;
-        let status = std::process::Command::new("tar")
-            .args(["xzf", "-", "-C", local_dir.to_str().unwrap_or(".")])
-            .stdin(ssh.stdout.ok_or("no ssh stdout")?)
-            .status()
-            .map_err(|e| format!("tar: {e}"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "download failed: exit {}",
-                status.code().unwrap_or(-1)
-            ))
-        }
-    }
-
-    pub fn wait_for_ssh(&self, timeout_secs: u64) -> Result<(), String> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-        loop {
-            // run `hostname` not `true` — proxy accepts `true` before container is ready
-            let out = std::process::Command::new("ssh")
-                .args(Self::ssh_opts_static())
-                .arg(&self.ssh_dest())
-                .arg("hostname")
-                .output();
-            if let Ok(o) = out {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                // "container not found" means proxy is up but container isn't
-                if o.status.success() && !stdout.contains("container not found") {
-                    eprintln!("  SSH ready");
-                    return Ok(());
-                }
-            }
-            if std::time::Instant::now() > deadline {
-                return Err("SSH not reachable".into());
-            }
-            eprint!("\r  Waiting for container...");
-            std::io::Write::flush(&mut std::io::stderr()).ok();
-            std::thread::sleep(std::time::Duration::from_secs(5));
         }
     }
 }
@@ -743,13 +598,6 @@ impl RunPodProvider {
             .as_array()
             .cloned()
             .unwrap_or_default())
-    }
-
-    /// Full account overview.
-    pub fn account_overview(&self) -> Result<serde_json::Value, String> {
-        self.graphql(
-            "{ myself { id email clientBalance currentSpendPerHr pods { id name costPerHr desiredStatus } endpoints { id name gpuIds workersMin workersMax } containerRegistryCreds { id name } networkVolumes { id name size } } }"
-        ).map(|d| d["myself"].clone())
     }
 
     /// Stream incremental results. Calls `on_chunk` for each progress update.
@@ -1066,38 +914,6 @@ mod tests {
 }
 
 #[test]
-fn docker_args_escaping_no_double_quotes() {
-    let opts = CreatePodOpts {
-        gpu_type_id: "TEST".into(),
-        image: "test".into(),
-        volume_gb: 0,
-        container_disk_gb: 20,
-        name: "test".into(),
-        ports: "22/tcp".into(),
-        docker_args: "bash -c 'echo hello; sleep 10'".into(),
-        env: vec![],
-        template_id: None,
-    };
-    // Verify the escaped string doesn't contain double-escaped quotes
-    let escaped = opts.docker_args.replace('"', r#"\""#);
-    assert!(
-        !escaped.contains(r#"\\""#),
-        "double-escaped quotes: {escaped}"
-    );
-    assert_eq!(escaped, "bash -c 'echo hello; sleep 10'");
-}
-
-#[test]
-fn docker_args_with_double_quotes_escapes_once() {
-    let args = r#"python3 -c "print('hello')""#;
-    let escaped = args.replace('"', r#"\""#);
-    assert!(
-        escaped.contains(r#"\"print"#),
-        "should escape double quotes: {escaped}"
-    );
-}
-
-#[test]
 fn env_vars_serialize_to_graphql() {
     let env = vec![
         ("FONI_MODEL".to_string(), "sidorovich".to_string()),
@@ -1111,19 +927,4 @@ fn env_vars_serialize_to_graphql() {
     assert!(env_str.contains(r#"key: "FONI_MODEL""#));
     assert!(env_str.contains(r#"value: "sidorovich""#));
     assert!(env_str.contains(r#"key: "FONI_EPOCHS""#));
-}
-
-#[test]
-fn pod_ssh_dest_format() {
-    std::env::set_var("RUNPOD_SSH_HASH", "abcd1234");
-    let ssh = PodSsh::new("mypod123");
-    assert_eq!(ssh.ssh_dest(), "mypod123-abcd1234@ssh.runpod.io");
-    std::env::remove_var("RUNPOD_SSH_HASH");
-}
-
-#[test]
-fn pod_ssh_default_hash() {
-    std::env::remove_var("RUNPOD_SSH_HASH");
-    let ssh = PodSsh::new("testpod");
-    assert_eq!(ssh.ssh_dest(), "testpod-64410b27@ssh.runpod.io");
 }
