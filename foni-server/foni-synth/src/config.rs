@@ -2,8 +2,8 @@
 //!
 //! Resolution order (highest wins):
 //!   1. Environment variables   (`FONI_` prefix, e.g. `FONI_CONTROLLER.DAMPING=0.5`)
-//!   2. `rvc/dsp-defaults.json` (controller targets, sensitivity, ranges)
-//!   3. `rvc/foni-rvc.yaml`     (model, params)
+//!   2. `training/dsp-defaults.json` (controller targets, sensitivity, ranges)
+//!   3. `training/foni-rvc.yaml`     (model, params)
 //!   4. Built-in defaults
 
 use std::path::PathBuf;
@@ -207,13 +207,13 @@ impl ServerConfig {
 }
 
 fn find_yaml() -> PathBuf {
-    search_up("rvc/foni-rvc.yaml")
+    search_up("training/foni-rvc.yaml")
         .or_else(|| search_up("foni-rvc.yaml"))
         .unwrap_or_else(|| PathBuf::from("foni-rvc.yaml"))
 }
 
 fn find_json() -> PathBuf {
-    search_up("rvc/dsp-defaults.json")
+    search_up("training/dsp-defaults.json")
         .or_else(|| search_up("dsp-defaults.json"))
         .unwrap_or_else(|| PathBuf::from("dsp-defaults.json"))
 }

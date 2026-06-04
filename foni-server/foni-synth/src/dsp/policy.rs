@@ -186,7 +186,7 @@ impl PolicyEngine {
 /// Search for acoustic-policy.rhai in standard locations.
 pub fn find_policy_script() -> Option<PathBuf> {
     let candidates = [
-        PathBuf::from("rvc/acoustic-policy.rhai"),
+        PathBuf::from("training/acoustic-policy.rhai"),
         PathBuf::from("acoustic-policy.rhai"),
     ];
     for p in &candidates {

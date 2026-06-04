@@ -21,7 +21,7 @@ fn pretrained(models_dir: &Path, filename: &str) -> Option<PathBuf> {
     if p.exists() {
         return Some(p);
     }
-    for base in &["../../rvc/models/pretrained", "../rvc/models/pretrained"] {
+    for base in &["../../training/models/pretrained", "../training/models/pretrained"] {
         let q = PathBuf::from(base).join(filename);
         if q.exists() {
             return Some(q);

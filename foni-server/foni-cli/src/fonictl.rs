@@ -3107,7 +3107,7 @@ fn cmd_train(
 
     // Step 6: Download model from GitHub release (uploaded by pod-train.py)
     eprintln!("  [3/4] Downloading model\u{2026}");
-    let model_dir = format!("rvc/models/{model}");
+    let model_dir = format!("training/models/{model}");
     std::fs::create_dir_all(&model_dir).ok();
     let download_url = format!(
         "https://github.com/DanyPops/foni/releases/download/model-{model}-fish/{model}-fish.tar.gz"

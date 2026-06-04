@@ -47,7 +47,7 @@ ${row("Ollama",       s.ollama, "@ localhost:11434")}
   if (!s.espeak)
     console.warn("  ⚠  espeak-ng not found — synthesis tests will produce empty audio.\n     sudo dnf install espeak-ng");
   if (!s.synth)
-    console.warn(`  ℹ  foni-synth not running at ${s.synthUrl}\n     RUST_MIN_STACK=67108864 RVC_MODELS_DIR=./rvc/models ./foni-server/target/release/foni-synth`);
+    console.warn(`  ℹ  foni-synth not running at ${s.synthUrl}\n     RUST_MIN_STACK=67108864 RVC_MODELS_DIR=./training/models ./foni-server/target/release/foni-synth`);
   if (!s.libre)
     console.warn("  ℹ  LibreTranslate down — translation falls back to Ollama.\n     podman run -d -p 5000:5000 libretranslate/libretranslate --load-only en,ru");
   if (!s.ollama)

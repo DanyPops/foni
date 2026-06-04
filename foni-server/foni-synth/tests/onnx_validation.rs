@@ -1,6 +1,6 @@
 /// onnx_validation — TSK-9: validate RVC generator ONNX loads and runs in Rust via ort.
 ///
-/// Requires: rvc/models/bandit/onnx/generator.onnx (built by rvc/export_onnx.py)
+/// Requires: training/models/bandit/onnx/generator.onnx (built by rvc/export_onnx.py)
 ///
 /// cargo test -p foni-synth --test onnx_validation -- --nocapture
 use std::path::Path;
@@ -8,7 +8,7 @@ use std::path::Path;
 #[test]
 fn generator_onnx_loads_and_produces_audio() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let generator_path = manifest.join("../../rvc/models/bandit/onnx/generator.onnx");
+    let generator_path = manifest.join("../../training/models/bandit/onnx/generator.onnx");
 
     if !generator_path.exists() {
         println!(
@@ -44,7 +44,7 @@ fn generator_onnx_loads_and_produces_audio() {
 #[test]
 fn rmvpe_onnx_loads() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let rmvpe_path = manifest.join("../../rvc/models/pretrained/rmvpe.onnx");
+    let rmvpe_path = manifest.join("../../training/models/pretrained/rmvpe.onnx");
 
     if !rmvpe_path.exists() {
         println!("⚠  RMVPE ONNX not found — download from HuggingFace lj1995/VoiceConversionWebUI");
