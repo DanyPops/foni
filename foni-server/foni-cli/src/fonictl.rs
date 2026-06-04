@@ -307,6 +307,16 @@ enum Cmd {
         call_id: String,
     },
 
+    /// Benchmark TTS endpoint latency (cold + warm)
+    TtsBench {
+        /// Endpoint URL
+        #[arg(default_value = "https://dpopsuev--chatterbox.modal.run")]
+        url: String,
+        /// Phrase to synthesize
+        #[arg(long, default_value = "Привет, сталкер. Как дела на болотах?")]
+        phrase: String,
+    },
+
     /// Compare Chatterbox vs Fish S2-Pro on the same phrase (parallel)
     TtsCompare {
         /// Phrase to synthesize
@@ -1026,6 +1036,9 @@ fn main() {
         }
         Cmd::TrainCancel { call_id } => {
             cmd_train::cmd_train_cancel(&call_id);
+        }
+        Cmd::TtsBench { url, phrase } => {
+            cmd_train::cmd_tts_bench(&url, &phrase);
         }
         Cmd::TtsCompare { phrase } => {
             cmd_train::cmd_tts_compare(&phrase);

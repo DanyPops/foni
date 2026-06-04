@@ -361,3 +361,59 @@ pub fn cmd_tts_compare(phrase: &str) {
         }
     });
 }
+
+pub fn cmd_tts_bench(url: &str, phrase: &str) {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    rt.block_on(async {
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({"text": phrase, "language": "ru"});
+
+        eprintln!("\n  ▶  TTS latency benchmark");
+        eprintln!("    Endpoint: {url}");
+        eprintln!(
+            "    Phrase:   «{}»\n",
+            phrase.chars().take(50).collect::<String>()
+        );
+
+        let mut results = Vec::new();
+        for i in 0..3 {
+            let label = if i == 0 { "cold" } else { "warm" };
+            let t0 = std::time::Instant::now();
+            let resp = client
+                .post(url)
+                .json(&body)
+                .timeout(std::time::Duration::from_secs(300))
+                .send()
+                .await;
+            let ms = t0.elapsed().as_millis() as u64;
+
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    let bytes = r.bytes().await.unwrap_or_default();
+                    let dur_secs = bytes.len() as f64 / (22050.0 * 2.0);
+                    let rtf = ms as f64 / 1000.0 / dur_secs;
+                    eprintln!(
+                        "  [{i}] {label:4} {ms:>6}ms  {:.0}KB  {dur_secs:.1}s audio  RTF={rtf:.1}x",
+                        bytes.len() as f64 / 1024.0
+                    );
+                    results.push(ms);
+
+                    if i == 0 {
+                        let path = "/tmp/fonictl_bench.wav";
+                        std::fs::write(path, &bytes).ok();
+                        eprintln!("       Playing...");
+                        super::cmd_common::play_wav(std::path::Path::new(path));
+                    }
+                }
+                Ok(r) => eprintln!("  [{i}] {label:4} HTTP {}", r.status()),
+                Err(e) => eprintln!("  [{i}] {label:4} {e}"),
+            }
+        }
+
+        if results.len() >= 2 {
+            let warm_avg = results[1..].iter().sum::<u64>() / (results.len() - 1) as u64;
+            eprintln!("\n  Cold:     {}ms", results[0]);
+            eprintln!("  Warm avg: {}ms", warm_avg);
+        }
+    });
+}
