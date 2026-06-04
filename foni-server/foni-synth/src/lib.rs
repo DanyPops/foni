@@ -2,10 +2,8 @@
 pub mod config;
 pub mod dsp;
 pub mod routes;
-pub mod sessions;
 pub mod ssml;
 pub mod state;
-pub mod voice_index;
 pub mod wav;
 
 use axum::{
@@ -32,8 +30,7 @@ fn build_router_from_state(state: state::AppState) -> Router {
             get(routes::params::get_params).post(routes::params::set_params),
         )
         .route("/ssml-params", get(routes::ssml_params::get_ssml_params))
-        .route("/metrics", get(routes::metrics::get_metrics))
-        .route("/convert", post(routes::convert::convert))
+        .route("/metrics", get(routes::metrics::metrics))
         .route("/synthesize", post(routes::synthesize::synthesize))
         .route("/analyse", post(routes::analyse::analyse))
         .route("/process", post(routes::process::process))

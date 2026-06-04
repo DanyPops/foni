@@ -13,7 +13,6 @@ use figment::Figment;
 use serde::{Deserialize, Serialize};
 
 use crate::dsp::controller::ControllerConfig;
-use crate::state::RvcParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -260,5 +259,29 @@ mod tests {
     fn server_config_default_has_valid_addr() {
         let cfg = ServerConfig::default();
         assert_eq!(cfg.addr, "0.0.0.0:5050");
+    }
+}
+
+/// Voice conversion parameters (legacy RVC, will be replaced by Fish Speech config).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RvcParams {
+    pub f0up_key: i32,
+    pub index_rate: f32,
+    pub filter_radius: u32,
+    pub rms_mix_rate: f32,
+    pub protect: f32,
+    pub f0method: String,
+}
+
+impl Default for RvcParams {
+    fn default() -> Self {
+        RvcParams {
+            f0up_key: -2,
+            index_rate: 0.77,
+            filter_radius: 5,
+            rms_mix_rate: 0.45,
+            protect: 0.33,
+            f0method: "rmvpe".to_string(),
+        }
     }
 }

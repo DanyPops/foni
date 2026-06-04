@@ -1,4 +1,5 @@
-use crate::state::{AppState, RvcParams};
+use crate::config::RvcParams;
+use crate::state::AppState;
 use axum::{extract::State, Json};
 
 pub async fn get_params(State(state): State<AppState>) -> Json<RvcParams> {

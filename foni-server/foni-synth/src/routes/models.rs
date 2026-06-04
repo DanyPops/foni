@@ -53,9 +53,7 @@ pub async fn list(State(state): State<AppState>) -> Json<ModelsResponse> {
 
 /// Select the active model by name.
 ///
-/// ONNX sessions are loaded on-demand per `/convert` request — no pre-loading
-/// needed here. This endpoint records the selection so `/convert` knows which
-/// model directory to use.
+/// Records the active model selection.
 pub async fn load(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -68,12 +66,7 @@ pub async fn load(
     let onnx_ready = model_path.join("onnx").join("generator.onnx").exists();
     *state.0.current_model.write().await = Some(name.clone());
 
-    if onnx_ready {
-        // Pre-warm sessions so the first /convert is instant.
-        if let Err(e) = crate::sessions::ensure(&state, &name).await {
-            tracing::warn!("session pre-load failed: {e}");
-        }
-    }
+    // ONNX pre-warming removed — RVC pipeline deleted.
 
     Ok(Json(serde_json::json!({
         "model":      name,
