@@ -18,7 +18,7 @@ image = (
         "git clone --depth=1 --recursive https://github.com/FunAudioLLM/CosyVoice.git /opt/cosyvoice",
         "cd /opt/cosyvoice && pip install -r requirements.txt 2>&1 | tail -3",
         "cd /opt/cosyvoice/third_party/Matcha-TTS && pip install -e . 2>&1 | tail -3",
-        "pip install modelscope",
+        "pip install modelscope hyperpyyaml onnxruntime openai-whisper conformer inflect pydantic",
     )
 )
 
