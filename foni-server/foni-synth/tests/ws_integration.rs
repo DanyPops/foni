@@ -1,7 +1,7 @@
-/// ws_integration — WebSocket engine E2E against a real bound server.
+/// ws_integration — WebSocket engine E2E against a real server in dry_run mode.
 ///
-/// Starts foni-synth on a random port, connects via WS, sends deltas,
-/// and asserts on the response messages.
+/// No external dependencies: Ollama, espeak-ng, and paplay are all skipped.
+/// Tests prove the full pipeline logic: delta → chunk → strip → translate → speak.
 ///
 /// cargo test -p foni-synth --test ws_integration -- --nocapture
 use futures::{SinkExt, StreamExt};
@@ -9,15 +9,16 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-async fn start_server() -> (String, u16) {
+async fn start_server() -> String {
+    // Force dry_run so no Ollama/espeak/paplay calls
+    std::env::set_var("FONI_DRY_RUN", "1");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let port = addr.port();
     let app = foni_synth::build_router().await;
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    (format!("ws://127.0.0.1:{port}/ws"), port)
+    format!("ws://127.0.0.1:{}/ws", addr.port())
 }
 
 async fn connect(
@@ -27,7 +28,7 @@ async fn connect(
     ws
 }
 
-async fn send(
+async fn send_msg(
     ws: &mut (impl SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin),
     msg: Value,
 ) {
@@ -36,7 +37,7 @@ async fn send(
         .expect("WS send failed");
 }
 
-async fn recv_timeout(
+async fn recv(
     ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
     ms: u64,
 ) -> Option<Value> {
@@ -46,185 +47,237 @@ async fn recv_timeout(
     }
 }
 
+// ── Stream chunking ─────────────────────────────────────────────────────────
+
 #[tokio::test]
-async fn ws_connects_and_responds_to_reset() {
-    let (url, _) = start_server().await;
+async fn delta_with_sentence_produces_speak() {
+    let url = start_server().await;
     let mut ws = connect(&url).await;
 
-    send(&mut ws, json!({"type": "reset"})).await;
-    // Reset produces no response — just verify no crash
-    // Send a delta to prove the connection is still alive
-    send(&mut ws, json!({"type": "delta", "text": "Hi. "})).await;
-    // "Hi." is too short (<=2 chars after trim) so no speak message expected
-    // But the WS should still be open
-    send(&mut ws, json!({"type": "delta", "text": "Hello world. "})).await;
+    send_msg(&mut ws, json!({"type": "delta", "text": "Hello world. "})).await;
 
-    let msg = recv_timeout(&mut ws, 5000).await;
-    assert!(
-        msg.is_some(),
-        "expected a response after delta with sentence"
-    );
+    let msg = recv(&mut ws, 1000).await;
+    assert!(msg.is_some(), "expected speak after complete sentence");
     let msg = msg.unwrap();
-    assert!(
-        msg["type"] == "speak" || msg["type"] == "playing",
-        "expected speak or playing, got {msg}"
-    );
-    assert!(msg["text"].as_str().unwrap_or("").len() > 0);
-    println!("speak text: {}", msg["text"]);
+    assert_eq!(msg["type"], "speak");
+    let text = msg["text"].as_str().unwrap_or("");
+    assert!(!text.is_empty());
+    println!("speak: {text}");
 }
 
 #[tokio::test]
-async fn ws_emotion_detection() {
-    let (url, _) = start_server().await;
+async fn mid_sentence_buffers_until_boundary() {
+    let url = start_server().await;
     let mut ws = connect(&url).await;
 
-    send(
+    send_msg(&mut ws, json!({"type": "delta", "text": "Hello there"})).await;
+
+    let msg = recv(&mut ws, 500).await;
+    assert!(msg.is_none(), "no speak without sentence boundary");
+}
+
+#[tokio::test]
+async fn message_end_flushes_buffer() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    send_msg(&mut ws, json!({"type": "delta", "text": "Buffered text"})).await;
+    send_msg(&mut ws, json!({"type": "message_end"})).await;
+
+    let msg = recv(&mut ws, 1000).await;
+    assert!(msg.is_some(), "expected flush on message_end");
+    let val = msg.unwrap();
+    let text = val["text"].as_str().unwrap_or("");
+    assert!(text.contains("Buffered text"));
+    println!("flushed: {text}");
+}
+
+#[tokio::test]
+async fn multiple_sentences_produce_multiple_speaks() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    send_msg(
         &mut ws,
-        json!({"type": "user_message", "text": "WHAT THE HELL this is broken!!"}),
+        json!({"type": "delta", "text": "First. Second. Third"}),
     )
     .await;
 
-    let msg = recv_timeout(&mut ws, 5000).await;
-    assert!(msg.is_some(), "expected emotion response");
-    let msg = msg.unwrap();
-    assert_eq!(msg["type"], "emotion");
-    assert_eq!(
-        msg["emotion"], "angry",
-        "expected angry, got {}",
-        msg["emotion"]
-    );
-    assert!(msg["intensity"].as_f64().unwrap_or(0.0) > 0.0);
-    println!(
-        "emotion: {} intensity={} signals={}",
-        msg["emotion"], msg["intensity"], msg["signals"]
-    );
+    let m1 = recv(&mut ws, 1000).await;
+    let m2 = recv(&mut ws, 1000).await;
+    assert!(m1.is_some(), "expected first speak");
+    assert!(m2.is_some(), "expected second speak");
+    println!("2 speaks for 2 complete sentences");
 }
 
 #[tokio::test]
-async fn ws_message_end_flushes_buffer() {
-    let (url, _) = start_server().await;
+async fn reset_clears_stream_state() {
+    let url = start_server().await;
     let mut ws = connect(&url).await;
 
-    // Send text without sentence-ending punctuation — should buffer
-    send(&mut ws, json!({"type": "delta", "text": "Привет сталкер"})).await;
+    send_msg(&mut ws, json!({"type": "delta", "text": "Partial buffer"})).await;
+    send_msg(&mut ws, json!({"type": "reset"})).await;
+    // Buffer was cleared — message_end should have nothing to flush
+    send_msg(&mut ws, json!({"type": "message_end"})).await;
 
-    // No response expected yet (no sentence boundary)
-    let msg = recv_timeout(&mut ws, 1000).await;
-    assert!(msg.is_none(), "should not speak before message_end");
-
-    // Flush
-    send(&mut ws, json!({"type": "message_end"})).await;
-
-    let msg = recv_timeout(&mut ws, 5000).await;
-    assert!(msg.is_some(), "expected speak after message_end flush");
-    let msg = msg.unwrap();
-    assert!(msg["type"] == "speak" || msg["type"] == "playing");
-    let text = msg["text"].as_str().unwrap_or("");
-    println!("flushed text: {text}");
-    assert!(!text.is_empty(), "expected text in flush");
+    let msg = recv(&mut ws, 500).await;
+    assert!(msg.is_none(), "reset should clear the buffer");
 }
 
+// ── Markdown stripping ──────────────────────────────────────────────────────
+
 #[tokio::test]
-async fn ws_strips_markdown_from_deltas() {
-    let (url, _) = start_server().await;
+async fn strips_markdown_headers_and_bold() {
+    let url = start_server().await;
     let mut ws = connect(&url).await;
 
-    send(
+    send_msg(
         &mut ws,
         json!({"type": "delta", "text": "## Hello **world**. "}),
     )
     .await;
 
-    let msg = recv_timeout(&mut ws, 5000).await;
-    assert!(msg.is_some(), "expected speak");
-    let text = msg.unwrap()["text"].as_str().unwrap_or("").to_string();
+    let msg = recv(&mut ws, 1000).await.expect("expected speak");
+    let text = msg["text"].as_str().unwrap_or("");
+    assert!(!text.contains("##"), "headers stripped");
+    assert!(!text.contains("**"), "bold stripped");
+    assert!(text.contains("Hello") && text.contains("world"));
     println!("stripped: {text}");
-    assert!(!text.contains("##"), "markdown headers should be stripped");
-    assert!(!text.contains("**"), "bold markers should be stripped");
-    assert!(!text.is_empty(), "prose should survive (may be translated)");
 }
 
 #[tokio::test]
-async fn ws_skips_code_blocks() {
-    let (url, _) = start_server().await;
+async fn code_blocks_filtered_from_speech() {
+    let url = start_server().await;
     let mut ws = connect(&url).await;
 
-    // Send text with inline code
-    for ch in "Use `npm install` to install. ".chars() {
-        send(&mut ws, json!({"type": "delta", "text": ch.to_string()})).await;
+    for ch in "Use `npm install` to set up. ".chars() {
+        send_msg(&mut ws, json!({"type": "delta", "text": ch.to_string()})).await;
     }
 
-    let msg = recv_timeout(&mut ws, 5000).await;
-    assert!(msg.is_some(), "expected speak");
-    let text = msg.unwrap()["text"].as_str().unwrap_or("").to_string();
+    let msg = recv(&mut ws, 1000).await.expect("expected speak");
+    let text = msg["text"].as_str().unwrap_or("");
+    assert!(!text.contains("npm install"), "code stripped");
+    assert!(text.contains("Use") || text.contains("set up"));
     println!("code-filtered: {text}");
-    // inline code was stripped by stream.rs before reaching translation
-    assert!(!text.is_empty(), "text should exist after code stripping");
 }
 
+// ── IT glossary ─────────────────────────────────────────────────────────────
+
 #[tokio::test]
-async fn ws_multiple_sentences_produce_multiple_speaks() {
-    let (url, _) = start_server().await;
+async fn glossary_replaces_it_terms() {
+    let url = start_server().await;
     let mut ws = connect(&url).await;
 
-    send(
+    send_msg(
         &mut ws,
-        json!({"type": "delta", "text": "First sentence. Second sentence. Third here"}),
+        json!({"type": "delta", "text": "Deploy the server. "}),
     )
     .await;
 
-    // Should get at least 2 speak messages (first two sentences)
-    let msg1 = recv_timeout(&mut ws, 5000).await;
-    assert!(msg1.is_some(), "expected first speak");
-    let m1 = msg1.unwrap();
-    let t1 = m1["type"].as_str().unwrap_or("");
+    let msg = recv(&mut ws, 1000).await.expect("expected speak");
+    let text = msg["text"].as_str().unwrap_or("");
     assert!(
-        t1 == "speak" || t1 == "playing",
-        "expected speak/playing, got {t1}"
+        text.contains("деплой") || text.contains("сервер"),
+        "IT terms should be replaced: {text}"
     );
+    println!("glossary: {text}");
+}
 
-    let msg2 = recv_timeout(&mut ws, 5000).await;
-    assert!(msg2.is_some(), "expected second speak");
-    let m2 = msg2.unwrap();
-    let t2 = m2["type"].as_str().unwrap_or("");
-    assert!(
-        t2 == "speak" || t2 == "playing",
-        "expected speak/playing, got {t2}"
+// ── Emotion detection ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn detects_angry_emotion() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    send_msg(
+        &mut ws,
+        json!({"type": "user_message", "text": "WHAT THE HELL this is broken!!"}),
+    )
+    .await;
+
+    let msg = recv(&mut ws, 1000).await.expect("expected emotion");
+    assert_eq!(msg["type"], "emotion");
+    assert_eq!(msg["emotion"], "angry");
+    assert!(msg["intensity"].as_f64().unwrap_or(0.0) > 0.0);
+    println!(
+        "angry: intensity={} signals={}",
+        msg["intensity"], msg["signals"]
     );
-
-    println!("got 2 speak messages for 2 complete sentences");
 }
 
 #[tokio::test]
-async fn ws_sarcasm_detection() {
-    let (url, _) = start_server().await;
+async fn detects_sarcastic_emotion() {
+    let url = start_server().await;
     let mut ws = connect(&url).await;
 
-    send(
+    send_msg(
         &mut ws,
         json!({"type": "user_message", "text": "oh great, just perfect, thanks for nothing"}),
     )
     .await;
 
-    let msg = recv_timeout(&mut ws, 5000).await;
-    assert!(msg.is_some());
-    let msg = msg.unwrap();
-    assert_eq!(msg["type"], "emotion");
+    let msg = recv(&mut ws, 1000).await.expect("expected emotion");
     assert_eq!(msg["emotion"], "sarcastic");
-    println!("sarcasm detected: intensity={}", msg["intensity"]);
 }
 
 #[tokio::test]
-async fn ws_cute_detection() {
-    let (url, _) = start_server().await;
+async fn detects_cute_emotion() {
+    let url = start_server().await;
     let mut ws = connect(&url).await;
 
-    send(&mut ws, json!({"type": "user_message", "text": "please, if you don't mind, could you possibly help me uwu 🥺"})).await;
+    send_msg(
+        &mut ws,
+        json!({"type": "user_message", "text": "please help uwu 🥺"}),
+    )
+    .await;
 
-    let msg = recv_timeout(&mut ws, 5000).await;
-    assert!(msg.is_some());
-    let msg = msg.unwrap();
-    assert_eq!(msg["type"], "emotion");
+    let msg = recv(&mut ws, 1000).await.expect("expected emotion");
     assert_eq!(msg["emotion"], "cute");
-    println!("cute detected: intensity={}", msg["intensity"]);
+}
+
+#[tokio::test]
+async fn detects_excited_emotion() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    send_msg(
+        &mut ws,
+        json!({"type": "user_message", "text": "this is amazing!!! 🔥🚀"}),
+    )
+    .await;
+
+    let msg = recv(&mut ws, 1000).await.expect("expected emotion");
+    assert_eq!(msg["emotion"], "excited");
+}
+
+#[tokio::test]
+async fn detects_frustrated_emotion() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    send_msg(
+        &mut ws,
+        json!({"type": "user_message", "text": "ugh, not again... seriously??"}),
+    )
+    .await;
+
+    let msg = recv(&mut ws, 1000).await.expect("expected emotion");
+    assert_eq!(msg["emotion"], "frustrated");
+}
+
+#[tokio::test]
+async fn neutral_text_returns_neutral() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    send_msg(
+        &mut ws,
+        json!({"type": "user_message", "text": "Can you refactor the config module?"}),
+    )
+    .await;
+
+    let msg = recv(&mut ws, 1000).await.expect("expected emotion");
+    assert_eq!(msg["emotion"], "neutral");
+    assert_eq!(msg["intensity"], 0.0);
 }

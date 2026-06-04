@@ -26,7 +26,10 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
     let (mut tx, mut rx) = socket.split();
     let mut stream_state = fresh_state();
     let mut emotion_state = neutral_state();
-    let config = FoniConfig::default();
+    let mut config = FoniConfig::default();
+    config.dry_run = std::env::var("FONI_DRY_RUN")
+        .map(|v| v == "1")
+        .unwrap_or(false);
     let cache = new_shared_cache();
     let (play_queue, _play_handle) = PlayQueue::new();
 
@@ -121,9 +124,12 @@ async fn process_chunk(
         return;
     }
 
-    let translated = if config.input_lang != config.output_lang {
+    // Translate (skip Ollama in dry_run or same-lang mode)
+    let translated = if config.dry_run || config.input_lang == config.output_lang {
+        translator::apply_glossary(&clean)
+    } else {
         let glossed = translator::apply_glossary(&clean);
-        match translator::ollama_translate(
+        translator::ollama_translate(
             &glossed,
             &config.ollama_url,
             &config.ollama_model,
@@ -131,13 +137,15 @@ async fn process_chunk(
             "ru",
         )
         .await
-        {
-            Ok(t) => t,
-            Err(_) => glossed,
-        }
-    } else {
-        clean.clone()
+        .unwrap_or(glossed)
     };
+
+    // In dry_run mode: skip synthesis and playback, just report what would be spoken
+    if config.dry_run {
+        let reply = serde_json::json!({"type": "speak", "text": translated});
+        let _ = tx.send(Message::Text(reply.to_string().into())).await;
+        return;
+    }
 
     let key = cache_key(&translated, &config.rvc_model);
 
@@ -148,7 +156,6 @@ async fn process_chunk(
         return;
     }
 
-    // Synthesize via local HTTP (calls our own /synthesize endpoint)
     let addr = std::env::var("FONI_SYNTH_ADDR").unwrap_or_else(|_| "0.0.0.0:5050".into());
     let synth_url = format!(
         "http://localhost:{}",

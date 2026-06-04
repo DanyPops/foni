@@ -25,6 +25,9 @@ pub struct FoniConfig {
 
     pub ollama_url: String,
     pub ollama_model: String,
+
+    /// Skip external calls (Ollama, synthesis, playback). For testing.
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +63,7 @@ impl Default for FoniConfig {
 
             ollama_url: "http://localhost:11434".into(),
             ollama_model: "qwen3:1.7b".into(),
+            dry_run: false,
         }
     }
 }
