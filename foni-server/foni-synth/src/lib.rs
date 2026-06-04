@@ -1,4 +1,5 @@
 pub mod config;
+pub mod engine;
 pub mod expression;
 mod metrics;
 pub mod quality;
@@ -41,5 +42,6 @@ fn build_router_from_state(state: state::AppState) -> Router {
             get(quality::controller_route::get_controller)
                 .post(quality::controller_route::set_controller),
         )
+        .route("/ws", axum::routing::get(engine::ws::ws_handler))
         .with_state(state)
 }
