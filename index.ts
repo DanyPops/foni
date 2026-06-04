@@ -257,6 +257,23 @@ export default async function (pi: ExtensionAPI) {
       }
 
       if (sub === "voice") { config.voice = parts[1] ?? config.voice; ctx.ui.notify(`voice → ${config.voice}`, "info"); return; }
+      if (sub === "volume" || sub === "vol") {
+        const n = parseFloat(parts[1] ?? "");
+        if (!isNaN(n) && n >= -40 && n <= 0) {
+          try {
+            await fetch(`${config.rvcUrl}/controller`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ dsp_defaults: { rmsTargetLufs: n } }),
+              signal: AbortSignal.timeout(2000),
+            });
+            ctx.ui.notify(`Volume → ${n} LUFS`, "info");
+          } catch { ctx.ui.notify("foni-synth unreachable", "warning"); }
+        } else {
+          ctx.ui.notify("Usage: /tts volume <-40 to 0>\n  -26 = quiet  -22 = normal  -16 = loud", "info");
+        }
+        return;
+      }
       if (sub === "speed") {
         const n = parseFloat(parts[1] ?? "");
         if (!isNaN(n) && n > 0) { config.speed = Math.max(0.5, Math.min(3.0, n)); ctx.ui.notify(`speed → ${config.speed}`, "info"); }
