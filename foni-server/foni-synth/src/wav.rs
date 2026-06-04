@@ -119,39 +119,44 @@ mod tests {
     }
 }
 
-const TAIL_TRIM_THRESHOLD_DB: f32 = -30.0;
+const TAIL_TRIM_SPEECH_DB: f32 = -25.0;
 const TAIL_TRIM_FRAME_MS: usize = 100;
-const TAIL_TRIM_MIN_SILENT_FRAMES: usize = 2;
+const TAIL_TRIM_WINDOW: usize = 5;
 
 /// Trim trailing silence/breath from audio samples.
-/// Walks backwards from the end, finds where energy drops below threshold
-/// for N consecutive frames, and cuts there.
+/// Uses a sliding window average: finds the last frame where the
+/// surrounding window's mean RMS is above speech threshold.
+/// Prevents isolated energy spikes in breath from fooling the detector.
 pub fn trim_tail(samples: &mut Vec<f32>, sample_rate: u32) {
     let frame_size = (sample_rate as usize * TAIL_TRIM_FRAME_MS) / 1000;
-    if samples.len() < frame_size * 2 {
+    if samples.len() < frame_size * TAIL_TRIM_WINDOW {
         return;
     }
 
-    let threshold = 10.0_f32.powf(TAIL_TRIM_THRESHOLD_DB / 20.0);
+    let threshold = 10.0_f32.powf(TAIL_TRIM_SPEECH_DB / 20.0);
     let n_frames = samples.len() / frame_size;
-    let mut last_loud_frame = n_frames;
 
-    for i in (0..n_frames).rev() {
-        let start = i * frame_size;
-        let end = (start + frame_size).min(samples.len());
-        let rms =
-            (samples[start..end].iter().map(|s| s * s).sum::<f32>() / (end - start) as f32).sqrt();
+    let rms_per_frame: Vec<f32> = (0..n_frames)
+        .map(|i| {
+            let start = i * frame_size;
+            let end = (start + frame_size).min(samples.len());
+            (samples[start..end].iter().map(|s| s * s).sum::<f32>() / (end - start) as f32).sqrt()
+        })
+        .collect();
 
-        if rms >= threshold {
-            last_loud_frame = i + 1;
-            break;
+    let mut last_speech = 0;
+    for i in 0..n_frames {
+        let ws = i.saturating_sub(TAIL_TRIM_WINDOW / 2);
+        let we = (i + TAIL_TRIM_WINDOW / 2 + 1).min(n_frames);
+        let avg: f32 = rms_per_frame[ws..we].iter().sum::<f32>() / (we - ws) as f32;
+        if avg >= threshold {
+            last_speech = i;
         }
     }
 
-    let silent_tail_frames = n_frames - last_loud_frame;
-    if silent_tail_frames >= TAIL_TRIM_MIN_SILENT_FRAMES {
-        let trim_to = (last_loud_frame + 1) * frame_size;
-        samples.truncate(trim_to.min(samples.len()));
+    let trim_to = (last_speech + 2) * frame_size;
+    if trim_to < samples.len() {
+        samples.truncate(trim_to);
     }
 }
 
