@@ -275,18 +275,36 @@ enum Cmd {
         /// Reference WAV for quality comparison
         #[arg(long, default_value = "baseline/stalker/wav/sidorovich/trader1a.wav")]
         vs: PathBuf,
-        /// Training epochs
+        /// Training steps
         #[arg(long, default_value_t = 500)]
-        epochs: u32,
-        /// Simulate the full pipeline without touching RunPod (no cost)
+        steps: u32,
+        /// Simulate the full pipeline without touching Modal (no cost)
         #[arg(long)]
         dry_run: bool,
-        /// ntfy topic for completion notification
+        /// Unused (kept for compat)
         #[arg(long, default_value = "foni-train")]
         ntfy: String,
-        /// Stream progress inline instead of fire-and-forget
+        /// Stream logs inline instead of fire-and-forget
         #[arg(long)]
         follow: bool,
+    },
+
+    /// Check status of a training job
+    TrainStatus {
+        /// Job ID from fonictl train
+        call_id: String,
+    },
+
+    /// Stream logs from a training job
+    TrainLogs {
+        /// Job ID from fonictl train
+        call_id: String,
+    },
+
+    /// Cancel a running training job
+    TrainCancel {
+        /// Job ID from fonictl train
+        call_id: String,
     },
 
     /// Save current model's scores as the baseline to beat before retraining
@@ -984,14 +1002,21 @@ fn main() {
             model,
             dataset,
             vs,
-            epochs,
+            steps,
             dry_run,
             ntfy,
             follow,
         } => {
-            cmd_train::cmd_train(
-                server, &model, &dataset, &vs, epochs, dry_run, &ntfy, follow,
-            );
+            cmd_train::cmd_train(server, &model, &dataset, &vs, steps, dry_run, &ntfy, follow);
+        }
+        Cmd::TrainStatus { call_id } => {
+            cmd_train::cmd_train_status(&call_id);
+        }
+        Cmd::TrainLogs { call_id } => {
+            cmd_train::cmd_train_logs(&call_id);
+        }
+        Cmd::TrainCancel { call_id } => {
+            cmd_train::cmd_train_cancel(&call_id);
         }
         Cmd::Cloud { action } => {
             cmd_cloud(action);
