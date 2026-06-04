@@ -337,6 +337,7 @@ pub async fn ollama_translate(
     from: &str,
     to: &str,
 ) -> Result<String, String> {
+    let t = std::time::Instant::now();
     let system = format!(
         "You are a professional {}-to-{} translator for software engineers.\n\
          Rules:\n\
@@ -374,6 +375,11 @@ pub async fn ollama_translate(
     let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
     let raw = data["message"]["content"].as_str().unwrap_or(text);
     let cleaned = scrub_model_artifacts(raw);
+    tracing::info!(
+        ollama_ms = t.elapsed().as_millis() as u64,
+        model,
+        "translate: ollama done"
+    );
     Ok(if cleaned.is_empty() {
         text.to_string()
     } else {

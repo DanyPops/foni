@@ -1,36 +1,24 @@
 """
-TTS inference server on Modal — Chatterbox + Fish Speech S2-Pro.
+TTS inference server on Modal — Chatterbox Multilingual.
 
-Deploys two endpoints for A/B comparison:
-    POST /chatterbox  — Chatterbox Multilingual (500M, T4)
-    POST /fish         — Fish Speech S2-Pro fine-tuned (4.6B, A100)
+Model and speaker embedding loaded once on container start.
+Subsequent requests only run generation (~5-8s instead of ~19s).
 
 Usage:
     modal deploy training/modal-tts-serve.py
+    export FISH_SPEECH_URL=https://dpopsuev--foni-tts-serve-chatterbox-tts.modal.run
 """
 
 import modal
 import os
 import io
 
-
 app = modal.App("foni-tts-serve")
 
-chatterbox_image = (
+image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg", "libsndfile1")
     .pip_install("chatterbox-tts", "torchaudio", "scipy", "fastapi[standard]")
-)
-
-fish_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .apt_install("git", "ffmpeg", "libsndfile1")
-    .run_commands(
-        "git clone --depth=1 https://github.com/groxaxo/fish-speech-int4-patch.git /app",
-        "cd /app && pip install -e '.[stable]' bitsandbytes 2>&1 | tail -5",
-        'pip install huggingface_hub "fastapi[standard]" requests',
-        "hf download groxaxo/s2-pro-BnB-4Bits --local-dir /app/checkpoints/s2-pro",
-    )
 )
 
 volume = modal.Volume.from_name("foni-training", create_if_missing=True)
@@ -39,123 +27,54 @@ tts_secret = modal.Secret.from_name("foni-tts-auth")
 REF_WAV = "/data/dataset-raw/trader1a.wav"
 
 
-
-
-
-@app.function(
-    image=chatterbox_image,
+@app.cls(
+    image=image,
     gpu="T4",
     volumes={"/data": volume},
     scaledown_window=300,
     secrets=[tts_secret],
 )
-@modal.fastapi_endpoint(method="POST", label="chatterbox")
-async def chatterbox(request: dict):
-    """POST /chatterbox — Chatterbox Multilingual zero-shot."""
-    from fastapi.responses import JSONResponse
-    expected = os.environ.get("TTS_AUTH_TOKEN", "")
-    token = request.get("token", "")
-    if expected and token != expected:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+class ChatterboxTTS:
+    @modal.enter()
+    def load(self):
+        import torch
+        from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
-    import torch
-    import torchaudio as ta
-    from chatterbox.mtl_tts import ChatterboxMultilingualTTS
-    from fastapi.responses import Response
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"[tts] loading model on {self.device}...")
+        self.model = ChatterboxMultilingualTTS.from_pretrained(device=self.device)
+        print("[tts] model loaded")
 
-    text = request.get("text", "")
-    lang = request.get("language", "ru")
-    if not text:
-        return {"error": "no text"}
+        print(f"[tts] pre-encoding voice from {REF_WAV}...")
+        self.model.generate("тест", audio_prompt_path=REF_WAV, language_id="ru")
+        print("[tts] voice cached — ready for requests")
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+    @modal.fastapi_endpoint(method="POST")
+    async def tts(self, request: dict):
+        from fastapi.responses import JSONResponse, Response
+        import torchaudio as ta
 
-    wav = model.generate(text, audio_prompt_path=REF_WAV, language_id=lang)
+        expected = os.environ.get("TTS_AUTH_TOKEN", "")
+        token = request.get("token", "")
+        if expected and token != expected:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
 
-    # Trim trailing breath artifacts
-    sr = model.sr
-    trim = int(0.3 * sr)
-    if wav.shape[-1] > trim * 2:
-        wav = wav[..., :-trim]
+        text = request.get("text", "")
+        lang = request.get("language", "ru")
+        if not text:
+            return JSONResponse({"error": "no text"})
 
-    buf = io.BytesIO()
-    ta.save(buf, wav, sr, format="wav")
-    return Response(content=buf.getvalue(), media_type="audio/wav")
+        wav = self.model.generate(text, audio_prompt_path=REF_WAV, language_id=lang)
 
+        sr = self.model.sr
+        trim = int(0.3 * sr)
+        if wav.shape[-1] > trim * 2:
+            wav = wav[..., :-trim]
 
-@app.function(
-    image=fish_image,
-    gpu="T4",
-    volumes={"/data": volume},
-    scaledown_window=300,
-    secrets=[tts_secret],
-)
-@modal.fastapi_endpoint(method="POST", label="fish")
-async def fish(request: dict):
-    """POST /fish — Fish Speech S2-Pro fine-tuned on Sidorovich."""
-    from fastapi.responses import JSONResponse
-    expected = os.environ.get("TTS_AUTH_TOKEN", "")
-    token = request.get("token", "")
-    if expected and token != expected:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+        buf = io.BytesIO()
+        ta.save(buf, wav, sr, format="wav")
+        return Response(content=buf.getvalue(), media_type="audio/wav")
 
-    import subprocess
-    import time
-    import requests as http_requests
-    from fastapi.responses import Response
-
-    text = request.get("text", "")
-    if not text:
-        return {"error": "no text"}
-
-    os.chdir("/app")
-
-    # Symlink checkpoints
-    if not os.path.exists("/app/checkpoints/s2-pro"):
-        os.makedirs("/app/checkpoints", exist_ok=True)
-        os.symlink("/data/checkpoints/s2-pro", "/app/checkpoints/s2-pro")
-
-    # Start API server in background if not running
-    try:
-        http_requests.get("http://localhost:8080/v1/health", timeout=2)
-    except Exception:
-        print("[fish] starting API server...")
-        subprocess.Popen(
-            ["python", "tools/api_server.py",
-             "--llama-checkpoint-path", "checkpoints/s2-pro",
-             "--decoder-checkpoint-path", "checkpoints/s2-pro/codec.pth",
-             "--bnb4", "--half",
-             "--listen", "0.0.0.0:8080"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        # Wait for server to start
-        for _ in range(60):
-            try:
-                http_requests.get("http://localhost:8080/v1/health", timeout=1)
-                print("[fish] API server ready")
-                break
-            except Exception:
-                time.sleep(2)
-
-    # Call the API server
-    resp = http_requests.post(
-        "http://localhost:8080/v1/tts",
-        files={
-            "text": (None, text),
-            "format": (None, "wav"),
-            "reference_id": (None, "sidorovich"),
-        },
-        timeout=120,
-    )
-
-    if resp.status_code != 200:
-        return {"error": f"API server returned {resp.status_code}: {resp.text[:200]}"}
-
-    return Response(content=resp.content, media_type="audio/wav")
-
-
-@app.function(image=chatterbox_image, volumes={"/data": volume})
-@modal.fastapi_endpoint(method="GET", label="health")
-async def health():
-    return {"status": "ok", "models": ["chatterbox-multilingual", "fish-s2-pro-sidorovich"]}
+    @modal.fastapi_endpoint(method="GET")
+    async def health(self):
+        return {"status": "ok", "model": "chatterbox-multilingual", "device": self.device}

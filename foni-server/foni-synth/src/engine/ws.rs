@@ -173,6 +173,7 @@ async fn process_chunk(
     interject_div: &mut WordDiversifier,
     tx: &mut (impl SinkExt<Message> + Unpin),
 ) {
+    let t_start = std::time::Instant::now();
     let clean = strip_markdown(chunk);
     if clean.len() <= 2 {
         return;
@@ -233,15 +234,25 @@ async fn process_chunk(
         "http://localhost:{}",
         addr.rsplit(':').next().unwrap_or("5050")
     );
+    let t_synth = std::time::Instant::now();
     match synthesize_local(&synth_url, &translated, &config.rvc_model).await {
         Ok(wav) => {
+            tracing::info!(
+                synth_ms = t_synth.elapsed().as_millis() as u64,
+                bytes = wav.len(),
+                "ws: synth done"
+            );
             cache.put(key, wav.clone()).await;
             play_queue.enqueue(wav).await;
+            tracing::info!(
+                total_ms = t_start.elapsed().as_millis() as u64,
+                "ws: chunk complete"
+            );
             let reply = serde_json::json!({"type": "playing", "text": translated});
             let _ = tx.send(Message::Text(reply.to_string())).await;
         }
         Err(e) => {
-            tracing::warn!("synthesis failed: {e}");
+            tracing::warn!(synth_ms = t_synth.elapsed().as_millis() as u64, error = %e, "ws: synth failed");
             let reply = serde_json::json!({"type": "error", "msg": e});
             let _ = tx.send(Message::Text(reply.to_string())).await;
         }

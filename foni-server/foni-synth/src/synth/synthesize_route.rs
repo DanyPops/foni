@@ -99,6 +99,7 @@ fn tts_token() -> Option<String> {
 }
 
 async fn cloud_tts(text: &str, _reference_id: Option<&str>) -> Result<Vec<u8>, String> {
+    let t = std::time::Instant::now();
     let url = tts_url().ok_or("FISH_SPEECH_URL not set")?;
     let mut body = serde_json::json!({"text": text, "language": "ru"});
 
@@ -118,10 +119,17 @@ async fn cloud_tts(text: &str, _reference_id: Option<&str>) -> Result<Vec<u8>, S
         return Err(format!("TTS HTTP {}", resp.status()));
     }
 
-    resp.bytes()
+    let bytes = resp
+        .bytes()
         .await
         .map(|b| b.to_vec())
-        .map_err(|e| format!("TTS body: {e}"))
+        .map_err(|e| format!("TTS body: {e}"))?;
+    tracing::info!(
+        cloud_tts_ms = t.elapsed().as_millis() as u64,
+        bytes = bytes.len(),
+        "cloud_tts: done"
+    );
+    Ok(bytes)
 }
 
 fn espeak(text: &str, voice: &str, speed: u32) -> Result<Vec<u8>, String> {
@@ -176,28 +184,51 @@ pub async fn synthesize(
     Json(req): Json<SynthRequest>,
 ) -> Result<Response, (StatusCode, String)> {
     let t_start = std::time::Instant::now();
+    let preview: String = req.text.chars().take(30).collect();
+    tracing::info!(text = %preview, voice = %req.voice, dsp = req.dsp, "synthesize: start");
 
     let key = cache_key(&req);
 
     // Cache hit
     {
+        let t = std::time::Instant::now();
         let mut cache = state.0.wav_cache.lock().await;
         if let Some(cached) = cache.get(&key) {
-            tracing::debug!("cache hit for {:?}", &req.text[..req.text.len().min(30)]);
+            tracing::info!(
+                cache_ms = t.elapsed().as_millis() as u64,
+                bytes = cached.len(),
+                "synthesize: cache hit"
+            );
             return wav_response(cached.clone());
         }
+        tracing::debug!(
+            cache_ms = t.elapsed().as_millis() as u64,
+            "synthesize: cache miss"
+        );
     }
 
-    // TTS synthesis: Fish Speech → espeak fallback
+    // TTS synthesis
+    let t_tts = std::time::Instant::now();
     let reference_id = req.model.clone();
     let voice = req.voice.clone();
     let speed = req.speed;
     let text = req.text.clone();
+    let backend = if tts_url().is_some() {
+        "cloud"
+    } else {
+        "espeak"
+    };
     let tts_bytes = synthesize_text(&text, &voice, speed, reference_id.as_deref())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    tracing::info!(
+        tts_ms = t_tts.elapsed().as_millis() as u64,
+        backend,
+        bytes = tts_bytes.len(),
+        "synthesize: tts done"
+    );
 
-    // DSP chain with reactive controller
+    let t_dsp = std::time::Instant::now();
     let dsp_globally_enabled = state
         .0
         .dsp_enabled
@@ -242,14 +273,20 @@ pub async fn synthesize(
         tts_bytes
     };
 
-    // Cache store
+    tracing::info!(
+        dsp_ms = t_dsp.elapsed().as_millis() as u64,
+        dsp = req.dsp && dsp_globally_enabled,
+        bytes = final_wav.len(),
+        "synthesize: dsp done"
+    );
+
     {
         let mut cache = state.0.wav_cache.lock().await;
         cache.put(key, final_wav.clone());
     }
 
-    let ms = t_start.elapsed().as_millis() as u64;
-    tracing::debug!(synthesis_ms = ms);
+    let total_ms = t_start.elapsed().as_millis() as u64;
+    tracing::info!(total_ms, "synthesize: complete");
 
     wav_response(final_wav)
 }
