@@ -279,3 +279,38 @@ async fn controller_reload_returns_policy_status() {
     // policy field indicates whether a script was found
     assert!(resp.get("policy").is_some());
 }
+
+#[tokio::test]
+async fn synthesize_without_fish_speech_uses_espeak() {
+    // Ensure FISH_SPEECH_URL is not set (espeak fallback)
+    std::env::remove_var("FISH_SPEECH_URL");
+    let base = start_server().await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base}/synthesize"))
+        .json(&json!({
+            "text": "Привет.",
+            "voice": "ru",
+            "speed": 150,
+            "dsp": false,
+        }))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(
+        resp.status().is_success(),
+        "POST /synthesize failed: {}",
+        resp.status()
+    );
+
+    let wav = resp.bytes().await.unwrap();
+    assert!(
+        wav.len() > 44,
+        "WAV must be non-trivial, got {} bytes",
+        wav.len()
+    );
+    println!("espeak fallback: {} bytes WAV", wav.len());
+}

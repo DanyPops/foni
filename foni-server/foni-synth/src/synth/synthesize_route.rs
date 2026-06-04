@@ -1,8 +1,11 @@
-/// POST /synthesize — text → SSML → espeak → DSP → WAV, with LRU cache.
+/// POST /synthesize — text → TTS → DSP → WAV, with LRU cache.
 ///
-/// The RVC voice conversion pipeline has been removed. Voice identity
-/// will be provided by Fish Speech fine-tuned model (FON-TSK-167).
-/// Currently: espeak raw synthesis + reactive DSP correction.
+/// TTS backend priority:
+///   1. Fish Speech API server (if FISH_SPEECH_URL is set and reachable)
+///   2. espeak-ng fallback (always available)
+///
+/// Fish Speech provides voice identity via zero-shot cloning or fine-tuned model.
+/// espeak provides robotic but instant synthesis when Fish Speech is unavailable.
 use axum::{
     body::Body,
     extract::State,
@@ -14,9 +17,11 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::process::Command;
 
-use crate::{expression::ssml, quality::dsp, state::AppState, wav};
+use crate::{quality::dsp, state::AppState, wav};
 
 use super::process_route::WireOpts;
+
+const FISH_SPEECH_TIMEOUT_SECS: u64 = 30;
 
 #[derive(Deserialize)]
 pub struct SynthRequest {
@@ -84,16 +89,42 @@ fn cache_key(req: &SynthRequest) -> [u8; 32] {
     h.finalize().into()
 }
 
-/// Prepare text for espeak: apply SSML annotation if prosody is enabled.
-fn prepare_text(req: &SynthRequest) -> (String, bool) {
-    if !req.prosody {
-        return (req.text.clone(), false);
-    }
-    let annotated = ssml::annotate_with_prosody(&req.text);
-    (annotated, true)
+fn fish_speech_url() -> Option<String> {
+    std::env::var("FISH_SPEECH_URL").ok()
 }
 
-fn espeak(text: &str, voice: &str, speed: u32, markup: bool) -> Result<Vec<u8>, String> {
+async fn fish_speech(text: &str, reference_id: Option<&str>) -> Result<Vec<u8>, String> {
+    let base_url = fish_speech_url().ok_or("FISH_SPEECH_URL not set")?;
+
+    let mut form = reqwest::multipart::Form::new()
+        .text("text", text.to_string())
+        .text("format", "wav")
+        .text("latency", "balanced");
+
+    if let Some(ref_id) = reference_id {
+        form = form.text("reference_id", ref_id.to_string());
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{base_url}/v1/tts"))
+        .multipart(form)
+        .timeout(std::time::Duration::from_secs(FISH_SPEECH_TIMEOUT_SECS))
+        .send()
+        .await
+        .map_err(|e| format!("Fish Speech request: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Fish Speech HTTP {}", resp.status()));
+    }
+
+    resp.bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("Fish Speech body: {e}"))
+}
+
+fn espeak(text: &str, voice: &str, speed: u32) -> Result<Vec<u8>, String> {
     let tmp = tempfile::NamedTempFile::new().map_err(|e| format!("tmpfile: {e}"))?;
     let mut cmd = Command::new("espeak-ng");
     cmd.args([
@@ -105,7 +136,7 @@ fn espeak(text: &str, voice: &str, speed: u32, markup: bool) -> Result<Vec<u8>, 
             .to_str()
             .expect("infallible: tempfile path is valid UTF-8"),
     ]);
-    if markup {
+    if req_is_ssml(text) {
         cmd.arg("-m");
     }
     cmd.arg(text);
@@ -114,6 +145,30 @@ fn espeak(text: &str, voice: &str, speed: u32, markup: bool) -> Result<Vec<u8>, 
         return Err("espeak-ng exited non-zero".into());
     }
     std::fs::read(tmp.path()).map_err(|e| format!("read espeak output: {e}"))
+}
+
+fn req_is_ssml(text: &str) -> bool {
+    text.contains("<speak") || text.contains("<break")
+}
+
+/// Try Fish Speech first, fall back to espeak.
+async fn synthesize_text(
+    text: &str,
+    voice: &str,
+    speed: u32,
+    reference_id: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    if fish_speech_url().is_some() {
+        match fish_speech(text, reference_id).await {
+            Ok(wav) => return Ok(wav),
+            Err(e) => tracing::warn!("Fish Speech failed, falling back to espeak: {e}"),
+        }
+    }
+    let voice = voice.to_string();
+    let text = text.to_string();
+    tokio::task::spawn_blocking(move || espeak(&text, &voice, speed))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 pub async fn synthesize(
@@ -133,17 +188,14 @@ pub async fn synthesize(
         }
     }
 
-    // Prepare text
-    let (synth_text, markup) = prepare_text(&req);
-
-    // Espeak synthesis
+    // TTS synthesis: Fish Speech → espeak fallback
+    let reference_id = req.model.clone();
     let voice = req.voice.clone();
     let speed = req.speed;
-    let espeak_bytes =
-        tokio::task::spawn_blocking(move || espeak(&synth_text, &voice, speed, markup))
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let text = req.text.clone();
+    let tts_bytes = synthesize_text(&text, &voice, speed, reference_id.as_deref())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     // DSP chain with reactive controller
     let dsp_globally_enabled = state
@@ -159,7 +211,7 @@ pub async fn synthesize(
         let controller_cfg = state.0.controller_config.read().await.clone();
         let policy_arc = state.0.policy_engine.read().await.clone();
         tokio::task::spawn_blocking(move || {
-            wav::roundtrip(&espeak_bytes, |samples, sr| {
+            wav::roundtrip(&tts_bytes, |samples, sr| {
                 let opts = if controller_enabled {
                     let analysis = foni_analyse::analyse_fast(samples, sr);
                     if let Some(ref policy) = policy_arc {
@@ -187,7 +239,7 @@ pub async fn synthesize(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
     } else {
-        espeak_bytes
+        tts_bytes
     };
 
     // Cache store
