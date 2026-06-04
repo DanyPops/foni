@@ -61,10 +61,11 @@ pub async fn cancel_job(client: &mut ModalClient, call_id: &str) -> Result<(), S
         .map_err(|e| format!("cancel: {e}"))
 }
 
-pub async fn stream_logs(
+pub async fn tail_logs(
     client: &mut ModalClient,
     call_id: &str,
-) -> Result<Option<String>, String> {
+    max_batches: usize,
+) -> Result<Vec<String>, String> {
     let app = client
         .apps()
         .from_name(APP_NAME, ENVIRONMENT, Default::default())
@@ -73,25 +74,31 @@ pub async fn stream_logs(
 
     let opts = AppLogsOptions {
         function_call_id: Some(call_id.to_string()),
+        timeout_secs: 3.0,
         ..Default::default()
     };
 
     let mut apps = client.apps();
-    let mut follower = apps.logs_follow(&app, opts, true);
+    let mut stream = apps
+        .logs(&app, opts)
+        .await
+        .map_err(|e| format!("logs: {e}"))?;
 
-    loop {
-        match follower.next_batch().await {
+    let mut lines = Vec::new();
+    let mut batches = 0;
+    while batches < max_batches {
+        match stream.next_batch().await {
             Ok(Some(batch)) => {
                 for entry in &batch.entries {
-                    eprint!("{}", entry.message);
+                    lines.push(entry.message.clone());
                 }
+                batches += 1;
             }
-            Ok(None) => break,
-            Err(e) => return Err(format!("logs: {e}")),
+            Ok(None) | Err(_) => break,
         }
     }
 
-    poll_result(client, call_id).await
+    Ok(lines)
 }
 
 pub async fn list_volume_files(

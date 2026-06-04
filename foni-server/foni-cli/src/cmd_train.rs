@@ -70,18 +70,22 @@ pub fn cmd_train(
             return;
         }
 
-        eprintln!("  ▶ Streaming logs...\n");
-        match modal_cloud::stream_logs(&mut client, &call_id).await {
-            Ok(Some(result)) => {
-                eprintln!("\n  ✓ Training complete: {result}");
+        eprintln!("  ▶ Tailing logs...\n");
+        match modal_cloud::tail_logs(&mut client, &call_id, 50).await {
+            Ok(lines) => {
+                for line in &lines {
+                    eprint!("{line}");
+                }
+                // Check final status
+                match modal_cloud::poll_result(&mut client, &call_id).await {
+                    Ok(Some(result)) => eprintln!("\n  ✓ Training complete: {result}"),
+                    Ok(None) => {
+                        eprintln!("\n  ⏳ Still running. Check: fonictl train-status {call_id}")
+                    }
+                    Err(e) => eprintln!("\n  ✗ {e}"),
+                }
             }
-            Ok(None) => {
-                eprintln!("\n  ⚠ Logs ended but no result yet");
-                eprintln!("  Check: fonictl train-status {call_id}");
-            }
-            Err(e) => {
-                eprintln!("\n  ✗ {e}");
-            }
+            Err(e) => eprintln!("  ✗ {e}"),
         }
     });
 }
@@ -116,10 +120,17 @@ pub fn cmd_train_logs(call_id: &str) {
             }
         };
 
-        match modal_cloud::stream_logs(&mut client, call_id).await {
-            Ok(Some(result)) => eprintln!("\n✓ Complete: {result}"),
-            Ok(None) => eprintln!("\n⏳ Logs ended, job may still be running"),
-            Err(e) => eprintln!("\n✗ {e}"),
+        match modal_cloud::tail_logs(&mut client, call_id, 10).await {
+            Ok(lines) => {
+                if lines.is_empty() {
+                    eprintln!("(no logs yet)");
+                } else {
+                    for line in &lines {
+                        eprint!("{line}");
+                    }
+                }
+            }
+            Err(e) => eprintln!("✗ {e}"),
         }
     });
 }
