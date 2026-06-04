@@ -304,7 +304,8 @@ pub fn cmd_tts_compare(phrase: &str) {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     rt.block_on(async {
         let client = reqwest::Client::new();
-        let body = serde_json::json!({"text": phrase, "language": "ru"});
+        let token = std::env::var("FONI_TTS_TOKEN").unwrap_or_default();
+        let body = serde_json::json!({"text": phrase, "language": "ru", "token": token});
 
         eprintln!("\n  ▶  Comparing TTS models in parallel");
         eprintln!(
@@ -366,7 +367,8 @@ pub fn cmd_tts_bench(url: &str, phrase: &str) {
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     rt.block_on(async {
         let client = reqwest::Client::new();
-        let body = serde_json::json!({"text": phrase, "language": "ru"});
+        let token = std::env::var("FONI_TTS_TOKEN").unwrap_or_default();
+        let body = serde_json::json!({"text": phrase, "language": "ru", "token": token});
 
         eprintln!("\n  ▶  TTS latency benchmark");
         eprintln!("    Endpoint: {url}");
