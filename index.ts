@@ -54,12 +54,6 @@ const DEFAULT_CONFIG: FoniConfig = {
 // ─── Extension entry point ────────────────────────────────────────────────────
 
 export default async function (pi: ExtensionAPI) {
-  // Guard against EPIPE crashing the process
-  process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
-    if (err.code === "EPIPE") return; // swallow broken pipe
-    throw err; // re-throw everything else
-  });
-
   const config: FoniConfig = { ...DEFAULT_CONFIG };
   let ws: WebSocket | null = null;
   let muted = false;
@@ -70,8 +64,9 @@ export default async function (pi: ExtensionAPI) {
   function connectWs(): void {
     const url = config.rvcUrl.replace(/^http/, "ws") + "/ws";
     try {
-      ws = new WebSocket(url);
-      ws.on("message", (data: Buffer) => {
+      const sock = new WebSocket(url);
+      sock.on("open", () => { ws = sock; });
+      sock.on("message", (data: Buffer) => {
         try {
           const msg = JSON.parse(data.toString());
           if (msg.type === "emotion") {
@@ -79,18 +74,17 @@ export default async function (pi: ExtensionAPI) {
           }
         } catch { /* malformed */ }
       });
-      ws.on("error", () => { ws = null; });
-      ws.on("close", () => { ws = null; });
+      sock.on("error", () => { ws = null; });
+      sock.on("close", () => { ws = null; });
     } catch { ws = null; }
   }
 
   function wsSend(msg: Record<string, unknown>): void {
-    if (ws?.readyState === WebSocket.OPEN) {
-      try {
-        ws.send(JSON.stringify(msg));
-      } catch {
-        ws = null;
-      }
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify(msg));
+    } catch {
+      ws = null;
     }
   }
 
