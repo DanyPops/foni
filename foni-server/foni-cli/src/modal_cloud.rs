@@ -36,19 +36,52 @@ pub async fn spawn_training(
     Ok(call.id().to_string())
 }
 
-pub async fn poll_result(
-    client: &mut ModalClient,
-    call_id: &str,
-) -> Result<Option<String>, String> {
-    let mut call = modal_rs::FunctionCall::from_id(client, call_id)
+pub enum JobStatus {
+    Running,
+    Success(String),
+    Failed(String),
+}
+
+pub async fn job_status(client: &mut ModalClient, call_id: &str) -> Result<JobStatus, String> {
+    let call = modal_rs::FunctionCall::from_id(client, call_id)
         .await
         .map_err(|e| format!("get call: {e}"))?;
 
-    match call.poll::<String>(client).await {
-        Ok(Some(result)) => Ok(Some(result)),
-        Ok(None) => Ok(None),
-        Err(e) => Err(format!("{e}")),
+    let graph = call
+        .call_graph(client)
+        .await
+        .map_err(|e| format!("call graph: {e}"))?;
+
+    for input in &graph.inputs {
+        match input.status {
+            modal_rs::FunctionCallGraphStatus::Success => {
+                let mut call2 = modal_rs::FunctionCall::from_id(client, call_id)
+                    .await
+                    .map_err(|e| format!("{e}"))?;
+                match call2
+                    .get::<String>(client, Some(std::time::Duration::from_secs(3)), 0)
+                    .await
+                {
+                    Ok(result) => return Ok(JobStatus::Success(result)),
+                    Err(e) => return Ok(JobStatus::Success(format!("(result decode: {e})"))),
+                }
+            }
+            modal_rs::FunctionCallGraphStatus::Failure
+            | modal_rs::FunctionCallGraphStatus::InitFailure
+            | modal_rs::FunctionCallGraphStatus::InternalFailure => {
+                return Ok(JobStatus::Failed(format!("{:?}", input.status)));
+            }
+            modal_rs::FunctionCallGraphStatus::Terminated => {
+                return Ok(JobStatus::Failed("terminated".into()));
+            }
+            modal_rs::FunctionCallGraphStatus::Timeout => {
+                return Ok(JobStatus::Failed("timeout".into()));
+            }
+            _ => {} // Unspecified = still running
+        }
     }
+
+    Ok(JobStatus::Running)
 }
 
 pub async fn cancel_job(client: &mut ModalClient, call_id: &str) -> Result<(), String> {

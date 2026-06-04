@@ -77,11 +77,12 @@ pub fn cmd_train(
                     eprint!("{line}");
                 }
                 // Check final status
-                match modal_cloud::poll_result(&mut client, &call_id).await {
-                    Ok(Some(result)) => eprintln!("\n  ✓ Training complete: {result}"),
-                    Ok(None) => {
+                match modal_cloud::job_status(&mut client, &call_id).await {
+                    Ok(modal_cloud::JobStatus::Success(r)) => eprintln!("\n  ✓ Complete: {r}"),
+                    Ok(modal_cloud::JobStatus::Running) => {
                         eprintln!("\n  ⏳ Still running. Check: fonictl train-status {call_id}")
                     }
+                    Ok(modal_cloud::JobStatus::Failed(r)) => eprintln!("\n  ✗ Failed: {r}"),
                     Err(e) => eprintln!("\n  ✗ {e}"),
                 }
             }
@@ -101,9 +102,10 @@ pub fn cmd_train_status(call_id: &str) {
             }
         };
 
-        match modal_cloud::poll_result(&mut client, call_id).await {
-            Ok(Some(result)) => println!("✓ Complete: {result}"),
-            Ok(None) => println!("⏳ Still running..."),
+        match modal_cloud::job_status(&mut client, call_id).await {
+            Ok(modal_cloud::JobStatus::Success(result)) => println!("✓ Complete: {result}"),
+            Ok(modal_cloud::JobStatus::Running) => println!("⏳ Running..."),
+            Ok(modal_cloud::JobStatus::Failed(reason)) => eprintln!("✗ Failed: {reason}"),
             Err(e) => eprintln!("✗ {e}"),
         }
     });
