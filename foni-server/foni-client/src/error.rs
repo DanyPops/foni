@@ -1,4 +1,4 @@
-//! `FoniError` — unified error type for all FoniClient operations.
+//! `FoniError` — unified error type for all `FoniClient` operations.
 use thiserror::Error;
 
 #[derive(Debug, Error)]

@@ -7,7 +7,6 @@
 
 use rhai::{Dynamic, Engine, AST};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crate::quality::dsp::SmoothingOptions;
 use foni_analyse::AnalysisResult;
@@ -211,9 +210,7 @@ pub fn find_policy_script() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::quality::dsp::controller::{
-        ControllerConfig, ControllerRanges, ControllerSensitivity, ControllerTargets,
-    };
+    use crate::quality::dsp::controller::ControllerConfig;
     use crate::quality::dsp::SmoothingOptions;
     use std::io::Write;
 

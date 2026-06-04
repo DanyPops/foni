@@ -1,8 +1,6 @@
 use super::cmd_common::{
     load_maquettes, play_wav, print_tune_results, process_request, synth_request, Maquette,
 };
-use dialoguer::{theme::ColorfulTheme, Input, Select};
-use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
 
 pub fn cmd_tune(
@@ -144,7 +142,7 @@ pub fn cmd_tune_auto(
     vs: Option<&std::path::Path>,
     reference: Option<&std::path::Path>,
 ) {
-    use foni_analyse::{analyse, compute_gap, decode_wav, format_gap_table, TargetTensor};
+    use foni_analyse::{analyse, compute_gap, decode_wav, TargetTensor};
     use std::io::Write;
 
     // Gap score weights — brightness is the biggest problem, then loudness and voice presence
@@ -386,7 +384,6 @@ pub fn cmd_tune_auto(
 }
 
 pub fn cmd_test_policy(script: &PathBuf, brightness: f32, loudness: f32, bass: f32, darkness: f32) {
-    use owo_colors::OwoColorize;
     use tabled::{settings::Style, Table, Tabled};
 
     let engine = match foni_synth::quality::dsp::policy::PolicyEngine::load(script) {

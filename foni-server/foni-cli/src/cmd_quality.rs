@@ -1,4 +1,4 @@
-use super::cmd_common::{play_wav, process_request, synth_request};
+use super::cmd_common::{process_request, synth_request};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
 
@@ -301,7 +301,7 @@ pub fn cmd_compare(
             let sv = mean(&sr, *f);
             let yv = mean(&sy, *f);
             let gap = if sv.abs() > 0.01 {
-                ((yv - sv).abs() / sv.abs() * 100.0)
+                (yv - sv).abs() / sv.abs() * 100.0
             } else {
                 0.0
             };
@@ -577,14 +577,14 @@ pub fn cmd_diff(
     // Report
     let gap_delta = after_gap.mean_gap_pct - before_gap.mean_gap_pct;
     let lsd_delta = after_tl.spectral_gap - before_tl.spectral_gap;
-    let gap_arrow = if gap_delta < -1.0 {
+    let _gap_arrow = if gap_delta < -1.0 {
         "\u{2193} improved"
     } else if gap_delta > 1.0 {
         "\u{2191} worse"
     } else {
         "\u{2194} same"
     };
-    let lsd_arrow = if lsd_delta < -0.5 {
+    let _lsd_arrow = if lsd_delta < -0.5 {
         "\u{2193} improved"
     } else if lsd_delta > 0.5 {
         "\u{2191} worse"
@@ -683,7 +683,7 @@ pub fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str
 
     let ref_bytes = std::fs::read(ref_path).expect("cannot read reference WAV");
     let ref_wav = decode_wav(&ref_bytes).expect("reference WAV");
-    let ref_a = analyse_fast(&ref_wav.samples, ref_wav.sample_rate);
+    let _ref_a = analyse_fast(&ref_wav.samples, ref_wav.sample_rate);
 
     eprint!("  Synthesizing base (RVC, no DSP)\u{2026} ");
     std::io::stdout().flush().ok();

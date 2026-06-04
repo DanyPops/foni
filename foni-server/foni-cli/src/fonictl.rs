@@ -307,6 +307,15 @@ enum Cmd {
         call_id: String,
     },
 
+    /// Compare Chatterbox vs Fish S2-Pro on the same phrase (parallel)
+    TtsCompare {
+        /// Phrase to synthesize
+        #[arg(
+            default_value = "Слушай, сталкер. Я тут тебе ситуацию объясню. На Зоне сейчас неспокойно, аномалии активизировались. Деплой завалился, пайплайн сломался. Короче, полный пиздец. Но ты не переживай, мы всё починим. Удачи, браток."
+        )]
+        phrase: String,
+    },
+
     /// Save current model's scores as the baseline to beat before retraining
     Snapshot {
         /// Model name
@@ -461,7 +470,7 @@ enum CloudAction {
 
 fn cmd_cloud(action: CloudAction) {
     use cloud::{CloudProvider, RunPodProvider};
-    use owo_colors::OwoColorize;
+
     use tabled::{settings::Style, Table, Tabled};
 
     let api_key = match std::env::var("RUNPOD_API_KEY") {
@@ -471,7 +480,7 @@ fn cmd_cloud(action: CloudAction) {
             return;
         }
     };
-    let provider = RunPodProvider::new(&api_key);
+    let _provider = RunPodProvider::new(&api_key);
 
     match action {
         CloudAction::History => {
@@ -1017,6 +1026,9 @@ fn main() {
         }
         Cmd::TrainCancel { call_id } => {
             cmd_train::cmd_train_cancel(&call_id);
+        }
+        Cmd::TtsCompare { phrase } => {
+            cmd_train::cmd_tts_compare(&phrase);
         }
         Cmd::Cloud { action } => {
             cmd_cloud(action);

@@ -48,6 +48,12 @@ pub struct WordDiversifier {
     counts: HashMap<String, u32>,
 }
 
+impl Default for WordDiversifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WordDiversifier {
     pub fn new() -> Self {
         Self {
@@ -117,7 +123,7 @@ pub fn stretch_expression(expr: &str, repeats: usize) -> String {
             .unwrap_or(usize::MAX)
     });
 
-    let top_n = (positions.len() + 1) / 2;
+    let top_n = positions.len().div_ceil(2);
     let mut rng = rand::thread_rng();
     let pos = positions[rng.gen_range(0..top_n)];
     let vowel = chars[pos];

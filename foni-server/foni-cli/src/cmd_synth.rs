@@ -1,7 +1,6 @@
 use super::cmd_common::{
-    default_maquettes, get_json, load_maquettes, mixer_print_tracks, opts_describe, play_wav,
-    process_request, render_maquette, save_and_maybe_play, save_session, stars, synth_request,
-    AiSuggestion, Maquette, MixerSession, Track, MIXER_HELP,
+    default_maquettes, get_json, load_maquettes, play_wav, process_request, render_maquette,
+    save_and_maybe_play, synth_request, Maquette,
 };
 use dialoguer::{theme::ColorfulTheme, Input, Select};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -373,7 +372,7 @@ pub fn cmd_diagnose(server: &str, text: &str, model: &str) {
         "reverbMs": 8,    "reverbDecay": 0.04
     });
 
-    let mut stages: Vec<(&str, &str, serde_json::Value)> = vec![
+    let stages: Vec<(&str, &str, serde_json::Value)> = vec![
         // label, description, opts
         (
             "a_rvc_raw",
@@ -607,7 +606,7 @@ pub fn cmd_listen(server: &str, text: &str, model: &str, dsp_variants: bool, pla
     }
     let mut rendered: Vec<Stage> = Vec::new();
 
-    for (i, (label, prosody, dsp)) in stages.iter().enumerate() {
+    for (i, (label, _prosody, dsp)) in stages.iter().enumerate() {
         pb.set_message(label.to_string());
 
         let result: Result<Vec<u8>, String> = if i == 0 && !dsp_variants {

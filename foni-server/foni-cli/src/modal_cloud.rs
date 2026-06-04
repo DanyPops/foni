@@ -1,4 +1,4 @@
-use modal_rs::{App, AppLogsOptions, FunctionFromNameOptions, ModalClient, VolumeFromNameOptions};
+use modal_rs::{AppLogsOptions, FunctionFromNameOptions, ModalClient, VolumeFromNameOptions};
 
 const APP_NAME: &str = "foni-fish-finetune";
 const FUNCTION_NAME: &str = "train";

@@ -6,7 +6,6 @@ use axum::{
     response::IntoResponse,
 };
 use futures::{SinkExt, StreamExt};
-use std::sync::Arc;
 
 use super::emotion::{
     current_intensity, detect_emotion, effective_weights, emotion_emoji, neutral_state,
@@ -104,7 +103,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         "intensity": intensity,
                         "signals": reading.signals,
                     });
-                    let _ = tx.send(Message::Text(reply.to_string().into())).await;
+                    let _ = tx.send(Message::Text(reply.to_string())).await;
                 }
             }
             "reset" => {
@@ -119,11 +118,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                             "type": "train_event",
                             "data": event,
                         });
-                        if tx
-                            .send(Message::Text(reply.to_string().into()))
-                            .await
-                            .is_err()
-                        {
+                        if tx.send(Message::Text(reply.to_string())).await.is_err() {
                             return;
                         }
                     }
@@ -220,7 +215,7 @@ async fn process_chunk(
     // In dry_run mode: skip synthesis and playback, just report what would be spoken
     if config.dry_run {
         let reply = serde_json::json!({"type": "speak", "text": translated});
-        let _ = tx.send(Message::Text(reply.to_string().into())).await;
+        let _ = tx.send(Message::Text(reply.to_string())).await;
         return;
     }
 
@@ -229,7 +224,7 @@ async fn process_chunk(
     if let Some(cached) = cache.get(&key).await {
         play_queue.enqueue(cached).await;
         let reply = serde_json::json!({"type": "playing", "text": translated});
-        let _ = tx.send(Message::Text(reply.to_string().into())).await;
+        let _ = tx.send(Message::Text(reply.to_string())).await;
         return;
     }
 
@@ -243,12 +238,12 @@ async fn process_chunk(
             cache.put(key, wav.clone()).await;
             play_queue.enqueue(wav).await;
             let reply = serde_json::json!({"type": "playing", "text": translated});
-            let _ = tx.send(Message::Text(reply.to_string().into())).await;
+            let _ = tx.send(Message::Text(reply.to_string())).await;
         }
         Err(e) => {
             tracing::warn!("synthesis failed: {e}");
             let reply = serde_json::json!({"type": "error", "msg": e});
-            let _ = tx.send(Message::Text(reply.to_string().into())).await;
+            let _ = tx.send(Message::Text(reply.to_string())).await;
         }
     }
 }

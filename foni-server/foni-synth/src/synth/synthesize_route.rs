@@ -69,7 +69,7 @@ fn cache_key(req: &SynthRequest) -> [u8; 32] {
         h.update(rng.as_bytes());
     }
     let o = &req.opts;
-    for v in [
+    for val in [
         o.rms_target_lufs,
         o.compression_ratio,
         o.compression_attack_ms,
@@ -81,10 +81,11 @@ fn cache_key(req: &SynthRequest) -> [u8; 32] {
         o.de_harsh_db,
         o.de_harsh_freq,
         o.de_harsh_q,
-    ] {
-        if let Some(val) = v {
-            h.update(val.to_le_bytes());
-        }
+    ]
+    .into_iter()
+    .flatten()
+    {
+        h.update(val.to_le_bytes());
     }
     h.finalize().into()
 }

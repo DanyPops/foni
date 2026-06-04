@@ -1,5 +1,5 @@
 //! Mixer TUI state — the single source of truth for the ratatui event loop.
-use foni_client::{AnalyseResponse, FoniClient, WavData, WireOpts};
+use foni_client::{AnalyseResponse, FoniClient, WireOpts};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

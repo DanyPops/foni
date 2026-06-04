@@ -138,7 +138,7 @@ pub struct AnalyseRequest {
     pub reference_label: Option<String>,
 }
 
-/// Mirrors foni_analyse::AnalysisResult — only the fields fonictl actually uses.
+/// Mirrors `foni_analyse::AnalysisResult` — only the fields fonictl actually uses.
 /// Full type lives in foni-analyse; we mirror a minimal subset here to avoid
 /// pulling in the full analysis crate as a client dependency.
 #[derive(Debug, Clone, Deserialize, Default)]

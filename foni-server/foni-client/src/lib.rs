@@ -46,8 +46,7 @@ impl FoniClient {
             .timeout(Duration::from_secs(2))
             .send()
             .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
+            .is_ok_and(|r| r.status().is_success())
     }
 
     // ── Audio synthesis ───────────────────────────────────────────────────────
@@ -67,7 +66,7 @@ impl FoniClient {
         Ok(WavData(bytes.to_vec()))
     }
 
-    /// POST /convert — WAV → ContentVec → RMVPE → Generator → WAV (RVC only).
+    /// POST /convert — WAV → `ContentVec` → RMVPE → Generator → WAV (RVC only).
     pub async fn convert(&self, req: &ConvertRequest) -> Result<WavData> {
         let resp = self
             .http
@@ -125,7 +124,7 @@ impl FoniClient {
     ) -> Result<AnalyseResponse> {
         let body = serde_json::json!({
             "audio_data":      wav.to_base64(),
-            "reference_data":  reference.map(|r| r.to_base64()),
+            "reference_data":  reference.map(types::WavData::to_base64),
             "reference_label": reference_label,
         });
         let resp = self
@@ -234,14 +233,14 @@ fn urlencoded(s: &str) -> String {
 }
 
 impl WavData {
-    /// Decode a base64 audio_data string from a JSON response.
+    /// Decode a base64 `audio_data` string from a JSON response.
     pub fn from_base64(s: &str) -> Result<Self> {
         B64.decode(s)
             .map(WavData)
             .map_err(|e| FoniError::Decode(e.to_string()))
     }
 
-    /// Encode for use as audio_data in a JSON request body.
+    /// Encode for use as `audio_data` in a JSON request body.
     pub fn to_base64(&self) -> String {
         B64.encode(&self.0)
     }

@@ -6,7 +6,7 @@ pub mod ui;
 use std::{path::PathBuf, time::Duration};
 
 use crossterm::event::{self, Event, KeyEventKind};
-use foni_client::{FoniClient, SynthRequest, WireOpts};
+use foni_client::{FoniClient, WireOpts};
 use ratatui::DefaultTerminal;
 
 use state::{load_session, session_path, InputMode, MixerApp, Track};

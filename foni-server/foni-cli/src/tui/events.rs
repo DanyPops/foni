@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use foni_client::{SynthRequest, WavData, WireOpts};
 use std::path::PathBuf;
 
-use super::state::{InputMode, MixerApp, Panel, Track, PARAMS};
+use super::state::{InputMode, MixerApp, Panel, PARAMS};
 
 pub fn handle_key(app: &mut MixerApp, key: KeyEvent) -> bool {
     // Global: Ctrl-C always quits

@@ -11,6 +11,12 @@ pub struct AudioCache {
     total_bytes: Mutex<usize>,
 }
 
+impl Default for AudioCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AudioCache {
     pub fn new() -> Self {
         Self {

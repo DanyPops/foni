@@ -3,7 +3,7 @@
 //! Segments both recordings into voiced/silence spans, aligns them via DTW,
 //! then compares durations segment by segment.
 
-use crate::timeline::{segment, SegmentKind, Timeline};
+use crate::timeline::{segment, SegmentKind};
 use serde::Serialize;
 
 /// One aligned segment pair: reference duration vs synthesis duration.

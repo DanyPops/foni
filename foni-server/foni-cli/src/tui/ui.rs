@@ -1,6 +1,6 @@
 //! Ratatui render functions — pure, no side effects.
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Gauge, Paragraph, Row, Table, TableState},

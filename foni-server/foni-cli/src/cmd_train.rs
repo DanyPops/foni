@@ -299,3 +299,65 @@ pub fn cmd_compare_models(server: &str, model: &str, ref_path: &PathBuf) {
         );
     }
 }
+
+pub fn cmd_tts_compare(phrase: &str) {
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+    rt.block_on(async {
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({"text": phrase, "language": "ru"});
+
+        eprintln!("\n  ▶  Comparing TTS models in parallel");
+        eprintln!(
+            "    Phrase: «{}»\n",
+            phrase.chars().take(40).collect::<String>()
+        );
+
+        let t0 = std::time::Instant::now();
+
+        let cb_fut = client
+            .post("https://dpopsuev--chatterbox.modal.run")
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(300))
+            .send();
+        let fs_fut = client
+            .post("https://dpopsuev--fish.modal.run")
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(300))
+            .send();
+
+        let (cb_res, fs_res) = tokio::join!(cb_fut, fs_fut);
+
+        let cb_ms = t0.elapsed().as_millis();
+
+        match cb_res {
+            Ok(resp) if resp.status().is_success() => {
+                let wav = resp.bytes().await.unwrap_or_default();
+                let path = "/tmp/fonictl_compare_chatterbox.wav";
+                std::fs::write(path, &wav).ok();
+                eprintln!("  ✓ Chatterbox:  {} bytes, {}ms", wav.len(), cb_ms);
+                eprintln!("    Playing...");
+                super::cmd_common::play_wav(std::path::Path::new(path));
+            }
+            Ok(resp) => eprintln!("  ✗ Chatterbox: HTTP {}", resp.status()),
+            Err(e) => eprintln!("  ✗ Chatterbox: {e}"),
+        }
+
+        let fs_ms = t0.elapsed().as_millis();
+
+        match fs_res {
+            Ok(resp) if resp.status().is_success() => {
+                let wav = resp.bytes().await.unwrap_or_default();
+                let path = "/tmp/fonictl_compare_fish.wav";
+                std::fs::write(path, &wav).ok();
+                eprintln!("  ✓ Fish S2-Pro: {} bytes, {}ms", wav.len(), fs_ms);
+                eprintln!("    Playing...");
+                super::cmd_common::play_wav(std::path::Path::new(path));
+            }
+            Ok(resp) => {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("  ✗ Fish S2-Pro: {body}");
+            }
+            Err(e) => eprintln!("  ✗ Fish S2-Pro: {e}"),
+        }
+    });
+}
