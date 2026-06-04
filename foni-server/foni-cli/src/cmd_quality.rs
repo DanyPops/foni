@@ -868,3 +868,42 @@ pub fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str
     let targets: Vec<f32> = metrics.iter().map(|m| (m.extract)(&ref_fast)).collect();
     println!("  const TARGET: [f32; {}] = {:?};", metrics.len(), targets);
 }
+
+pub fn cmd_energy(file: &std::path::Path, frame_ms: usize) {
+    let bytes = std::fs::read(file).unwrap_or_else(|e| {
+        eprintln!("  ✗ {}: {e}", file.display());
+        std::process::exit(1);
+    });
+    let wav = foni_analyse::decode_wav(&bytes).unwrap_or_else(|e| {
+        eprintln!("  ✗ decode: {e}");
+        std::process::exit(1);
+    });
+
+    let sr = wav.sample_rate as usize;
+    let frame_size = sr * frame_ms / 1000;
+    let n_frames = wav.samples.len() / frame_size;
+    let duration = wav.samples.len() as f64 / sr as f64;
+
+    eprintln!(
+        "  {}  {:.2}s  {}Hz  {}ms frames\n",
+        file.display(),
+        duration,
+        sr,
+        frame_ms
+    );
+
+    println!("{:>5}  {:>7}  {}", "Time", "RMS(dB)", "");
+    println!("{}", "─".repeat(60));
+
+    for i in 0..n_frames {
+        let start = i * frame_size;
+        let end = (start + frame_size).min(wav.samples.len());
+        let chunk = &wav.samples[start..end];
+        let rms = (chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len() as f32).sqrt();
+        let rms_db = 20.0 * (rms + 1e-10).log10();
+        let t = i as f64 * frame_ms as f64 / 1000.0;
+        let bar_len = ((rms_db + 60.0) / 2.0).max(0.0) as usize;
+        let bar: String = "█".repeat(bar_len.min(30));
+        println!("{t:5.1}s  {rms_db:6.1}dB  {bar}");
+    }
+}

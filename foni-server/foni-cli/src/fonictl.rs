@@ -317,6 +317,15 @@ enum Cmd {
         phrase: String,
     },
 
+    /// Per-frame RMS energy profile for a WAV file
+    Energy {
+        /// WAV file to analyse
+        file: PathBuf,
+        /// Frame size in milliseconds
+        #[arg(long, default_value_t = 100)]
+        frame_ms: usize,
+    },
+
     /// Compare Chatterbox vs Fish S2-Pro on the same phrase (parallel)
     TtsCompare {
         /// Phrase to synthesize
@@ -1036,6 +1045,9 @@ fn main() {
         }
         Cmd::TrainCancel { call_id } => {
             cmd_train::cmd_train_cancel(&call_id);
+        }
+        Cmd::Energy { file, frame_ms } => {
+            cmd_quality::cmd_energy(&file, frame_ms);
         }
         Cmd::TtsBench { url, phrase } => {
             cmd_train::cmd_tts_bench(&url, &phrase);
