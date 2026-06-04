@@ -1,0 +1,143 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FoniConfig {
+    pub enabled: bool,
+    pub voice: String,
+    pub speed: f64,
+    pub input_lang: Lang,
+    pub output_lang: Lang,
+
+    pub mat_enabled: bool,
+    pub mat_prob: f64,
+    pub mat_stretch: f64,
+    pub mat_cooldown_ms: u64,
+
+    pub interject_enabled: bool,
+    pub interject_prob: f64,
+    pub interject_cooldown_ms: u64,
+
+    pub rvc_enabled: bool,
+    pub rvc_url: String,
+    pub rvc_model: String,
+
+    pub prosody_enabled: bool,
+
+    pub ollama_url: String,
+    pub ollama_model: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Lang {
+    En,
+    Ru,
+}
+
+impl Default for FoniConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            voice: "ru".into(),
+            speed: 1.0,
+            input_lang: Lang::En,
+            output_lang: Lang::Ru,
+
+            mat_enabled: true,
+            mat_prob: 0.35,
+            mat_stretch: 0.5,
+            mat_cooldown_ms: 20_000,
+
+            interject_enabled: true,
+            interject_prob: 0.25,
+            interject_cooldown_ms: 12_000,
+
+            rvc_enabled: true,
+            rvc_url: "http://localhost:5050".into(),
+            rvc_model: "sidorovich".into(),
+
+            prosody_enabled: true,
+
+            ollama_url: "http://localhost:11434".into(),
+            ollama_model: "qwen3:1.7b".into(),
+        }
+    }
+}
+
+pub const PREWARM_RU: &[&str] = &[
+    "Да.",
+    "Нет.",
+    "Хорошо.",
+    "Понял.",
+    "Окей.",
+    "Готово.",
+    "Сейчас.",
+    "Подожди.",
+    "Конечно.",
+    "Блядь.",
+    "Пиздец.",
+    "Ёпта.",
+    "Сука.",
+    "Ого!",
+    "Ах!",
+    "Ух!",
+    "Эх.",
+];
+
+pub const FILLER_PHRASES: &[&str] = &[
+    "Мм...",
+    "Хм...",
+    "Эм...",
+    "Ну...",
+    "Так...",
+    "Значит...",
+    "Это...",
+    "Так, так, так...",
+    "Ну, значит...",
+    "Сейчас, сейчас...",
+    "Дай подумать...",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_is_valid() {
+        let cfg = FoniConfig::default();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.input_lang, Lang::En);
+        assert_eq!(cfg.output_lang, Lang::Ru);
+        assert!(cfg.mat_prob > 0.0 && cfg.mat_prob <= 1.0);
+        assert!(cfg.interject_prob > 0.0 && cfg.interject_prob <= 1.0);
+    }
+
+    #[test]
+    fn config_serializes_to_json() {
+        let cfg = FoniConfig::default();
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("sidorovich"));
+        assert!(json.contains("\"en\""));
+    }
+
+    #[test]
+    fn config_roundtrips() {
+        let cfg = FoniConfig::default();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let parsed: FoniConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.rvc_model, cfg.rvc_model);
+        assert_eq!(parsed.mat_prob, cfg.mat_prob);
+    }
+
+    #[test]
+    fn prewarm_phrases_nonempty() {
+        assert!(!PREWARM_RU.is_empty());
+        assert!(PREWARM_RU.len() >= 10);
+    }
+
+    #[test]
+    fn filler_phrases_nonempty() {
+        assert!(!FILLER_PHRASES.is_empty());
+        assert!(FILLER_PHRASES.len() >= 5);
+    }
+}
