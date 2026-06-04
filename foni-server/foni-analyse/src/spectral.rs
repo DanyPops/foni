@@ -26,6 +26,112 @@ pub struct SpectralMetrics {
 const FRAME_MS: f32 = 25.0;
 const HOP_MS: f32 = 10.0;
 
+struct FrameMetrics {
+    centroid: f32,
+    bandwidth: f32,
+    flatness: f32,
+    alpha_ratio: f32,
+    tilt: f64,
+}
+
+fn analyse_frame(mags: &[f32], mag_sum: f32, bin_hz: f32, n_bins: usize) -> FrameMetrics {
+    let centroid: f32 = mags
+        .iter()
+        .enumerate()
+        .map(|(k, &m)| k as f32 * bin_hz * m)
+        .sum::<f32>()
+        / mag_sum;
+
+    let bandwidth: f32 = (mags
+        .iter()
+        .enumerate()
+        .map(|(k, &m)| {
+            let diff = k as f32 * bin_hz - centroid;
+            m * diff * diff
+        })
+        .sum::<f32>()
+        / mag_sum)
+        .sqrt();
+
+    let flatness = spectral_flatness(mags, mag_sum, n_bins);
+    let alpha_ratio = alpha_ratio(mags, bin_hz, n_bins);
+    let tilt = spectral_tilt(mags, bin_hz, n_bins);
+
+    FrameMetrics {
+        centroid,
+        bandwidth,
+        flatness,
+        alpha_ratio,
+        tilt,
+    }
+}
+
+fn spectral_flatness(mags: &[f32], mag_sum: f32, n_bins: usize) -> f32 {
+    let log_sum: f64 = mags.iter().map(|&m| (m as f64 + 1e-10).ln()).sum::<f64>();
+    let geo_mean = (log_sum / n_bins as f64).exp() as f32;
+    let arith_mean = mag_sum / n_bins as f32;
+    if arith_mean > 0.0 {
+        geo_mean / arith_mean
+    } else {
+        0.0
+    }
+}
+
+fn alpha_ratio(mags: &[f32], bin_hz: f32, n_bins: usize) -> f32 {
+    let cut_bin = ((1000.0 / bin_hz) as usize).min(n_bins - 1);
+    let low_power: f32 = mags[..cut_bin].iter().map(|&m| m * m).sum();
+    let high_power: f32 = mags[cut_bin..].iter().map(|&m| m * m).sum();
+    if high_power > 1e-20 {
+        10.0 * (low_power / high_power).log10()
+    } else {
+        0.0
+    }
+}
+
+#[allow(clippy::needless_range_loop)]
+fn spectral_tilt(mags: &[f32], bin_hz: f32, n_bins: usize) -> f64 {
+    let lo_bin = ((100.0 / bin_hz) as usize).max(1);
+    let hi_bin = ((8000.0 / bin_hz) as usize).min(n_bins);
+    let (mut sx, mut sy, mut sxy, mut sxx) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let mut n_tilt = 0usize;
+    for (idx, &mag_k) in mags[lo_bin..hi_bin].iter().enumerate() {
+        let power = mag_k * mag_k;
+        if power > 1e-20 {
+            let x = (((lo_bin + idx) as f32 * bin_hz) as f64).log2();
+            let y = 10.0 * (power as f64).log10();
+            sx += x;
+            sy += y;
+            sxy += x * y;
+            sxx += x * x;
+            n_tilt += 1;
+        }
+    }
+    if n_tilt > 1 {
+        let n = n_tilt as f64;
+        (n * sxy - sx * sy) / (n * sxx - sx * sx)
+    } else {
+        0.0
+    }
+}
+
+fn vocal_weight(ltas: &[f64], bin_hz: f32, n_bins: usize) -> f32 {
+    let lo = ((1000.0 / bin_hz) as usize).min(n_bins - 1);
+    let hi = ((5000.0 / bin_hz) as usize).min(n_bins);
+    let ltas_total: f64 = ltas[lo..hi].iter().sum();
+    if ltas_total <= 0.0 {
+        return (lo + hi) as f32 * bin_hz * 0.5;
+    }
+    let mut cum = 0.0f64;
+    let half = ltas_total * 0.5;
+    for k in lo..hi {
+        cum += ltas[k];
+        if cum >= half {
+            return k as f32 * bin_hz;
+        }
+    }
+    (lo + hi) as f32 * bin_hz * 0.5
+}
+
 pub fn compute(samples: &[f32], sample_rate: u32) -> SpectralMetrics {
     let sr = sample_rate as f32;
     let frame_size = next_power_of_two((sr * FRAME_MS / 1000.0) as usize);
@@ -49,7 +155,7 @@ pub fn compute(samples: &[f32], sample_rate: u32) -> SpectralMetrics {
     let mut alpha_ratio_acc = 0.0f64;
     let mut tilt_acc = 0.0f64;
     let mut frame_count = 0usize;
-    let mut ltas = vec![0.0f64; n_bins]; // long-term average spectrum for vocal_weight
+    let mut ltas = vec![0.0f64; n_bins];
 
     let mut i = 0;
     while i + frame_size <= samples.len() {
@@ -67,79 +173,14 @@ pub fn compute(samples: &[f32], sample_rate: u32) -> SpectralMetrics {
         let mag_sum: f32 = mags.iter().sum();
 
         if mag_sum > 1e-10 {
-            let centroid: f32 = mags
-                .iter()
-                .enumerate()
-                .map(|(k, &m)| k as f32 * bin_hz * m)
-                .sum::<f32>()
-                / mag_sum;
-
-            let bandwidth: f32 = (mags
-                .iter()
-                .enumerate()
-                .map(|(k, &m)| {
-                    let diff = k as f32 * bin_hz - centroid;
-                    m * diff * diff
-                })
-                .sum::<f32>()
-                / mag_sum)
-                .sqrt();
-
-            // Spectral flatness (Wiener entropy)
-            let log_sum: f64 = mags.iter().map(|&m| (m as f64 + 1e-10).ln()).sum::<f64>();
-            let geo_mean = (log_sum / n_bins as f64).exp() as f32;
-            let arith_mean = mag_sum / n_bins as f32;
-            let flatness = if arith_mean > 0.0 {
-                geo_mean / arith_mean
-            } else {
-                0.0
-            };
-
-            // Alpha ratio: bass-to-treble energy balance, split at 1 kHz
-            let cut_bin = ((1000.0 / bin_hz) as usize).min(n_bins - 1);
-            let low_power: f32 = mags[..cut_bin].iter().map(|&m| m * m).sum();
-            let high_power: f32 = mags[cut_bin..].iter().map(|&m| m * m).sum();
-            let alpha_ratio = if high_power > 1e-20 {
-                10.0 * (low_power / high_power).log10()
-            } else {
-                0.0_f32
-            };
-
-            // Spectral tilt: dB/octave slope via OLS regression over 100–8000 Hz bins
-            let lo_bin = ((100.0 / bin_hz) as usize).max(1);
-            let hi_bin = ((8000.0 / bin_hz) as usize).min(n_bins);
-            let mut sx = 0.0f64;
-            let mut sy = 0.0f64;
-            let mut sxy = 0.0f64;
-            let mut sxx = 0.0f64;
-            let mut n_tilt = 0usize;
-            for (idx, &mag_k) in mags[lo_bin..hi_bin].iter().enumerate() {
-                let power = mag_k * mag_k;
-                if power > 1e-20 {
-                    let x = (((lo_bin + idx) as f32 * bin_hz) as f64).log2();
-                    let y = 10.0 * (power as f64).log10();
-                    sx += x;
-                    sy += y;
-                    sxy += x * y;
-                    sxx += x * x;
-                    n_tilt += 1;
-                }
-            }
-            let tilt = if n_tilt > 1 {
-                let n = n_tilt as f64;
-                (n * sxy - sx * sy) / (n * sxx - sx * sx)
-            } else {
-                0.0
-            };
-
-            centroid_acc += centroid as f64;
-            bandwidth_acc += bandwidth as f64;
-            flatness_acc += flatness as f64;
-            alpha_ratio_acc += alpha_ratio as f64;
-            tilt_acc += tilt;
+            let fm = analyse_frame(&mags, mag_sum, bin_hz, n_bins);
+            centroid_acc += fm.centroid as f64;
+            bandwidth_acc += fm.bandwidth as f64;
+            flatness_acc += fm.flatness as f64;
+            alpha_ratio_acc += fm.alpha_ratio as f64;
+            tilt_acc += fm.tilt;
             frame_count += 1;
 
-            // Accumulate LTAS power for vocal_weight_hz
             for (bin, &m) in mags.iter().enumerate() {
                 ltas[bin] += (m * m) as f64;
             }
@@ -147,54 +188,33 @@ pub fn compute(samples: &[f32], sample_rate: u32) -> SpectralMetrics {
         i += hop_size;
     }
 
-    let zero_crossings = samples
-        .windows(2)
-        .filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0))
-        .count();
     let duration = samples.len() as f32 / sr;
     let zcr = if duration > 0.0 {
-        zero_crossings as f32 / duration
+        samples
+            .windows(2)
+            .filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0))
+            .count() as f32
+            / duration
     } else {
         0.0
     };
 
     if frame_count == 0 {
         return SpectralMetrics {
-            brightness_hz: 0.0,
-            bandwidth_hz: 0.0,
-            tone_purity: 0.0,
             zero_crossing_rate: zcr,
-            bass_balance_db: 0.0,
-            vocal_darkness_db_oct: 0.0,
-            vocal_weight_hz: 0.0,
+            ..SpectralMetrics::default()
         };
     }
 
-    // Vocal weight: frequency where 50% of 1–5 kHz LTAS energy falls below
-    let lo = ((1000.0 / bin_hz) as usize).min(n_bins - 1);
-    let hi = ((5000.0 / bin_hz) as usize).min(n_bins);
-    let ltas_total: f64 = ltas[lo..hi].iter().sum();
-    let mut vocal_weight_hz = (lo + hi) as f32 * bin_hz * 0.5; // midpoint fallback
-    if ltas_total > 0.0 {
-        let mut cum = 0.0f64;
-        let half = ltas_total * 0.5;
-        for k in lo..hi {
-            cum += ltas[k];
-            if cum >= half {
-                vocal_weight_hz = k as f32 * bin_hz;
-                break;
-            }
-        }
-    }
-
+    let n = frame_count as f64;
     SpectralMetrics {
-        brightness_hz: (centroid_acc / frame_count as f64) as f32,
-        bandwidth_hz: (bandwidth_acc / frame_count as f64) as f32,
-        tone_purity: (flatness_acc / frame_count as f64) as f32,
+        brightness_hz: (centroid_acc / n) as f32,
+        bandwidth_hz: (bandwidth_acc / n) as f32,
+        tone_purity: (flatness_acc / n) as f32,
         zero_crossing_rate: zcr,
-        bass_balance_db: (alpha_ratio_acc / frame_count as f64) as f32,
-        vocal_darkness_db_oct: (tilt_acc / frame_count as f64) as f32,
-        vocal_weight_hz,
+        bass_balance_db: (alpha_ratio_acc / n) as f32,
+        vocal_darkness_db_oct: (tilt_acc / n) as f32,
+        vocal_weight_hz: vocal_weight(&ltas, bin_hz, n_bins),
     }
 }
 
