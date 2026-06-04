@@ -12,10 +12,18 @@ import os
 
 app = modal.App("foni-fish-finetune")
 
-# Use the official Docker image (has all deps, no checkpoints)
+# Official Docker image has all deps but its ENTRYPOINT runs webui.
+# Clear it so Modal can inject its own Python entrypoint.
 image = (
-    modal.Image.from_registry("fishaudio/fish-speech:latest", add_python="3.12")
-    .apt_install("curl")
+    modal.Image.from_registry(
+        "fishaudio/fish-speech:latest",
+        setup_dockerfile_commands=[
+            # Clear webui entrypoint so Modal can inject its own
+            'ENTRYPOINT []',
+            # Make the image's venv Python the default (Modal needs python on PATH)
+            'ENV PATH="/app/.venv/bin:$PATH"',
+        ],
+    )
 )
 
 # Persistent storage — dataset + model checkpoint + training output
@@ -34,21 +42,19 @@ def ensure_checkpoint():
         return
 
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    print("[checkpoint] installing huggingface_hub...")
+    subprocess.run(["pip", "install", "-q", "huggingface_hub"], check=True)
+
     print("[checkpoint] downloading s2-pro from HuggingFace...")
-    subprocess.run([
-        "python", "-c",
-        f"""
-from huggingface_hub import snapshot_download
-snapshot_download("fishaudio/s2-pro", local_dir="{CHECKPOINT_DIR}")
-print("[checkpoint] download complete")
-"""
-    ], check=True)
+    from huggingface_hub import snapshot_download
+    snapshot_download("fishaudio/s2-pro", local_dir=CHECKPOINT_DIR)
+    print("[checkpoint] download complete")
     volume.commit()
 
 
 @app.function(
     image=image,
-    gpu="L4",
+    gpu="A10G",
     timeout=7200,
     volumes={"/data": volume},
 )
@@ -95,18 +101,18 @@ def train(model: str = "sidorovich", steps: int = 100):
 
     print(f"[train] {count} files with transcripts ready")
 
-    os.chdir("/opt/fish-speech")
+    os.chdir("/app")
 
     # Symlink checkpoint so fish-speech tools find it
-    ckpt_link = "/opt/fish-speech/checkpoints/s2-pro"
+    ckpt_link = "/app/checkpoints/s2-pro"
     if not os.path.exists(ckpt_link):
-        os.makedirs("/opt/fish-speech/checkpoints", exist_ok=True)
+        os.makedirs("/app/checkpoints", exist_ok=True)
         os.symlink(CHECKPOINT_DIR, ckpt_link)
 
     print("[train] extracting semantic tokens...")
     subprocess.run([
         "python", "tools/vqgan/extract_vq.py", "/data",
-        "--num-workers", "1", "--batch-size", "16",
+        "--num-workers", "1", "--batch-size", "1",
         "--config-name", "modded_dac_vq",
         "--checkpoint-path", f"{CHECKPOINT_DIR}/codec.pth",
     ], check=True)
@@ -126,14 +132,16 @@ def train(model: str = "sidorovich", steps: int = 100):
         "python", "fish_speech/train.py",
         "--config-name", "text2semantic_finetune",
         f"project={model}",
-        "+lora@model.model.lora_config=r_8_alpha_16",
+        "+lora@model.model.lora_config=r_32_alpha_16_fast",
         f"trainer.max_steps={steps}",
+        f"pretrained_ckpt_path=checkpoints/s2-pro",
+        "tokenizer.model_path=fishaudio/s2-pro",
     ], check=True)
     elapsed = time.time() - t0
     print(f"[train] training done in {elapsed:.0f}s")
 
     # Merge LoRA
-    ckpt_dir = f"/opt/fish-speech/results/{model}/checkpoints"
+    ckpt_dir = f"/app/results/{model}/checkpoints"
     checkpoints = sorted(glob.glob(f"{ckpt_dir}/*.ckpt"))
     if checkpoints:
         output_dir = f"/data/output/{model}"
@@ -141,7 +149,7 @@ def train(model: str = "sidorovich", steps: int = 100):
         print(f"[train] merging LoRA: {checkpoints[-1]}")
         subprocess.run([
             "python", "tools/llama/merge_lora.py",
-            "--lora-config", "r_8_alpha_16",
+            "--lora-config", "r_32_alpha_16_fast",
             "--base-weight", CHECKPOINT_DIR,
             "--lora-weight", checkpoints[-1],
             "--output", output_dir,

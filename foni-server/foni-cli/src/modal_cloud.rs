@@ -1,5 +1,4 @@
 use modal_rs::{App, AppLogsOptions, FunctionFromNameOptions, ModalClient, VolumeFromNameOptions};
-use std::collections::HashMap;
 
 const APP_NAME: &str = "foni-fish-finetune";
 const FUNCTION_NAME: &str = "train";
@@ -23,13 +22,8 @@ pub async fn spawn_training(
         .await
         .map_err(|e| format!("lookup function: {e}"))?;
 
-    let kwargs: HashMap<String, serde_json::Value> = HashMap::from([
-        ("model".into(), serde_json::Value::String(model.into())),
-        ("steps".into(), serde_json::Value::Number(steps.into())),
-    ]);
-
     let call = func
-        .spawn_with(client, ((),), kwargs)
+        .spawn(client, (model, steps))
         .await
         .map_err(|e| format!("spawn: {e}"))?;
 
