@@ -118,7 +118,7 @@ def train(model: str = "sidorovich", steps: int = 100):
 
     print("[train] extracting semantic tokens...")
     subprocess.run([
-        "python", "tools/vqgan/extract_vq.py", "/data",
+        "/app/.venv/bin/python", "tools/vqgan/extract_vq.py", "/data",
         "--num-workers", "1", "--batch-size", "1",
         "--config-name", "modded_dac_vq",
         "--checkpoint-path", f"{CHECKPOINT_DIR}/codec.pth",
@@ -126,7 +126,7 @@ def train(model: str = "sidorovich", steps: int = 100):
 
     print("[train] building protobuf dataset...")
     subprocess.run([
-        "python", "tools/llama/build_dataset.py",
+        "/app/.venv/bin/python", "tools/llama/build_dataset.py",
         "--input", "/data",
         "--output", "/data/protos",
         "--text-extension", ".lab",
@@ -136,7 +136,7 @@ def train(model: str = "sidorovich", steps: int = 100):
     print(f"[train] fine-tuning {steps} steps (A100)...")
     t0 = time.time()
     subprocess.run([
-        "python", "fish_speech/train.py",
+        "/app/.venv/bin/python", "fish_speech/train.py",
         "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
         "--config-name", "text2semantic_finetune",
         f"project={model}",
@@ -156,7 +156,7 @@ def train(model: str = "sidorovich", steps: int = 100):
         os.makedirs(output_dir, exist_ok=True)
         print(f"[train] merging LoRA: {checkpoints[-1]}")
         subprocess.run([
-            "python", "tools/llama/merge_lora.py",
+            "/app/.venv/bin/python", "tools/llama/merge_lora.py",
             "--lora-config", "r_32_alpha_16_fast",
             "--base-weight", CHECKPOINT_DIR,
             "--lora-weight", checkpoints[-1],

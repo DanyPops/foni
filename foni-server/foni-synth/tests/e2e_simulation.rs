@@ -370,3 +370,48 @@ async fn full_pipeline_emotion_affects_injection() {
     // but we prove the pipeline doesn't crash with emotion + mat + synthesis
     assert!(!text.is_empty());
 }
+
+#[tokio::test]
+async fn ws_parse_train_logs_returns_events() {
+    std::env::set_var("FONI_DRY_RUN", "1");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = foni_synth::build_router().await;
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let (mut ws, _) = connect_async(format!("ws://127.0.0.1:{port}/ws"))
+        .await
+        .expect("connect");
+
+    let logs = "[checkpoint] s2-pro already cached at /data/checkpoints/s2-pro\n\
+                [train] 63 WAV files in /data/dataset-raw\n\
+                SyntaxWarning: blah\n\
+                [train] extracting semantic tokens...\n\
+                [train] DONE";
+
+    ws.send(Message::Text(
+        json!({"type": "parse_train_logs", "text": logs})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+
+    let mut events = Vec::new();
+    for _ in 0..10 {
+        if let Some(msg) = recv(&mut ws, 1000).await {
+            if msg["type"] == "train_event" {
+                events.push(msg["data"]["event"].as_str().unwrap_or("").to_string());
+            }
+        } else {
+            break;
+        }
+    }
+
+    eprintln!("  events: {events:?}");
+    assert!(events.contains(&"checkpoint_cached".to_string()));
+    assert!(events.contains(&"dataset_ready".to_string()));
+    assert!(events.contains(&"vq_started".to_string()));
+    assert!(events.contains(&"done".to_string()));
+    assert!(!events.iter().any(|e| e.contains("warning")));
+}

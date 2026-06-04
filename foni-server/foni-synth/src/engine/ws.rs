@@ -15,6 +15,7 @@ use super::emotion::{
 use super::engine_config::FoniConfig;
 use super::facade::{cache_key, new_shared_cache, PlayQueue, SharedCache};
 use super::stream::{drain_chunks, feed_delta, fresh_state, strip_markdown, StreamState};
+use super::train_events;
 use super::translator::{self, WordDiversifier};
 use crate::state::AppState;
 
@@ -109,6 +110,24 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
             "reset" => {
                 stream_state = fresh_state();
                 emotion_state = neutral_state();
+            }
+            "parse_train_logs" => {
+                if let Some(text) = msg["text"].as_str() {
+                    let events = train_events::parse_log_batch(text);
+                    for event in &events {
+                        let reply = serde_json::json!({
+                            "type": "train_event",
+                            "data": event,
+                        });
+                        if tx
+                            .send(Message::Text(reply.to_string().into()))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
             }
             _ => {}
         }
