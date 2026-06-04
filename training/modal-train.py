@@ -54,7 +54,8 @@ def ensure_checkpoint():
 
 @app.function(
     image=image,
-    gpu="A10G",
+    gpu="A100",
+    env={"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
     timeout=7200,
     volumes={"/data": volume},
 )
@@ -105,6 +106,12 @@ def train(model: str = "sidorovich", steps: int = 100):
 
     # Symlink checkpoint so fish-speech tools find it
     ckpt_link = "/app/checkpoints/s2-pro"
+    # Symlink protos directory
+    protos_link = "/app/data/protos"
+    if not os.path.exists("/app/data"):
+        os.makedirs("/app/data", exist_ok=True)
+    if not os.path.exists(protos_link):
+        os.symlink("/data/protos", protos_link)
     if not os.path.exists(ckpt_link):
         os.makedirs("/app/checkpoints", exist_ok=True)
         os.symlink(CHECKPOINT_DIR, ckpt_link)
@@ -126,10 +133,11 @@ def train(model: str = "sidorovich", steps: int = 100):
         "--num-workers", "4",
     ], check=True)
 
-    print(f"[train] fine-tuning {steps} steps...")
+    print(f"[train] fine-tuning {steps} steps (A100)...")
     t0 = time.time()
     subprocess.run([
         "python", "fish_speech/train.py",
+        "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
         "--config-name", "text2semantic_finetune",
         f"project={model}",
         "+lora@model.model.lora_config=r_32_alpha_16_fast",
