@@ -25,7 +25,7 @@ import type { EmotionState, Emotion } from "./core/emotion.ts";
 import { IdentityProcessor } from "./pipeline/processors.ts";
 import { SynthBackend }      from "./pipeline/synth-backend.ts";
 import type { SynthBackendOpts } from "./pipeline/synth-backend.ts";
-import { syncBreaksFrom }    from "./pipeline/prosody.ts";
+
 
 import { SpeakFacade }       from "./pipeline/speak-facade.ts";
 import { SystemPlayer }      from "./pipeline/player.ts";
@@ -93,7 +93,7 @@ const facadeFactory: FacadeFactory = async (cfg, translator, emotion) => {
   // All synthesis goes through foni-synth. No fallback to bare espeak.
   const synth = new SynthBackend(synthBackendOpts(cfg, emotion));
   if (!(await synth.isAvailable())) return null;
-  syncBreaksFrom(cfg.rvcUrl);
+  fetch(`${cfg.rvcUrl}/ssml-params`, { signal: AbortSignal.timeout(2_000) }).catch(() => {});
   return new SpeakFacade(translator, synth, new IdentityProcessor(), new SystemPlayer(), {
     voice: cfg.outputLang === "ru" ? "ru" : cfg.voice,
     speed: cfg.speed,

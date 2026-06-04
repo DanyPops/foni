@@ -1,7 +1,7 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { SmoothingProcessor, IdentityProcessor } from "./pipeline/processors.ts";
-import { BreathProcessor, injectBreaths }          from "./pipeline/breath-injector.ts";
+
 import { parseWav, rms }                           from "./pipeline/analysis/audio-utils.ts";
 import { generateSineWav }                         from "./test/audio-test-utils.ts";
 
@@ -45,9 +45,6 @@ describe.skipIf(SKIP)("Rust↔TS integration — foni-synth HTTP seam", () => {
   });
 
   it("POST /breath returns non-silent audio (Rust bandpass noise)", async () => {
-    const silentWav = generateSineWav(0, 0, SR, 0); // silent WAV
-    const result    = await injectBreaths(silentWav, SR, {}, SYNTH_URL!);
-    // When no gaps found, result equals input — just check /breath is callable
     const resp = await fetch(`${SYNTH_URL}/breath`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
