@@ -2,8 +2,9 @@
 Fish Speech S2 fine-tuning on Modal.
 
 Usage:
-    modal run training/modal-train.py --model sidorovich --steps 10      # smoke test
-    modal run training/modal-train.py --model sidorovich --steps 500     # real training
+    modal deploy training/modal-train.py                                 # one-time
+    fonictl train sidorovich --steps 10                                   # smoke
+    fonictl train sidorovich --steps 500 --follow                         # real
 """
 
 import modal
@@ -11,19 +12,38 @@ import os
 
 app = modal.App("foni-fish-finetune")
 
+# Use the official Docker image (has all deps, no checkpoints)
 image = (
     modal.Image.from_registry("fishaudio/fish-speech:latest", add_python="3.12")
     .apt_install("curl")
-    .pip_install("huggingface_hub")
-    .run_commands(
-        # s2-pro is public, no approval needed
-        "hf download fishaudio/s2-pro --local-dir /opt/fish-speech/checkpoints/s2-pro",
-    )
 )
 
-CHECKPOINT = "checkpoints/s2-pro"
-
+# Persistent storage — dataset + model checkpoint + training output
 volume = modal.Volume.from_name("foni-training", create_if_missing=True)
+
+CHECKPOINT_DIR = "/data/checkpoints/s2-pro"
+
+
+def ensure_checkpoint():
+    """Download s2-pro checkpoint to volume if not already cached."""
+    import subprocess
+
+    marker = f"{CHECKPOINT_DIR}/config.json"
+    if os.path.exists(marker):
+        print(f"[checkpoint] s2-pro already cached at {CHECKPOINT_DIR}")
+        return
+
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    print("[checkpoint] downloading s2-pro from HuggingFace...")
+    subprocess.run([
+        "python", "-c",
+        f"""
+from huggingface_hub import snapshot_download
+snapshot_download("fishaudio/s2-pro", local_dir="{CHECKPOINT_DIR}")
+print("[checkpoint] download complete")
+"""
+    ], check=True)
+    volume.commit()
 
 
 @app.function(
@@ -38,6 +58,9 @@ def train(model: str = "sidorovich", steps: int = 100):
     import shutil
     import subprocess
     import time
+
+    # Step 0: ensure base model is downloaded
+    ensure_checkpoint()
 
     raw_dir = "/data/dataset-raw"
     data_dir = f"/data/{model}"
@@ -74,12 +97,18 @@ def train(model: str = "sidorovich", steps: int = 100):
 
     os.chdir("/opt/fish-speech")
 
+    # Symlink checkpoint so fish-speech tools find it
+    ckpt_link = "/opt/fish-speech/checkpoints/s2-pro"
+    if not os.path.exists(ckpt_link):
+        os.makedirs("/opt/fish-speech/checkpoints", exist_ok=True)
+        os.symlink(CHECKPOINT_DIR, ckpt_link)
+
     print("[train] extracting semantic tokens...")
     subprocess.run([
         "python", "tools/vqgan/extract_vq.py", "/data",
         "--num-workers", "1", "--batch-size", "16",
         "--config-name", "modded_dac_vq",
-        "--checkpoint-path", "checkpoints/s2-pro/codec.pth",
+        "--checkpoint-path", f"{CHECKPOINT_DIR}/codec.pth",
     ], check=True)
 
     print("[train] building protobuf dataset...")
@@ -113,7 +142,7 @@ def train(model: str = "sidorovich", steps: int = 100):
         subprocess.run([
             "python", "tools/llama/merge_lora.py",
             "--lora-config", "r_8_alpha_16",
-            "--base-weight", "checkpoints/s2-pro",
+            "--base-weight", CHECKPOINT_DIR,
             "--lora-weight", checkpoints[-1],
             "--output", output_dir,
         ], check=True)
