@@ -1,3 +1,4 @@
+pub mod audio_stream;
 pub mod emotion;
 pub mod engine_config;
 pub mod facade;
