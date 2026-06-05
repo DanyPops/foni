@@ -21,7 +21,7 @@ use crate::{quality::dsp, state::AppState, wav};
 
 use super::process_route::WireOpts;
 
-const FISH_SPEECH_TIMEOUT_SECS: u64 = 30;
+const FISH_SPEECH_TIMEOUT_SECS: u64 = 120;
 
 #[derive(Deserialize)]
 pub struct SynthRequest {
