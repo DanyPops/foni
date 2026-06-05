@@ -43,6 +43,12 @@ pub struct SynthRequest {
     pub range: Option<String>,
     #[serde(default)]
     pub opts: WireOpts,
+    /// Emotion intensity (0.25–2.0, default 0.5 = neutral)
+    pub exaggeration: Option<f32>,
+    /// Pace/guidance weight (0.0–1.0, default 0.5)
+    pub cfg_weight: Option<f32>,
+    /// Prosody randomness (0.05–5.0, default 0.8)
+    pub temperature: Option<f32>,
 }
 
 fn default_voice() -> String {
@@ -98,10 +104,20 @@ fn tts_token() -> Option<String> {
     std::env::var("FONI_TTS_TOKEN").ok()
 }
 
-async fn cloud_tts(text: &str, _reference_id: Option<&str>) -> Result<Vec<u8>, String> {
+async fn cloud_tts(text: &str, req: &SynthRequest) -> Result<Vec<u8>, String> {
     let t = std::time::Instant::now();
     let url = tts_url().ok_or("FISH_SPEECH_URL not set")?;
-    let mut body = serde_json::json!({"text": text, "language": "ru"});
+    let mut body = serde_json::json!({"text": text, "language": req.voice});
+
+    if let Some(v) = req.exaggeration {
+        body["exaggeration"] = serde_json::json!(v);
+    }
+    if let Some(v) = req.cfg_weight {
+        body["cfg_weight"] = serde_json::json!(v);
+    }
+    if let Some(v) = req.temperature {
+        body["temperature"] = serde_json::json!(v);
+    }
 
     if let Some(token) = tts_token() {
         body["token"] = serde_json::Value::String(token);
@@ -202,10 +218,10 @@ async fn synthesize_text(
     text: &str,
     voice: &str,
     speed: u32,
-    reference_id: Option<&str>,
+    req: &SynthRequest,
 ) -> Result<Vec<u8>, String> {
     if tts_url().is_some() {
-        match cloud_tts(text, reference_id).await {
+        match cloud_tts(text, req).await {
             Ok(wav) => return Ok(wav),
             Err(e) => tracing::warn!("Fish Speech failed, falling back to espeak: {e}"),
         }
@@ -256,7 +272,7 @@ pub async fn synthesize(
     } else {
         "espeak"
     };
-    let raw_tts = synthesize_text(&text, &voice, speed, reference_id.as_deref())
+    let raw_tts = synthesize_text(&text, &voice, speed, &req)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let tts_bytes = if backend == "cloud" {

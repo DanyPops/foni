@@ -1,12 +1,13 @@
 use super::cmd_common::{
     default_maquettes, get_json, load_maquettes, play_wav, process_request, render_maquette,
-    save_and_maybe_play, synth_request, Maquette,
+    save_and_maybe_play, synth_request, synth_request_ext, Maquette,
 };
 use dialoguer::{theme::ColorfulTheme, Input, Select};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
 use std::process::Command;
 
+#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_synth(
     server: &str,
@@ -25,6 +26,9 @@ pub fn cmd_synth(
     vibd: Option<f32>,
     pres: Option<f32>,
     deess: Option<f32>,
+    exaggeration: Option<f32>,
+    cfg_weight: Option<f32>,
+    temperature: Option<f32>,
 ) {
     let mut opts = serde_json::json!({});
     if let Some(v) = rms {
@@ -75,7 +79,18 @@ pub fn cmd_synth(
         }
     });
 
-    match synth_request(server, text, model, voice, speed, dsp, opts) {
+    let mut body_extra = serde_json::Map::new();
+    if let Some(v) = exaggeration {
+        body_extra.insert("exaggeration".into(), v.into());
+    }
+    if let Some(v) = cfg_weight {
+        body_extra.insert("cfg_weight".into(), v.into());
+    }
+    if let Some(v) = temperature {
+        body_extra.insert("temperature".into(), v.into());
+    }
+
+    match synth_request_ext(server, text, model, voice, speed, dsp, opts, &body_extra) {
         Ok(bytes) => {
             pb.finish_and_clear();
             let elapsed = t0.elapsed();

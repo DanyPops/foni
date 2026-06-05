@@ -836,6 +836,7 @@ dependencies = [
  "base64",
  "chrono",
  "clap",
+ "console",
  "crossterm",
  "dialoguer",
  "foni-analyse",

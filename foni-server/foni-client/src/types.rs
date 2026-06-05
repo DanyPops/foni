@@ -17,7 +17,7 @@ pub struct WavData(pub Vec<u8>);
 
 // ── POST /synthesize ──────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SynthRequest {
     pub text: String,
     #[serde(default = "default_voice")]

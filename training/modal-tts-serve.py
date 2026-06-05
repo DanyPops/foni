@@ -64,7 +64,18 @@ class ChatterboxTTS:
         if not text:
             return JSONResponse({"error": "no text"})
 
-        wav = self.model.generate(text, audio_prompt_path=REF_WAV, language_id=lang)
+        exaggeration = float(request.get("exaggeration", 0.5))
+        cfg_weight = float(request.get("cfg_weight", 0.5))
+        temperature = float(request.get("temperature", 0.8))
+
+        wav = self.model.generate(
+            text,
+            audio_prompt_path=REF_WAV,
+            language_id=lang,
+            exaggeration=exaggeration,
+            cfg_weight=cfg_weight,
+            temperature=temperature,
+        )
 
         sr = self.model.sr
         trim = int(0.3 * sr)

@@ -5,6 +5,7 @@ mod cmd_quality;
 mod cmd_synth;
 mod cmd_train;
 mod cmd_tune;
+mod cmd_voice;
 pub mod cost;
 pub mod modal_cloud;
 mod tui;
@@ -29,9 +30,72 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Record from microphone until silence, print WAV path to stdout
+    Rec {
+        /// Output WAV file
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// Silence threshold in dB to stop recording (default: -30)
+        #[arg(long, default_value_t = -30, allow_negative_numbers = true)]
+        silence_db: i32,
+        /// Seconds of silence before stopping (default: 1.5)
+        #[arg(long, default_value_t = 1.5)]
+        silence_secs: f64,
+        /// Maximum recording duration in seconds (default: 30)
+        #[arg(long, default_value_t = 30)]
+        max_secs: u32,
+    },
+
+    /// Transcribe audio to text via Whisper, print to stdout
+    Transcribe {
+        /// WAV file (or reads path from stdin)
+        file: Option<PathBuf>,
+        /// Language code
+        #[arg(short, long, default_value = "en")]
+        lang: String,
+        /// Whisper model size
+        #[arg(long, default_value = "base")]
+        model: String,
+    },
+
+    /// Send text to LLM, print reply to stdout
+    Think {
+        /// Text to send (or reads from stdin)
+        text: Option<String>,
+        /// Persona system prompt
+        #[arg(short, long, default_value = "diomedes")]
+        persona: String,
+        /// Ollama model
+        #[arg(short, long, default_value = "llama3.2")]
+        model: String,
+        /// Ollama URL
+        #[arg(long, env = "OLLAMA_URL", default_value = "http://localhost:11434")]
+        ollama_url: String,
+    },
+
+    /// Full voice loop: record → transcribe → think → speak
+    Reply {
+        /// Persona
+        #[arg(short, long, default_value = "diomedes")]
+        persona: String,
+        /// Whisper language
+        #[arg(short, long, default_value = "en")]
+        lang: String,
+        /// Ollama model
+        #[arg(long, default_value = "llama3.2")]
+        llm: String,
+        /// Ollama URL
+        #[arg(long, env = "OLLAMA_URL", default_value = "http://localhost:11434")]
+        ollama_url: String,
+        /// Max recording seconds
+        #[arg(long, default_value_t = 30)]
+        max_secs: u32,
+    },
+
     /// Synthesize text → WAV
     Synth {
-        text: String,
+        /// Text to speak (or reads from stdin)
+        text: Option<String>,
         /// Play immediately after synthesis
         #[arg(short, long)]
         play: bool,
@@ -67,6 +131,15 @@ enum Cmd {
         presence_db: Option<f32>,
         #[arg(long)]
         de_ess_db: Option<f32>,
+        /// Emotion intensity (0.25–2.0, default 0.5 = neutral, 1.0+ = dramatic)
+        #[arg(long)]
+        exaggeration: Option<f32>,
+        /// Pace weight (0.0–1.0, default 0.5, lower = slower/looser)
+        #[arg(long)]
+        cfg_weight: Option<f32>,
+        /// Prosody randomness (0.05–5.0, default 0.8)
+        #[arg(long)]
+        temperature: Option<f32>,
     },
 
     /// Maquette studio — produce N named variants, render all, listen, pick
@@ -956,6 +1029,44 @@ fn main() {
     let server = cli.server.trim_end_matches('/');
 
     match cli.cmd {
+        Cmd::Rec {
+            out,
+            silence_db,
+            silence_secs,
+            max_secs,
+        } => {
+            if let Err(e) = cmd_voice::cmd_rec(out.as_deref(), silence_db, silence_secs, max_secs) {
+                eprintln!("✗ {e}");
+            }
+        }
+        Cmd::Transcribe { file, lang, model } => {
+            if let Err(e) = cmd_voice::cmd_transcribe(file.as_deref(), &lang, &model) {
+                eprintln!("✗ {e}");
+            }
+        }
+        Cmd::Think {
+            text,
+            persona,
+            model,
+            ollama_url,
+        } => {
+            if let Err(e) = cmd_voice::cmd_think(text.as_deref(), &persona, &model, &ollama_url) {
+                eprintln!("✗ {e}");
+            }
+        }
+        Cmd::Reply {
+            persona,
+            lang,
+            llm,
+            ollama_url,
+            max_secs,
+        } => {
+            if let Err(e) =
+                cmd_voice::cmd_reply(server, &persona, &lang, &llm, &ollama_url, max_secs)
+            {
+                eprintln!("✗ {e}");
+            }
+        }
         Cmd::Synth {
             text,
             play,
@@ -972,10 +1083,21 @@ fn main() {
             vibrato_depth,
             presence_db,
             de_ess_db,
+            exaggeration,
+            cfg_weight,
+            temperature,
         } => {
+            let text = cmd_voice::resolve_text(text);
+            let text = match &text {
+                Some(t) => t,
+                None => {
+                    eprintln!("✗ no text provided (pass argument or pipe via stdin)");
+                    return;
+                }
+            };
             cmd_synth::cmd_synth(
                 server,
-                &text,
+                text,
                 &model,
                 &voice,
                 speed,
@@ -990,6 +1112,9 @@ fn main() {
                 vibrato_depth,
                 presence_db,
                 de_ess_db,
+                exaggeration,
+                cfg_weight,
+                temperature,
             );
         }
         Cmd::Studio { text, model, from } => {

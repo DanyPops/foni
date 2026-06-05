@@ -73,7 +73,29 @@ pub fn synth_request(
     dsp: bool,
     opts: serde_json::Value,
 ) -> Result<Vec<u8>, String> {
-    let body = serde_json::json!({
+    synth_request_ext(
+        server,
+        text,
+        model,
+        voice,
+        speed,
+        dsp,
+        opts,
+        &serde_json::Map::new(),
+    )
+}
+
+pub fn synth_request_ext(
+    server: &str,
+    text: &str,
+    model: &str,
+    voice: &str,
+    speed: u32,
+    dsp: bool,
+    opts: serde_json::Value,
+    extra: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Vec<u8>, String> {
+    let mut body = serde_json::json!({
         "text":  text,
         "model": model,
         "voice": voice,
@@ -81,6 +103,9 @@ pub fn synth_request(
         "dsp":   dsp,
         "opts":  opts,
     });
+    for (k, v) in extra {
+        body[k] = v.clone();
+    }
 
     let resp = reqwest::blocking::Client::new()
         .post(format!("{server}/synthesize"))
