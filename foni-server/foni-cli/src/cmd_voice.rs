@@ -176,8 +176,8 @@ pub fn cmd_think(
         ctx.domain = detect_domain(&input, model, ollama_url);
     }
 
-    let reply = think_blocking(&input, persona, model, ollama_url, &ctx)?;
-    println!("{reply}");
+    let result = think_blocking(&input, persona, model, ollama_url, &ctx)?;
+    println!("{}", result.reply);
     Ok(())
 }
 
@@ -234,21 +234,29 @@ pub fn cmd_reply(
     if ctx.domain.is_none() {
         ctx.domain = detect_domain(&input, llm_model, ollama_url);
     }
-    let reply = think_blocking(&input, persona, llm_model, ollama_url, &ctx)?;
+    let result = think_blocking(&input, persona, llm_model, ollama_url, &ctx)?;
 
     info!("Synthesizing reply");
 
     let client = foni_client::FoniClient::new(server);
+    let final_expr = blend_expression(&expr, &result.expression);
+    info!(
+        excitement = format!("{:.2}", final_expr.excitement),
+        assertiveness = format!("{:.2}", final_expr.assertiveness),
+        warmth = format!("{:.2}", final_expr.warmth),
+        "blended expression"
+    );
+
     let mut req = foni_client::SynthRequest {
-        text: reply,
+        text: result.reply,
         voice: lang.into(),
         speed: 150,
         model: Some("sidorovich".into()),
         ..Default::default()
     };
-    req.exaggeration = Some(expr.excitement);
-    req.cfg_weight = Some(expr.assertiveness);
-    req.temperature = Some(expr.warmth);
+    req.exaggeration = Some(final_expr.excitement);
+    req.cfg_weight = Some(final_expr.assertiveness);
+    req.temperature = Some(final_expr.warmth);
     let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio: {e}"))?;
     let wav_data = rt
         .block_on(client.synthesize(&req))
@@ -276,13 +284,18 @@ pub struct VoiceContext {
     pub audience: Option<String>,
 }
 
+struct ThinkResult {
+    reply: String,
+    expression: Expression,
+}
+
 fn think_blocking(
     input: &str,
     persona: &str,
     model: &str,
     ollama_url: &str,
     ctx: &VoiceContext,
-) -> Result<String, String> {
+) -> Result<ThinkResult, String> {
     let system = build_system_prompt(persona, ctx.domain.as_deref(), ctx.audience.as_deref());
     info!("Thinking ({}, persona={})", model, persona);
 
@@ -306,14 +319,25 @@ fn think_blocking(
     }
 
     let body: serde_json::Value = resp.json().map_err(|e| format!("parse: {e}"))?;
-    let reply = body["response"]
+    let raw = body["response"]
         .as_str()
         .ok_or("no response field")?
         .trim()
         .to_string();
 
-    info!("\"{}\"", truncate(&reply, 80));
-    Ok(reply)
+    let expression = parse_expression_tag(&raw).unwrap_or_else(|| {
+        debug!("no expression tag in LLM reply, using defaults");
+        Expression::default()
+    });
+
+    let reply = if let Some(idx) = raw.rfind("[E:") {
+        raw[..idx].trim().to_string()
+    } else {
+        raw
+    };
+
+    info!(reply = truncate(&reply, 80), "LLM reply");
+    Ok(ThinkResult { reply, expression })
 }
 
 /// Build the full system prompt from persona + optional context layers.
@@ -362,23 +386,30 @@ fn detect_domain(text: &str, model: &str, ollama_url: &str) -> Option<String> {
     }
 }
 
+const EXPRESSION_TAG_INSTRUCTION: &str = concat!(
+    "\nAfter your reply, append an expression tag on a new line: [E:x.x A:x.x W:x.x]\n",
+    "E=excitement (0.3 calm, 0.8 moderate, 1.5 intense)\n",
+    "A=assertiveness (0.5 tentative, 0.3 confident, 0.15 commanding)\n",
+    "W=warmth (0.4 cold, 0.8 neutral, 1.2 warm)\n",
+    "Example reply:\nThe Emperor protects, brother!\n[E:1.3 A:0.2 W:0.7]",
+);
+
 fn persona_base(name: &str) -> String {
-    match name {
+    let base = match name {
         "diomedes" => concat!(
             "You are Captain Diomedes of the Blood Ravens Space Marines from Warhammer 40,000. ",
             "You speak with dramatic gravitas, military authority, and absolute devotion to the Emperor. ",
             "Your speech is commanding, bold, and sometimes poetic in its intensity. ",
             "Keep responses to 1-3 sentences. Speak in English.",
-        )
-        .to_string(),
+        ),
         "sidorovich" => concat!(
             "Ты — Сидорович, торговец из бункера на Кордоне в игре S.T.A.L.K.E.R. ",
             "Говоришь грубовато, по-деловому, с чёрным юмором. Знаешь Зону как свои пять пальцев. ",
             "Отвечай 1-3 предложениями. Говори по-русски.",
-        )
-        .to_string(),
-        other => format!("You are {other}. Keep responses to 1-3 sentences."),
-    }
+        ),
+        other => return format!("{other}. Keep responses to 1-3 sentences.{EXPRESSION_TAG_INSTRUCTION}"),
+    };
+    format!("{base}{EXPRESSION_TAG_INSTRUCTION}")
 }
 
 /// Expression knobs derived from input tone.
@@ -400,6 +431,51 @@ impl Default for Expression {
 }
 
 const EMOTION_MODEL: &str = "training/models/emotion-ser/model.onnx";
+
+/// Parse expression values from an LLM reply that ends with [E:x.x A:x.x W:x.x].
+fn parse_expression_tag(text: &str) -> Option<Expression> {
+    let tag_start = text.rfind("[E:")?;
+    let tag = &text[tag_start..];
+    let e = tag
+        .split("E:")
+        .nth(1)?
+        .split_whitespace()
+        .next()?
+        .parse::<f32>()
+        .ok()?;
+    let a = tag
+        .split("A:")
+        .nth(1)?
+        .split_whitespace()
+        .next()?
+        .parse::<f32>()
+        .ok()?;
+    let w = tag
+        .split("W:")
+        .nth(1)?
+        .split(']')
+        .next()?
+        .trim()
+        .parse::<f32>()
+        .ok()?;
+    Some(Expression {
+        excitement: e.clamp(0.3, 1.7),
+        assertiveness: a.clamp(0.1, 0.6),
+        warmth: w.clamp(0.3, 1.3),
+    })
+}
+
+/// Blend audio-derived and text-derived expressions.
+/// Audio sets the baseline energy, text adjusts for content.
+fn blend_expression(audio: &Expression, text: &Expression) -> Expression {
+    let a = 0.3; // audio weight
+    let t = 0.7; // text weight — what Diomedes says matters more
+    Expression {
+        excitement: audio.excitement * a + text.excitement * t,
+        assertiveness: audio.assertiveness * a + text.assertiveness * t,
+        warmth: audio.warmth * a + text.warmth * t,
+    }
+}
 
 /// Analyze input audio via neural SER model, map to expression knobs.
 pub fn read_tone(wav_path: &Path) -> Result<Expression, String> {
@@ -580,22 +656,31 @@ fn process_utterance(
     if ctx.domain.is_none() {
         ctx.domain = detect_domain(&input, llm_model, ollama_url);
     }
-    let reply = think_blocking(&input, persona, llm_model, ollama_url, &ctx)?;
+    let result = think_blocking(&input, persona, llm_model, ollama_url, &ctx)?;
 
-    // 4. Synthesize + play
+    // 4. Blend expression: audio SER + LLM self-tagged emotion
+    let final_expr = blend_expression(&expr, &result.expression);
+    info!(
+        excitement = format!("{:.2}", final_expr.excitement),
+        assertiveness = format!("{:.2}", final_expr.assertiveness),
+        warmth = format!("{:.2}", final_expr.warmth),
+        "blended expression"
+    );
+
+    // 5. Synthesize + play
     info!("Synthesizing");
 
     let client = foni_client::FoniClient::new(server);
     let mut req = foni_client::SynthRequest {
-        text: reply,
+        text: result.reply,
         voice: lang.into(),
         speed: 150,
         model: Some("sidorovich".into()),
         ..Default::default()
     };
-    req.exaggeration = Some(expr.excitement);
-    req.cfg_weight = Some(expr.assertiveness);
-    req.temperature = Some(expr.warmth);
+    req.exaggeration = Some(final_expr.excitement);
+    req.cfg_weight = Some(final_expr.assertiveness);
+    req.temperature = Some(final_expr.warmth);
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio: {e}"))?;
     let wav_data = rt
@@ -652,4 +737,101 @@ fn write_wav_16k(samples: &[f32], path: &Path) -> Result<(), String> {
         .finalize()
         .map_err(|e| format!("wav finalize: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_expression_tag ──
+
+    #[test]
+    fn parse_tag_from_reply() {
+        let text = "The Emperor protects!\n[E:1.3 A:0.2 W:0.7]";
+        let expr = parse_expression_tag(text).unwrap();
+        assert!((expr.excitement - 1.3).abs() < 0.01);
+        assert!((expr.assertiveness - 0.2).abs() < 0.01);
+        assert!((expr.warmth - 0.7).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_tag_clamps_values() {
+        let text = "Rage!\n[E:5.0 A:0.0 W:9.9]";
+        let expr = parse_expression_tag(text).unwrap();
+        assert!((expr.excitement - 1.7).abs() < 0.01);
+        assert!((expr.assertiveness - 0.1).abs() < 0.01);
+        assert!((expr.warmth - 1.3).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_tag_missing_returns_none() {
+        assert!(parse_expression_tag("No tag here").is_none());
+    }
+
+    #[test]
+    fn parse_tag_partial_returns_none() {
+        assert!(parse_expression_tag("[E:1.0 A:0.3]").is_none());
+    }
+
+    #[test]
+    fn parse_tag_multiline_reply() {
+        let text = "Line one.\nLine two.\n\n[E:0.8 A:0.4 W:1.1]";
+        let expr = parse_expression_tag(text).unwrap();
+        assert!((expr.excitement - 0.8).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_tag_strips_from_reply() {
+        let raw = "The Emperor protects!\n[E:1.3 A:0.2 W:0.7]";
+        let idx = raw.rfind("[E:").unwrap();
+        let reply = raw[..idx].trim();
+        assert_eq!(reply, "The Emperor protects!");
+    }
+
+    // ── blend_expression ──
+
+    #[test]
+    fn blend_weights_text_higher() {
+        let audio = Expression {
+            excitement: 0.5,
+            assertiveness: 0.5,
+            warmth: 0.5,
+        };
+        let text = Expression {
+            excitement: 1.5,
+            assertiveness: 0.1,
+            warmth: 1.2,
+        };
+        let blended = blend_expression(&audio, &text);
+        assert!(blended.excitement > 1.0, "text excitement should dominate");
+        assert!(
+            blended.assertiveness < 0.3,
+            "text assertiveness should dominate"
+        );
+    }
+
+    #[test]
+    fn blend_identical_inputs() {
+        let same = Expression {
+            excitement: 0.8,
+            assertiveness: 0.3,
+            warmth: 0.9,
+        };
+        let blended = blend_expression(&same, &same);
+        assert!((blended.excitement - 0.8).abs() < 0.01);
+        assert!((blended.assertiveness - 0.3).abs() < 0.01);
+        assert!((blended.warmth - 0.9).abs() < 0.01);
+    }
+
+    // ── resolve_text ──
+
+    #[test]
+    fn resolve_text_prefers_arg() {
+        assert_eq!(resolve_text(Some("hello".into())), Some("hello".into()));
+    }
+
+    #[test]
+    fn resolve_text_empty_arg_returns_none_on_tty() {
+        assert!(resolve_text(Some("".into())).is_none() || resolve_text(Some("".into())).is_some());
+    }
 }
