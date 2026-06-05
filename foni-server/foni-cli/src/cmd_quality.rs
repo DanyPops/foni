@@ -122,7 +122,7 @@ pub fn cmd_compare(
 
     if files.is_empty() {
         eprintln!("No WAVs ≤ {max_dur}s in {}", studio.display());
-        return;
+        std::process::exit(1);
     }
     println!("\n∷ Compare: {} studio files ≤ {max_dur}s", files.len());
 
@@ -216,7 +216,7 @@ pub fn cmd_compare(
     eprintln!("  Pairs: {}  Skipped: {skipped}", pairs.len());
 
     if pairs.is_empty() {
-        return;
+        std::process::exit(1);
     }
 
     // 3. Analyse both sets in parallel.

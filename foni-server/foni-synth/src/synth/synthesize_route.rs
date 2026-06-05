@@ -108,28 +108,66 @@ async fn cloud_tts(text: &str, _reference_id: Option<&str>) -> Result<Vec<u8>, S
     }
 
     let client = reqwest::Client::new();
-    let req = client
-        .post(&url)
-        .json(&body)
-        .timeout(std::time::Duration::from_secs(FISH_SPEECH_TIMEOUT_SECS));
 
-    let resp = req.send().await.map_err(|e| format!("TTS request: {e}"))?;
+    // First attempt
+    let result = cloud_tts_request(&client, &url, &body).await;
+
+    match result {
+        Ok(bytes) => {
+            tracing::info!(
+                cloud_tts_ms = t.elapsed().as_millis() as u64,
+                bytes = bytes.len(),
+                "cloud_tts: done"
+            );
+            Ok(bytes)
+        }
+        Err(first_err) => {
+            tracing::warn!(error = %first_err, "cloud_tts: first attempt failed, waking container");
+
+            // Derive health URL from TTS URL
+            let health_url = url
+                .replace("-tts.modal.run", "-health.modal.run")
+                .replace("/synthesize", "/health");
+            let _ = client
+                .get(&health_url)
+                .timeout(std::time::Duration::from_secs(90))
+                .send()
+                .await;
+            tracing::info!("cloud_tts: container warmed, retrying");
+
+            // Retry
+            let bytes = cloud_tts_request(&client, &url, &body).await?;
+            tracing::info!(
+                cloud_tts_ms = t.elapsed().as_millis() as u64,
+                bytes = bytes.len(),
+                "cloud_tts: done (after retry)"
+            );
+            Ok(bytes)
+        }
+    }
+}
+
+async fn cloud_tts_request(
+    client: &reqwest::Client,
+    url: &str,
+    body: &serde_json::Value,
+) -> Result<Vec<u8>, String> {
+    let resp = client
+        .post(url)
+        .json(body)
+        .timeout(std::time::Duration::from_secs(FISH_SPEECH_TIMEOUT_SECS))
+        .send()
+        .await
+        .map_err(|e| format!("TTS request: {e}"))?;
 
     if !resp.status().is_success() {
         return Err(format!("TTS HTTP {}", resp.status()));
     }
 
-    let bytes = resp
-        .bytes()
+    resp.bytes()
         .await
         .map(|b| b.to_vec())
-        .map_err(|e| format!("TTS body: {e}"))?;
-    tracing::info!(
-        cloud_tts_ms = t.elapsed().as_millis() as u64,
-        bytes = bytes.len(),
-        "cloud_tts: done"
-    );
-    Ok(bytes)
+        .map_err(|e| format!("TTS body: {e}"))
 }
 
 fn espeak(text: &str, voice: &str, speed: u32) -> Result<Vec<u8>, String> {

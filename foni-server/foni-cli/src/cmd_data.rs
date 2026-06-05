@@ -216,7 +216,7 @@ pub fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
 
     if files.is_empty() {
         eprintln!("No WAV files in {}", dir.display());
-        return;
+        std::process::exit(1);
     }
 
     let t0 = std::time::Instant::now();

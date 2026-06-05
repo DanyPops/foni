@@ -90,7 +90,7 @@ pub fn cmd_synth(
         Err(e) => {
             pb.finish_and_clear();
             eprintln!("❌  {e} ({:.1}s)", t0.elapsed().as_secs_f64());
-            std::process::exit(1);
+            return;
         }
     }
     drop(ticker);
@@ -899,7 +899,7 @@ pub fn cmd_status(server: &str) {
         }
         Err(e) => {
             println!("❌  Server unreachable: {e}");
-            std::process::exit(1);
+            return;
         }
     }
 
