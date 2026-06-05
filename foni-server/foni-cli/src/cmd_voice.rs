@@ -4,6 +4,7 @@ use std::process::Command;
 
 use foni_analyse::decode_wav;
 use foni_synth::engine::audio_stream;
+use foni_synth::engine::expression_palette;
 use tracing::{debug, info, warn};
 
 const STREAM_SAMPLE_RATE: u32 = 16_000;
@@ -351,18 +352,22 @@ fn detect_domain(text: &str, model: &str, ollama_url: &str) -> Option<String> {
     }
 }
 
-const EXPRESSION_TAG_INSTRUCTION: &str = concat!(
-    "\nIMPORTANT: Tag EACH sentence with its own expression on the SAME line.",
-    " Format: [E:x.x A:x.x W:x.x] Sentence text here.\n",
-    "E=excitement (0.3 calm, 0.8 moderate, 1.5 intense)\n",
-    "A=assertiveness (0.5 tentative, 0.3 confident, 0.15 commanding)\n",
-    "W=warmth (0.4 cold, 0.8 neutral, 1.2 warm)\n",
-    "Vary the expression across sentences to create an emotional arc.\n",
-    "Example:\n",
-    "[E:0.8 A:0.3 W:0.9] Brother, hear me.\n",
-    "[E:1.4 A:0.15 W:0.5] The Emperor demands your resolve!\n",
-    "[E:0.9 A:0.3 W:1.1] Together, we shall prevail.",
-);
+fn expression_tag_instruction() -> String {
+    let palette = expression_palette::palette_prompt();
+    format!(
+        concat!(
+            "\nIMPORTANT: Tag EACH sentence with an emotion shade on the SAME line.",
+            " Format: [shade_name] Sentence text here.\n",
+            "Vary shades across sentences to create an emotional arc (like painting).\n",
+            "{}\n",
+            "Example:\n",
+            "[measured] Brother, hear me.\n",
+            "[commanding] The Emperor demands your resolve!\n",
+            "[warm] Together, we shall prevail.",
+        ),
+        palette
+    )
+}
 
 fn persona_base(name: &str) -> String {
     let base = match name {
@@ -377,9 +382,9 @@ fn persona_base(name: &str) -> String {
             "Говоришь грубовато, по-деловому, с чёрным юмором. Знаешь Зону как свои пять пальцев. ",
             "Отвечай 1-3 предложениями. Говори по-русски.",
         ),
-        other => return format!("{other}. Keep responses to 1-3 sentences.{EXPRESSION_TAG_INSTRUCTION}"),
+        other => return format!("{other}. Keep responses to 1-3 sentences.{}", expression_tag_instruction()),
     };
-    format!("{base}{EXPRESSION_TAG_INSTRUCTION}")
+    format!("{base}{}", expression_tag_instruction())
 }
 
 /// Expression knobs derived from input tone.
@@ -410,8 +415,7 @@ struct Beat {
 }
 
 /// Parse per-sentence expression tags from LLM output.
-/// Input:  "[E:0.8 A:0.3 W:0.9] Brother, hear me.\n[E:1.4 A:0.15 W:0.5] Rise!"
-/// Output: vec of Beats with text + expression per sentence.
+/// Supports both shade names `[commanding]` and raw floats `[E:1.2 A:0.15 W:0.6]`.
 fn parse_storyboard(raw: &str) -> Vec<Beat> {
     let mut beats = Vec::new();
     for line in raw.lines() {
@@ -419,12 +423,7 @@ fn parse_storyboard(raw: &str) -> Vec<Beat> {
         if line.is_empty() {
             continue;
         }
-        if let Some(expr) = parse_expression_tag(line) {
-            let text = if let Some(idx) = line.find(']') {
-                line[idx + 1..].trim().to_string()
-            } else {
-                line.to_string()
-            };
+        if let Some((expr, text)) = parse_tagged_line(line) {
             if !text.is_empty() {
                 beats.push(Beat {
                     text,
@@ -439,6 +438,31 @@ fn parse_storyboard(raw: &str) -> Vec<Beat> {
         }
     }
     beats
+}
+
+/// Parse a line with `[shade_name]` or `[E:x A:x W:x]` prefix.
+fn parse_tagged_line(line: &str) -> Option<(Expression, String)> {
+    let start = line.find('[')?;
+    let end = line[start..].find(']')? + start;
+    let tag = &line[start + 1..end];
+    let text = line[end + 1..].trim().to_string();
+
+    if let Some(shade) = expression_palette::resolve(tag) {
+        return Some((
+            Expression {
+                excitement: shade.excitement,
+                assertiveness: shade.assertiveness,
+                warmth: shade.warmth,
+            },
+            text,
+        ));
+    }
+
+    if let Some(expr) = parse_expression_tag(line) {
+        return Some((expr, text));
+    }
+
+    None
 }
 
 /// Parse a single [E:x.x A:x.x W:x.x] tag from a line.
@@ -959,14 +983,21 @@ mod tests {
     // ── parse_storyboard ──
 
     #[test]
-    fn storyboard_parses_multiple_beats() {
-        let raw = "[E:0.8 A:0.3 W:0.9] Brother, hear me.\n[E:1.4 A:0.15 W:0.5] Rise now!";
+    fn storyboard_parses_shade_names() {
+        let raw = "[measured] Brother, hear me.\n[commanding] Rise now!";
         let beats = parse_storyboard(raw);
         assert_eq!(beats.len(), 2);
         assert_eq!(beats[0].text, "Brother, hear me.");
         assert_eq!(beats[1].text, "Rise now!");
+        assert!(beats[1].expression.excitement > beats[0].expression.excitement);
+    }
+
+    #[test]
+    fn storyboard_parses_raw_floats() {
+        let raw = "[E:0.8 A:0.3 W:0.9] Brother, hear me.\n[E:1.4 A:0.15 W:0.5] Rise now!";
+        let beats = parse_storyboard(raw);
+        assert_eq!(beats.len(), 2);
         assert!((beats[0].expression.excitement - 0.8).abs() < 0.01);
-        assert!((beats[1].expression.excitement - 1.4).abs() < 0.01);
     }
 
     #[test]
@@ -994,11 +1025,21 @@ mod tests {
     }
 
     #[test]
-    fn storyboard_expression_arc_varies() {
-        let raw = "[E:0.5 A:0.4 W:1.0] Calm start.\n[E:1.5 A:0.1 W:0.4] Peak intensity!";
+    fn storyboard_shade_arc_varies() {
+        let raw = "[whisper] Calm start.\n[battle_cry] FOR THE EMPEROR!";
         let beats = parse_storyboard(raw);
+        assert_eq!(beats.len(), 2);
         assert!(beats[1].expression.excitement > beats[0].expression.excitement);
         assert!(beats[1].expression.warmth < beats[0].expression.warmth);
+    }
+
+    #[test]
+    fn storyboard_mixed_shades_and_floats() {
+        let raw = "[commanding] Charge!\n[E:0.5 A:0.4 W:1.1] Rest now.";
+        let beats = parse_storyboard(raw);
+        assert_eq!(beats.len(), 2);
+        assert!(beats[0].expression.excitement > 1.0);
+        assert!((beats[1].expression.excitement - 0.5).abs() < 0.01);
     }
 
     #[test]
