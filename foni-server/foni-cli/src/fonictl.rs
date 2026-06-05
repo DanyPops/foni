@@ -58,6 +58,12 @@ enum Cmd {
         model: String,
     },
 
+    /// Analyze speech emotion — print arousal/dominance/valence and mapped expression knobs
+    Tone {
+        /// WAV file to analyze
+        file: PathBuf,
+    },
+
     /// Send text to LLM, print reply to stdout
     Think {
         /// Text to send (or reads from stdin)
@@ -1041,6 +1047,11 @@ fn main() {
         }
         Cmd::Transcribe { file, lang, model } => {
             if let Err(e) = cmd_voice::cmd_transcribe(file.as_deref(), &lang, &model) {
+                eprintln!("✗ {e}");
+            }
+        }
+        Cmd::Tone { file } => {
+            if let Err(e) = cmd_voice::read_tone(&file) {
                 eprintln!("✗ {e}");
             }
         }

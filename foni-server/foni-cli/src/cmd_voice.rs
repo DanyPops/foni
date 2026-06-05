@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use console::{style, Emoji};
+use foni_analyse::decode_wav;
 
 const RECORD_SAMPLE_RATE: u32 = 24_000;
 
@@ -201,6 +202,9 @@ pub fn cmd_reply(
     cmd_rec(Some(&wav_path), -30, 1.5, max_secs)?;
 
     eprintln!();
+    let expr = read_tone(&wav_path).unwrap_or_default();
+
+    eprintln!();
     cmd_transcribe(Some(&wav_path), lang, "base")?;
     let stem = wav_path.file_stem().ok_or("no stem")?;
     let txt_path = std::env::temp_dir().join(format!("{}.txt", stem.to_string_lossy()));
@@ -221,13 +225,16 @@ pub fn cmd_reply(
     std::io::stderr().flush().ok();
 
     let client = foni_client::FoniClient::new(server);
-    let req = foni_client::SynthRequest {
+    let mut req = foni_client::SynthRequest {
         text: reply,
         voice: lang.into(),
         speed: 150,
         model: Some("sidorovich".into()),
         ..Default::default()
     };
+    req.exaggeration = Some(expr.exaggeration);
+    req.cfg_weight = Some(expr.cfg_weight);
+    req.temperature = Some(expr.temperature);
     let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio: {e}"))?;
     let wav_data = rt
         .block_on(client.synthesize(&req))
@@ -307,6 +314,61 @@ fn persona_prompt(name: &str) -> String {
         .to_string(),
         other => format!("You are {other}. Keep responses to 1-3 sentences."),
     }
+}
+
+/// Expression knobs derived from input tone.
+#[derive(Debug, Clone)]
+pub struct Expression {
+    pub exaggeration: f32,
+    pub cfg_weight: f32,
+    pub temperature: f32,
+}
+
+impl Default for Expression {
+    fn default() -> Self {
+        Self {
+            exaggeration: 0.5,
+            cfg_weight: 0.5,
+            temperature: 0.8,
+        }
+    }
+}
+
+static DIAL: Emoji = Emoji("🎛 ", "~~ ");
+
+const EMOTION_MODEL: &str = "training/models/emotion-ser/model.onnx";
+
+/// Analyze input audio via neural SER model, map to expression knobs.
+pub fn read_tone(wav_path: &Path) -> Result<Expression, String> {
+    let bytes = std::fs::read(wav_path).map_err(|e| format!("{}: {e}", wav_path.display()))?;
+    let wav = decode_wav(&bytes).map_err(|e| format!("decode: {e}"))?;
+
+    let model_path = PathBuf::from(EMOTION_MODEL);
+    let mut session = foni_analyse::tone::load_session(&model_path)
+        .ok_or_else(|| format!("SER model not found: {}", model_path.display()))?;
+
+    let tone = foni_analyse::tone::read_tone(&mut session, &wav.samples, wav.sample_rate)?;
+
+    let exaggeration = 0.3 + tone.arousal * 1.2; // 0.3 (calm) → 1.5 (intense)
+    let cfg_weight = 0.6 - tone.dominance * 0.4; // 0.6 (submissive) → 0.2 (dominant)
+    let temperature = 0.4 + tone.valence * 0.8; // 0.4 (negative) → 1.2 (positive)
+
+    let expr = Expression {
+        exaggeration,
+        cfg_weight,
+        temperature,
+    };
+
+    eprintln!(
+        "  {DIAL}SER: arousal={:.2} dominance={:.2} valence={:.2}",
+        tone.arousal, tone.dominance, tone.valence
+    );
+    eprintln!(
+        "  {DIAL}Expression: exaggeration={:.2} cfg={:.2} temp={:.2}",
+        expr.exaggeration, expr.cfg_weight, expr.temperature
+    );
+
+    Ok(expr)
 }
 
 fn truncate(s: &str, max: usize) -> String {

@@ -40,6 +40,12 @@ pub struct SynthRequest {
     pub range: Option<String>,
     #[serde(default)]
     pub opts: WireOpts,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exaggeration: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cfg_weight: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
 }
 
 impl SynthRequest {
@@ -56,6 +62,9 @@ impl SynthRequest {
             rate_pct: None,
             range: None,
             opts: WireOpts::default(),
+            exaggeration: None,
+            cfg_weight: None,
+            temperature: None,
         }
     }
 }

@@ -13,6 +13,7 @@ pub mod spectral_timeline;
 pub mod tempo;
 pub mod temporal;
 pub mod timeline;
+pub mod tone;
 pub mod voice;
 pub mod voice_id;
 pub mod wav;
