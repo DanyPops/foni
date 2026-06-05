@@ -190,30 +190,14 @@ pub fn cmd_reply(
     ollama_url: &str,
     max_secs: u32,
     ctx: &VoiceContext,
-    file: Option<&Path>,
+    files: &[PathBuf],
 ) -> Result<(), String> {
-    let wav_path = match file {
-        Some(f) => {
-            // Convert input file to mono WAV if needed
-            let tmp = std::env::temp_dir().join("foni_reply_input.wav");
-            let status = Command::new("ffmpeg")
-                .args(["-y", "-i"])
-                .arg(f)
-                .args(["-ac", "1", "-ar", "24000"])
-                .arg(&tmp)
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map_err(|e| format!("ffmpeg: {e}"))?;
-            if !status.success() {
-                return Err(format!("failed to convert {}", f.display()));
-            }
-            tmp
-        }
-        None => {
-            let tmp = std::env::temp_dir().join("foni_reply.wav");
-            cmd_rec(Some(&tmp), -30, 1.5, max_secs)?;
-            tmp
-        }
+    let wav_path = if files.is_empty() {
+        let tmp = std::env::temp_dir().join("foni_reply.wav");
+        cmd_rec(Some(&tmp), -30, 1.5, max_secs)?;
+        tmp
+    } else {
+        concat_audio_files(files)?
     };
 
     let expr = read_tone(&wav_path).unwrap_or_default();
@@ -236,36 +220,7 @@ pub fn cmd_reply(
     }
     let result = think_blocking(&input, persona, llm_model, ollama_url, &ctx)?;
 
-    info!("Synthesizing reply");
-
-    let client = foni_client::FoniClient::new(server);
-    let final_expr = blend_expression(&expr, &result.expression);
-    info!(
-        excitement = format!("{:.2}", final_expr.excitement),
-        assertiveness = format!("{:.2}", final_expr.assertiveness),
-        warmth = format!("{:.2}", final_expr.warmth),
-        "blended expression"
-    );
-
-    let mut req = foni_client::SynthRequest {
-        text: result.reply,
-        voice: lang.into(),
-        speed: 150,
-        model: Some("sidorovich".into()),
-        ..Default::default()
-    };
-    req.exaggeration = Some(final_expr.excitement);
-    req.cfg_weight = Some(final_expr.assertiveness);
-    req.temperature = Some(final_expr.warmth);
-    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio: {e}"))?;
-    let wav_data = rt
-        .block_on(client.synthesize(&req))
-        .map_err(|e| format!("synth: {e}"))?;
-
-    let out_path = std::env::temp_dir().join("foni_reply_out.wav");
-    std::fs::write(&out_path, &wav_data.0).map_err(|e| format!("write: {e}"))?;
-    let dur = wav_data.0.len() as f64 / (RECORD_SAMPLE_RATE * 2) as f64;
-    info!("{:.1}s", dur);
+    let out_path = synthesize_storyboard(server, lang, &result.beats, &expr)?;
 
     Command::new("paplay")
         .arg(&out_path)
@@ -286,7 +241,7 @@ pub struct VoiceContext {
 
 struct ThinkResult {
     reply: String,
-    expression: Expression,
+    beats: Vec<Beat>,
 }
 
 fn think_blocking(
@@ -325,19 +280,29 @@ fn think_blocking(
         .trim()
         .to_string();
 
-    let expression = parse_expression_tag(&raw).unwrap_or_else(|| {
-        debug!("no expression tag in LLM reply, using defaults");
-        Expression::default()
-    });
+    let beats = parse_storyboard(&raw);
+    let reply: String = beats
+        .iter()
+        .map(|b| b.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
 
-    let reply = if let Some(idx) = raw.rfind("[E:") {
-        raw[..idx].trim().to_string()
-    } else {
-        raw
-    };
-
-    info!(reply = truncate(&reply, 80), "LLM reply");
-    Ok(ThinkResult { reply, expression })
+    info!(
+        reply = truncate(&reply, 80),
+        beats = beats.len(),
+        "LLM reply"
+    );
+    for (i, b) in beats.iter().enumerate() {
+        debug!(
+            beat = i + 1,
+            text = truncate(&b.text, 50),
+            excitement = format!("{:.2}", b.expression.excitement),
+            assertiveness = format!("{:.2}", b.expression.assertiveness),
+            warmth = format!("{:.2}", b.expression.warmth),
+            "storyboard beat"
+        );
+    }
+    Ok(ThinkResult { reply, beats })
 }
 
 /// Build the full system prompt from persona + optional context layers.
@@ -387,11 +352,16 @@ fn detect_domain(text: &str, model: &str, ollama_url: &str) -> Option<String> {
 }
 
 const EXPRESSION_TAG_INSTRUCTION: &str = concat!(
-    "\nAfter your reply, append an expression tag on a new line: [E:x.x A:x.x W:x.x]\n",
+    "\nIMPORTANT: Tag EACH sentence with its own expression on the SAME line.",
+    " Format: [E:x.x A:x.x W:x.x] Sentence text here.\n",
     "E=excitement (0.3 calm, 0.8 moderate, 1.5 intense)\n",
     "A=assertiveness (0.5 tentative, 0.3 confident, 0.15 commanding)\n",
     "W=warmth (0.4 cold, 0.8 neutral, 1.2 warm)\n",
-    "Example reply:\nThe Emperor protects, brother!\n[E:1.3 A:0.2 W:0.7]",
+    "Vary the expression across sentences to create an emotional arc.\n",
+    "Example:\n",
+    "[E:0.8 A:0.3 W:0.9] Brother, hear me.\n",
+    "[E:1.4 A:0.15 W:0.5] The Emperor demands your resolve!\n",
+    "[E:0.9 A:0.3 W:1.1] Together, we shall prevail.",
 );
 
 fn persona_base(name: &str) -> String {
@@ -432,10 +402,50 @@ impl Default for Expression {
 
 const EMOTION_MODEL: &str = "training/models/emotion-ser/model.onnx";
 
-/// Parse expression values from an LLM reply that ends with [E:x.x A:x.x W:x.x].
+/// A single beat in the emotion storyboard.
+#[derive(Debug, Clone)]
+struct Beat {
+    text: String,
+    expression: Expression,
+}
+
+/// Parse per-sentence expression tags from LLM output.
+/// Input:  "[E:0.8 A:0.3 W:0.9] Brother, hear me.\n[E:1.4 A:0.15 W:0.5] Rise!"
+/// Output: vec of Beats with text + expression per sentence.
+fn parse_storyboard(raw: &str) -> Vec<Beat> {
+    let mut beats = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(expr) = parse_expression_tag(line) {
+            let text = if let Some(idx) = line.find(']') {
+                line[idx + 1..].trim().to_string()
+            } else {
+                line.to_string()
+            };
+            if !text.is_empty() {
+                beats.push(Beat {
+                    text,
+                    expression: expr,
+                });
+            }
+        } else if !line.is_empty() {
+            beats.push(Beat {
+                text: line.to_string(),
+                expression: Expression::default(),
+            });
+        }
+    }
+    beats
+}
+
+/// Parse a single [E:x.x A:x.x W:x.x] tag from a line.
 fn parse_expression_tag(text: &str) -> Option<Expression> {
-    let tag_start = text.rfind("[E:")?;
-    let tag = &text[tag_start..];
+    let tag_start = text.find("[E:")?;
+    let tag_end = text[tag_start..].find(']')? + tag_start;
+    let tag = &text[tag_start..=tag_end];
     let e = tag
         .split("E:")
         .nth(1)?
@@ -463,6 +473,76 @@ fn parse_expression_tag(text: &str) -> Option<Expression> {
         assertiveness: a.clamp(0.1, 0.6),
         warmth: w.clamp(0.3, 1.3),
     })
+}
+
+/// Synthesize a storyboard: each beat gets its own expression, then concatenate.
+fn synthesize_storyboard(
+    server: &str,
+    lang: &str,
+    beats: &[Beat],
+    audio_expr: &Expression,
+) -> Result<PathBuf, String> {
+    if beats.is_empty() {
+        return Err("no beats to synthesize".into());
+    }
+
+    info!(beats = beats.len(), "synthesizing storyboard");
+
+    let client = foni_client::FoniClient::new(server);
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio: {e}"))?;
+    let mut beat_paths = Vec::new();
+
+    for (i, beat) in beats.iter().enumerate() {
+        let final_expr = blend_expression(audio_expr, &beat.expression);
+        info!(
+            beat = i + 1,
+            text = truncate(&beat.text, 40),
+            excitement = format!("{:.2}", final_expr.excitement),
+            assertiveness = format!("{:.2}", final_expr.assertiveness),
+            warmth = format!("{:.2}", final_expr.warmth),
+            "synth beat"
+        );
+
+        let mut req = foni_client::SynthRequest {
+            text: beat.text.clone(),
+            voice: lang.into(),
+            speed: 150,
+            model: Some("sidorovich".into()),
+            ..Default::default()
+        };
+        req.exaggeration = Some(final_expr.excitement);
+        req.cfg_weight = Some(final_expr.assertiveness);
+        req.temperature = Some(final_expr.warmth);
+
+        let wav_data = rt
+            .block_on(client.synthesize(&req))
+            .map_err(|e| format!("synth beat {}: {e}", i + 1))?;
+
+        let beat_path = std::env::temp_dir().join(format!("foni_beat_{i}.wav"));
+        std::fs::write(&beat_path, &wav_data.0).map_err(|e| format!("write: {e}"))?;
+        beat_paths.push(beat_path);
+    }
+
+    // Concatenate all beats
+    let out_path = std::env::temp_dir().join("foni_reply_out.wav");
+    if beat_paths.len() == 1 {
+        std::fs::copy(&beat_paths[0], &out_path).map_err(|e| format!("copy: {e}"))?;
+    } else {
+        concat_audio_files(&beat_paths)
+            .map(|p| {
+                std::fs::rename(&p, &out_path).ok();
+            })
+            .map_err(|e| format!("concat beats: {e}"))?;
+    }
+
+    let bytes = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+    let dur = bytes as f64 / (RECORD_SAMPLE_RATE * 2) as f64;
+    info!(
+        beats = beats.len(),
+        duration_secs = format!("{dur:.1}"),
+        "storyboard complete"
+    );
+    Ok(out_path)
 }
 
 /// Blend audio-derived and text-derived expressions.
@@ -658,37 +738,8 @@ fn process_utterance(
     }
     let result = think_blocking(&input, persona, llm_model, ollama_url, &ctx)?;
 
-    // 4. Blend expression: audio SER + LLM self-tagged emotion
-    let final_expr = blend_expression(&expr, &result.expression);
-    info!(
-        excitement = format!("{:.2}", final_expr.excitement),
-        assertiveness = format!("{:.2}", final_expr.assertiveness),
-        warmth = format!("{:.2}", final_expr.warmth),
-        "blended expression"
-    );
-
-    // 5. Synthesize + play
-    info!("Synthesizing");
-
-    let client = foni_client::FoniClient::new(server);
-    let mut req = foni_client::SynthRequest {
-        text: result.reply,
-        voice: lang.into(),
-        speed: 150,
-        model: Some("sidorovich".into()),
-        ..Default::default()
-    };
-    req.exaggeration = Some(final_expr.excitement);
-    req.cfg_weight = Some(final_expr.assertiveness);
-    req.temperature = Some(final_expr.warmth);
-
-    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio: {e}"))?;
-    let wav_data = rt
-        .block_on(client.synthesize(&req))
-        .map_err(|e| format!("synth: {e}"))?;
-
-    let out_path = std::env::temp_dir().join("foni_converse_out.wav");
-    std::fs::write(&out_path, &wav_data.0).map_err(|e| format!("write: {e}"))?;
+    // 4. Synthesize storyboard + play
+    let out_path = synthesize_storyboard(server, lang, &result.beats, &expr)?;
 
     Command::new("paplay")
         .arg(&out_path)
@@ -716,6 +767,58 @@ fn tone_from_samples(samples_16k: &[f32]) -> Result<Expression, String> {
         expr.excitement, expr.assertiveness, expr.warmth
     );
     Ok(expr)
+}
+
+/// Concatenate multiple audio files into a single mono 24kHz WAV.
+fn concat_audio_files(files: &[PathBuf]) -> Result<PathBuf, String> {
+    let out = std::env::temp_dir().join("foni_reply_input.wav");
+
+    if files.len() == 1 {
+        let status = Command::new("ffmpeg")
+            .args(["-y", "-i"])
+            .arg(&files[0])
+            .args(["-ac", "1", "-ar", "24000"])
+            .arg(&out)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_err(|e| format!("ffmpeg: {e}"))?;
+        if !status.success() {
+            return Err(format!("failed to convert {}", files[0].display()));
+        }
+        return Ok(out);
+    }
+
+    // Multiple files: convert each, then concatenate with ffmpeg concat filter
+    let mut filter = String::new();
+    let mut args: Vec<String> = vec!["-y".into()];
+    for (i, f) in files.iter().enumerate() {
+        args.extend(["-i".into(), f.to_string_lossy().into_owned()]);
+        filter.push_str(&format!(
+            "[{i}:a]aresample=24000,aformat=sample_fmts=s16:channel_layouts=mono[a{i}];"
+        ));
+    }
+    for i in 0..files.len() {
+        filter.push_str(&format!("[a{i}]"));
+    }
+    filter.push_str(&format!("concat=n={}:v=0:a=1[out]", files.len()));
+    args.extend([
+        "-filter_complex".into(),
+        filter,
+        "-map".into(),
+        "[out]".into(),
+    ]);
+    args.push(out.to_string_lossy().into_owned());
+
+    info!(files = files.len(), "concatenating audio inputs");
+    let status = Command::new("ffmpeg")
+        .args(&args)
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("ffmpeg concat: {e}"))?;
+    if !status.success() {
+        return Err("ffmpeg concat failed".into());
+    }
+    Ok(out)
 }
 
 fn write_wav_16k(samples: &[f32], path: &Path) -> Result<(), String> {
@@ -833,5 +936,92 @@ mod tests {
     #[test]
     fn resolve_text_empty_arg_returns_none_on_tty() {
         assert!(resolve_text(Some("".into())).is_none() || resolve_text(Some("".into())).is_some());
+    }
+
+    // ── concat_audio_files ──
+
+    fn write_test_wav(path: &std::path::Path, duration_ms: u32) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 24_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(path, spec).unwrap();
+        let n = 24_000 * duration_ms / 1000;
+        for i in 0..n {
+            let s = (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 24_000.0).sin() * 0.5;
+            w.write_sample((s * 32767.0) as i16).unwrap();
+        }
+        w.finalize().unwrap();
+    }
+
+    // ── parse_storyboard ──
+
+    #[test]
+    fn storyboard_parses_multiple_beats() {
+        let raw = "[E:0.8 A:0.3 W:0.9] Brother, hear me.\n[E:1.4 A:0.15 W:0.5] Rise now!";
+        let beats = parse_storyboard(raw);
+        assert_eq!(beats.len(), 2);
+        assert_eq!(beats[0].text, "Brother, hear me.");
+        assert_eq!(beats[1].text, "Rise now!");
+        assert!((beats[0].expression.excitement - 0.8).abs() < 0.01);
+        assert!((beats[1].expression.excitement - 1.4).abs() < 0.01);
+    }
+
+    #[test]
+    fn storyboard_handles_no_tags() {
+        let raw = "Just plain text.\nAnother line.";
+        let beats = parse_storyboard(raw);
+        assert_eq!(beats.len(), 2);
+        assert_eq!(beats[0].text, "Just plain text.");
+        assert!((beats[0].expression.excitement - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn storyboard_skips_empty_lines() {
+        let raw = "[E:1.0 A:0.3 W:0.8] First.\n\n[E:1.2 A:0.2 W:0.6] Second.";
+        let beats = parse_storyboard(raw);
+        assert_eq!(beats.len(), 2);
+    }
+
+    #[test]
+    fn storyboard_single_beat_old_format() {
+        let raw = "The Emperor protects!\n[E:1.3 A:0.2 W:0.7]";
+        let beats = parse_storyboard(raw);
+        assert!(beats.len() >= 1);
+        assert!(beats.iter().any(|b| b.text.contains("Emperor")));
+    }
+
+    #[test]
+    fn storyboard_expression_arc_varies() {
+        let raw = "[E:0.5 A:0.4 W:1.0] Calm start.\n[E:1.5 A:0.1 W:0.4] Peak intensity!";
+        let beats = parse_storyboard(raw);
+        assert!(beats[1].expression.excitement > beats[0].expression.excitement);
+        assert!(beats[1].expression.warmth < beats[0].expression.warmth);
+    }
+
+    #[test]
+    fn concat_single_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("a.wav");
+        write_test_wav(&f, 500);
+        let result = concat_audio_files(&[f]).unwrap();
+        assert!(result.exists());
+    }
+
+    #[test]
+    fn concat_two_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.wav");
+        let b = dir.path().join("b.wav");
+        write_test_wav(&a, 500);
+        write_test_wav(&b, 300);
+        let result = concat_audio_files(&[a, b]).unwrap();
+        assert!(result.exists());
+        let bytes = std::fs::read(&result).unwrap();
+        let wav = foni_analyse::decode_wav(&bytes).unwrap();
+        let dur = wav.samples.len() as f32 / wav.sample_rate as f32;
+        assert!(dur > 0.7, "concatenated should be ~0.8s, got {dur:.2}s");
     }
 }

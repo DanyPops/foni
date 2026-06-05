@@ -82,11 +82,11 @@ enum Cmd {
         audience: Option<String>,
     },
 
-    /// Full voice loop: file or mic → transcribe → think → speak
+    /// Full voice loop: file(s) or mic → transcribe → think → speak
     Reply {
-        /// Audio file to respond to (skips mic recording)
+        /// Audio file(s) to respond to (skips mic recording). Multiple files concatenated.
         #[arg(short, long)]
-        file: Option<PathBuf>,
+        file: Vec<PathBuf>,
         /// Persona
         #[arg(short, long, default_value = "diomedes")]
         persona: String,
@@ -1149,7 +1149,7 @@ fn main() {
                 &ollama_url,
                 max_secs,
                 &ctx,
-                file.as_deref(),
+                &file,
             ) {
                 eprintln!("✗ {e}");
             }
