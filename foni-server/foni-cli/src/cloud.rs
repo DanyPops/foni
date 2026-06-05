@@ -5,6 +5,7 @@
 //! Implements `CloudProvider` trait for real and mock backends.
 
 use serde::{Deserialize, Serialize};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuType {
@@ -311,7 +312,6 @@ impl RunPodProvider {
                 .unwrap_or(false);
 
             if status == "RUNNING" && !ip.is_empty() && has_ssh {
-                eprintln!();
                 return Ok(pod);
             }
             if std::time::Instant::now() > deadline {
@@ -488,7 +488,7 @@ impl CloudProvider for RunPodProvider {
                             return;
                         }
                         "FAILED" | "CANCELLED" | "TIMED_OUT" => {
-                            eprintln!("    Job {status}");
+                            info!("  Job {status}");
                             return;
                         }
                         "IN_PROGRESS" => {
@@ -503,12 +503,12 @@ impl CloudProvider for RunPodProvider {
                     }
                 }
                 Err(e) => {
-                    eprintln!("    Status error: {e}");
+                    info!("  Status error: {e}");
                 }
             }
             std::thread::sleep(std::time::Duration::from_secs(5));
         }
-        eprintln!("    Timed out waiting for worker (10 min)");
+        info!("  Timed out waiting for worker (10 min)");
     }
 }
 

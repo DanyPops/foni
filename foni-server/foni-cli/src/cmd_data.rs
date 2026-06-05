@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tracing::{debug, error, info, warn};
 
 const CHATTERBOX_SAMPLE_RATE: u32 = 24_000;
 const DEFAULT_SILENCE_DB: i32 = -30;
@@ -32,7 +33,7 @@ pub fn cmd_fetch(url: &str, out: &Path, split: bool, opts: &FetchOpts) -> Result
     let src = Path::new(url);
     if src.exists() {
         // Local file — convert directly
-        eprintln!("  ▶  Converting local file {url}");
+        info!("▶  Converting local file {url}");
         let status = Command::new("ffmpeg")
             .args(["-y", "-i"])
             .arg(src)
@@ -45,7 +46,7 @@ pub fn cmd_fetch(url: &str, out: &Path, split: bool, opts: &FetchOpts) -> Result
         }
     } else {
         // URL — download via yt-dlp
-        eprintln!("  ▶  Downloading {url}");
+        info!("▶  Downloading {url}");
         let status = Command::new("yt-dlp")
             .args(["-x", "--audio-format", "wav", "-o"])
             .arg(&raw)
@@ -59,7 +60,7 @@ pub fn cmd_fetch(url: &str, out: &Path, split: bool, opts: &FetchOpts) -> Result
 
     // 2. Convert to mono 24kHz
     let mono = out.join("_mono.wav");
-    eprintln!("  ▶  Converting to mono {CHATTERBOX_SAMPLE_RATE}Hz");
+    info!("▶  Converting to mono {CHATTERBOX_SAMPLE_RATE}Hz");
     let status = Command::new("ffmpeg")
         .args(["-y", "-i"])
         .arg(&raw)
@@ -77,14 +78,15 @@ pub fn cmd_fetch(url: &str, out: &Path, split: bool, opts: &FetchOpts) -> Result
     if !split {
         let final_path = out.join("full.wav");
         std::fs::rename(&mono, &final_path).map_err(|e| format!("rename: {e}"))?;
-        eprintln!("  ✓  {}", final_path.display());
+        tracing::info!("  ✓  {}", final_path.display());
         return Ok(());
     }
 
     // 3. Detect silence boundaries
-    eprintln!(
+    tracing::info!(
         "  ▶  Detecting silence ({}dB, {:.1}s min gap)",
-        opts.silence_db, opts.min_gap
+        opts.silence_db,
+        opts.min_gap
     );
     let silences = detect_silences(&mono, opts.silence_db, opts.min_gap)?;
 
@@ -108,11 +110,11 @@ pub fn cmd_fetch(url: &str, out: &Path, split: bool, opts: &FetchOpts) -> Result
             .status()
             .map_err(|e| format!("ffmpeg split: {e}"))?;
         if !status.success() {
-            eprintln!("  ⚠  clip {i} failed");
+            info!("⚠  clip {i} failed");
         }
     }
     std::fs::remove_file(&mono).ok();
-    eprintln!(
+    tracing::info!(
         "  ✓  {kept} clips ({}–{}s) → {}/",
         opts.min_clip,
         opts.max_clip,
@@ -302,7 +304,7 @@ pub fn cmd_clean(dir: &PathBuf, out: &PathBuf) {
     }
 
     println!("{}", Table::new(&rows).with(Style::rounded()));
-    eprintln!(
+    tracing::info!(
         "\n  {files} files, {before:.1}s \u{2192} {after:.1}s  \u{2192} {out}",
         files = rows.len(),
         before = total_before,
@@ -321,7 +323,7 @@ pub fn cmd_augment(dir: &PathBuf, out: &PathBuf, speeds_csv: &str) {
         .filter_map(|s| s.trim().parse().ok())
         .collect();
     if speeds.is_empty() {
-        eprintln!("No valid speed factors");
+        info!("No valid speed factors");
         return;
     }
 
@@ -384,7 +386,7 @@ pub fn cmd_augment(dir: &PathBuf, out: &PathBuf, speeds_csv: &str) {
         }
     }
 
-    eprintln!(
+    tracing::info!(
         "  {total_files} files ({:.1} min) \u{2192} {}",
         total_dur / 60.0,
         out.display()
@@ -449,12 +451,12 @@ pub fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) -> Result<(), String> {
                     acc.lock().unwrap().push(row);
                 }
                 Err(e) => {
-                    eprintln!("  skip {}: {e}", path.display());
+                    tracing::info!("  skip {}: {e}", path.display());
                     errors.fetch_add(1, Ordering::Relaxed);
                 }
             },
             Err(e) => {
-                eprintln!("  skip {}: {e}", path.display());
+                tracing::info!("  skip {}: {e}", path.display());
                 errors.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -476,7 +478,7 @@ pub fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) -> Result<(), String> {
     let elapsed = t0.elapsed().as_millis();
     let errs = errors.load(Ordering::Relaxed);
 
-    eprintln!("  Done in {elapsed} ms  ({} files, {} skipped)\n", n, errs);
+    tracing::info!("  Done in {elapsed} ms  ({} files, {} skipped)\n", n, errs);
 
     // ── Sidorovich acoustic identity (bass-baritone deep Russian voice) ────────
     //
@@ -531,7 +533,7 @@ pub fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) -> Result<(), String> {
                 target: "studio: 60-85%",
             },
         ];
-        eprintln!("\n  Sidorovich corpus fingerprint ({n} files, {elapsed} ms, {errs} skipped)");
+        info!("\n  Sidorovich corpus fingerprint ({n} files, {elapsed} ms, {errs} skipped)");
         println!("{}", Table::new(&rows).with(Style::rounded()));
     }
 

@@ -2,6 +2,7 @@ pub mod cloud;
 mod cmd_common;
 mod cmd_data;
 mod cmd_quality;
+mod cmd_render;
 mod cmd_sweep_shades;
 mod cmd_synth;
 mod cmd_train;
@@ -488,6 +489,18 @@ enum Cmd {
     },
 
     /// Sweep expression parameter space to discover perceptually distinct shades
+    /// Render a manifest — synthesize each beat with its shade, concat to one file
+    Render {
+        /// Path to manifest JSON
+        manifest: PathBuf,
+        /// Output WAV file
+        #[arg(short, long, default_value = "output/rendered.wav")]
+        out: PathBuf,
+        /// Play after rendering
+        #[arg(short, long)]
+        play: bool,
+    },
+
     SweepShades {
         /// Steps per axis (3 = 27 combos, 4 = 64)
         #[arg(long, default_value_t = 3)]
@@ -637,7 +650,7 @@ fn cmd_cloud(action: CloudAction) {
     let api_key = match std::env::var("RUNPOD_API_KEY") {
         Ok(k) if !k.is_empty() => k,
         _ => {
-            eprintln!("  RUNPOD_API_KEY not set. Export it in your shell.");
+            tracing::info!("RUNPOD_API_KEY not set. Export it in your shell.");
             return;
         }
     };
@@ -647,7 +660,7 @@ fn cmd_cloud(action: CloudAction) {
         CloudAction::History => {
             let ledger = cost::load();
             if ledger.receipts.is_empty() {
-                eprintln!("  No training runs yet.");
+                tracing::info!("No training runs yet.");
                 return;
             }
             #[derive(Tabled)]
@@ -684,7 +697,7 @@ fn cmd_cloud(action: CloudAction) {
     let api_key = match std::env::var("RUNPOD_API_KEY") {
         Ok(k) if !k.is_empty() => k,
         _ => {
-            eprintln!("  RUNPOD_API_KEY not set. Export it in your shell.");
+            tracing::info!("RUNPOD_API_KEY not set. Export it in your shell.");
             return;
         }
     };
@@ -769,57 +782,57 @@ fn cmd_cloud(action: CloudAction) {
             let endpoint_id =
                 std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
             if endpoint_id == "none" {
-                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                tracing::info!("FONI_RUNPOD_ENDPOINT not set.");
                 return;
             }
             match provider.endpoint_health(&endpoint_id) {
                 Ok(h) => println!("{}", serde_json::to_string_pretty(&h).unwrap_or_default()),
-                Err(e) => eprintln!("  Health check failed: {e}"),
+                Err(e) => tracing::info!("Health check failed: {e}"),
             }
         }
         CloudAction::Setup { image } => {
-            eprintln!("  Setting up RunPod Serverless infrastructure...");
+            tracing::info!("Setting up RunPod Serverless infrastructure...");
 
             // 1. Register ghcr.io credentials
             let gh_token = std::env::var("GITHUB_TOKEN").unwrap_or_default();
             if !gh_token.is_empty() {
                 match provider.register_registry("ghcr-foni", "DanyPops", &gh_token) {
-                    Ok(id) => eprintln!("  Registry auth: {id}"),
-                    Err(e) => eprintln!("  Registry auth failed: {e}"),
+                    Ok(id) => tracing::info!("Registry auth: {id}"),
+                    Err(e) => tracing::info!("Registry auth failed: {e}"),
                 }
             }
 
             // 2. Create template
             match provider.create_template("foni-rvc-train", &image, None) {
                 Ok(id) => {
-                    eprintln!("  Template: {id}");
+                    tracing::info!("Template: {id}");
 
                     // 3. Create endpoint
                     match provider.create_endpoint("foni-train", &id, "AMPERE_24", 14_400_000) {
                         Ok(eid) => {
-                            eprintln!("  Endpoint: {eid}");
-                            eprintln!("\n  Add to your shell:");
-                            eprintln!("    export FONI_RUNPOD_ENDPOINT={eid}");
+                            tracing::info!("Endpoint: {eid}");
+                            tracing::info!("Add to your shell:");
+                            tracing::info!("  export FONI_RUNPOD_ENDPOINT={eid}");
                         }
-                        Err(e) => eprintln!("  Endpoint creation failed: {e}"),
+                        Err(e) => tracing::info!("Endpoint creation failed: {e}"),
                     }
                 }
-                Err(e) => eprintln!("  Template creation failed: {e}"),
+                Err(e) => tracing::info!("Template creation failed: {e}"),
             }
         }
         CloudAction::Cancel { job_id } => {
             let endpoint_id =
                 std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
             match provider.cancel_job(&endpoint_id, &job_id) {
-                Ok(()) => eprintln!("  Cancelled: {job_id}"),
-                Err(e) => eprintln!("  Cancel failed: {e}"),
+                Ok(()) => tracing::info!("Cancelled: {job_id}"),
+                Err(e) => tracing::info!("Cancel failed: {e}"),
             }
         }
         CloudAction::Wait { ntfy, timeout } => {
             let endpoint_id =
                 std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
             if endpoint_id == "none" {
-                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                tracing::info!("FONI_RUNPOD_ENDPOINT not set.");
                 return;
             }
             let start = std::time::Instant::now();
@@ -837,7 +850,7 @@ fn cmd_cloud(action: CloudAction) {
 
                         if ready > 0 || idle > 0 {
                             let elapsed = start.elapsed().as_secs();
-                            eprintln!("  Worker ready after {elapsed}s");
+                            tracing::info!("Worker ready after {elapsed}s");
                             if let Some(topic) = &ntfy {
                                 let _ = reqwest::blocking::Client::new()
                                     .post(format!("https://ntfy.sh/{topic}"))
@@ -849,7 +862,7 @@ fn cmd_cloud(action: CloudAction) {
                             return;
                         }
                         if unhealthy > 0 {
-                            eprintln!("  Worker unhealthy — image pull or handler failed");
+                            tracing::info!("Worker unhealthy — image pull or handler failed");
                             if let Some(topic) = &ntfy {
                                 let _ = reqwest::blocking::Client::new()
                                     .post(format!("https://ntfy.sh/{topic}"))
@@ -870,7 +883,7 @@ fn cmd_cloud(action: CloudAction) {
                 }
 
                 if start.elapsed() > deadline {
-                    eprintln!("\n  Timed out after {timeout}s");
+                    tracing::info!("Timed out after {timeout}s");
                     println!("timeout");
                     return;
                 }
@@ -881,19 +894,19 @@ fn cmd_cloud(action: CloudAction) {
             let endpoint_id =
                 std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
             if endpoint_id == "none" {
-                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                tracing::info!("FONI_RUNPOD_ENDPOINT not set.");
                 return;
             }
             match provider.get_endpoint(&endpoint_id) {
                 Ok(ep) => println!("{}", serde_json::to_string_pretty(&ep).unwrap_or_default()),
-                Err(e) => eprintln!("  {e}"),
+                Err(e) => tracing::info!("{e}"),
             }
         }
         CloudAction::UpdateGpus { gpus } => {
             let endpoint_id =
                 std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
             if endpoint_id == "none" {
-                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                tracing::info!("FONI_RUNPOD_ENDPOINT not set.");
                 return;
             }
             let gpu_list: Vec<&str> = gpus.split(',').map(|s| s.trim()).collect();
@@ -910,23 +923,23 @@ fn cmd_cloud(action: CloudAction) {
                                 .join(", ")
                         })
                         .unwrap_or_default();
-                    eprintln!("  GPUs updated: {updated}");
+                    tracing::info!("GPUs updated: {updated}");
                 }
-                Err(e) => eprintln!("  {e}"),
+                Err(e) => tracing::info!("{e}"),
             }
         }
         CloudAction::ResetEndpoint => {
             let endpoint_id =
                 std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
             if endpoint_id == "none" {
-                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                tracing::info!("FONI_RUNPOD_ENDPOINT not set.");
                 return;
             }
             // Get current config before delete
             let ep = match provider.get_endpoint(&endpoint_id) {
                 Ok(ep) => ep,
                 Err(e) => {
-                    eprintln!("  Cannot read endpoint: {e}");
+                    tracing::info!("Cannot read endpoint: {e}");
                     return;
                 }
             };
@@ -944,7 +957,7 @@ fn cmd_cloud(action: CloudAction) {
                 .unwrap_or_default();
             // Delete via REST
             let _ = provider.rest_delete(&format!("/endpoints/{endpoint_id}"));
-            eprintln!("  Deleted {endpoint_id}");
+            tracing::info!("Deleted {endpoint_id}");
             // Recreate
             match provider.create_endpoint(
                 ep["name"].as_str().unwrap_or("foni-train"),
@@ -953,35 +966,35 @@ fn cmd_cloud(action: CloudAction) {
                 ep["executionTimeoutMs"].as_u64().unwrap_or(14_400_000),
             ) {
                 Ok(new_id) => {
-                    eprintln!("  Created {new_id}");
-                    eprintln!("  Update your shell: export FONI_RUNPOD_ENDPOINT={new_id}");
+                    tracing::info!("Created {new_id}");
+                    tracing::info!("Update your shell: export FONI_RUNPOD_ENDPOINT={new_id}");
                 }
-                Err(e) => eprintln!("  Recreate failed: {e}"),
+                Err(e) => tracing::info!("Recreate failed: {e}"),
             }
         }
         CloudAction::Purge => {
             let endpoint_id =
                 std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
             if endpoint_id == "none" {
-                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                tracing::info!("FONI_RUNPOD_ENDPOINT not set.");
                 return;
             }
             match provider.purge_queue(&endpoint_id) {
-                Ok(removed) => eprintln!("  Purged {removed} job(s)"),
-                Err(e) => eprintln!("  {e}"),
+                Ok(removed) => tracing::info!("Purged {removed} job(s)"),
+                Err(e) => tracing::info!("{e}"),
             }
         }
         CloudAction::Submit { input } => {
             let endpoint_id =
                 std::env::var("FONI_RUNPOD_ENDPOINT").unwrap_or_else(|_| "none".into());
             if endpoint_id == "none" {
-                eprintln!("  FONI_RUNPOD_ENDPOINT not set.");
+                tracing::info!("FONI_RUNPOD_ENDPOINT not set.");
                 return;
             }
             let payload: serde_json::Value = match serde_json::from_str(&input) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("  Invalid JSON: {e}");
+                    tracing::info!("Invalid JSON: {e}");
                     return;
                 }
             };
@@ -994,9 +1007,9 @@ fn cmd_cloud(action: CloudAction) {
             ) {
                 Ok(job) => {
                     println!("{}", job.id);
-                    eprintln!("  Status: {}", job.status);
+                    tracing::warn!("  Status: {}", job.status);
                 }
-                Err(e) => eprintln!("  {e}"),
+                Err(e) => tracing::info!("{e}"),
             }
         }
         CloudAction::CreatePod {
@@ -1019,50 +1032,50 @@ fn cmd_cloud(action: CloudAction) {
             }) {
                 Ok(pod) => {
                     println!("{}", pod.id);
-                    eprintln!("  GPU:    {}", pod.gpu_name);
-                    eprintln!("  Cost:   ${:.2}/hr", pod.cost_per_hr);
-                    eprintln!("  Status: {}", pod.status);
+                    tracing::warn!("  GPU:    {}", pod.gpu_name);
+                    tracing::warn!("  Cost:   ${:.2}/hr", pod.cost_per_hr);
+                    tracing::warn!("  Status: {}", pod.status);
                 }
-                Err(e) => eprintln!("  {e}"),
+                Err(e) => tracing::info!("{e}"),
             }
         }
         CloudAction::DeletePod { pod_id } => match provider.terminate_pod(&pod_id) {
-            Ok(()) => eprintln!("  Deleted {pod_id}"),
-            Err(e) => eprintln!("  {e}"),
+            Ok(()) => tracing::info!("Deleted {pod_id}"),
+            Err(e) => tracing::info!("{e}"),
         },
         CloudAction::Pods => match provider.list_pods() {
             Ok(pods) => println!(
                 "{}",
                 serde_json::to_string_pretty(&pods).unwrap_or_default()
             ),
-            Err(e) => eprintln!("  {e}"),
+            Err(e) => tracing::info!("{e}"),
         },
         CloudAction::KillAll => match provider.list_pods() {
             Ok(pods) => {
                 let empty = vec![];
                 let arr = pods.as_array().unwrap_or(&empty);
                 if arr.is_empty() {
-                    eprintln!("  No pods running");
+                    tracing::info!("No pods running");
                 } else {
                     for p in arr {
                         if let Some(id) = p["id"].as_str() {
                             match provider.terminate_pod(id) {
-                                Ok(()) => eprintln!("  Killed {id}"),
-                                Err(e) => eprintln!("  Failed {id}: {e}"),
+                                Ok(()) => tracing::info!("Killed {id}"),
+                                Err(e) => tracing::info!("Failed {id}: {e}"),
                             }
                         }
                     }
                 }
             }
-            Err(e) => eprintln!("  {e}"),
+            Err(e) => tracing::info!("{e}"),
         },
         CloudAction::CreateTemplate { name, image, cmd } => {
             match provider.create_template_graphql(&name, &image, &cmd, None) {
                 Ok(id) => {
                     println!("{id}");
-                    eprintln!("  Template created. Set: export FONI_TEMPLATE_ID={id}");
+                    tracing::info!("Template created. Set: export FONI_TEMPLATE_ID={id}");
                 }
-                Err(e) => eprintln!("  {e}"),
+                Err(e) => tracing::info!("{e}"),
             }
         }
         CloudAction::History => unreachable!(),
@@ -1090,17 +1103,17 @@ fn main() {
             max_secs,
         } => {
             if let Err(e) = cmd_voice::cmd_rec(out.as_deref(), silence_db, silence_secs, max_secs) {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::Transcribe { file, lang, model } => {
             if let Err(e) = cmd_voice::cmd_transcribe(file.as_deref(), &lang, &model) {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::Tone { file } => {
             if let Err(e) = cmd_voice::read_tone(&file) {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::Think {
@@ -1118,7 +1131,7 @@ fn main() {
             if let Err(e) =
                 cmd_voice::cmd_think(text.as_deref(), &persona, &model, &ollama_url, &ctx)
             {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::Converse {
@@ -1136,7 +1149,7 @@ fn main() {
             if let Err(e) =
                 cmd_voice::cmd_converse(server, &persona, &lang, &llm, &ollama_url, &ctx)
             {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::Reply {
@@ -1162,7 +1175,7 @@ fn main() {
                 &ctx,
                 &file,
             ) {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::Synth {
@@ -1189,7 +1202,7 @@ fn main() {
             let text = match &text {
                 Some(t) => t,
                 None => {
-                    eprintln!("✗ no text provided (pass argument or pipe via stdin)");
+                    tracing::warn!("✗ no text provided (pass argument or pipe via stdin)");
                     return;
                 }
             };
@@ -1237,7 +1250,7 @@ fn main() {
         }
         Cmd::Analyse { file, vs, timeline } => {
             if let Err(e) = cmd_quality::cmd_analyse(&file, vs.as_ref(), timeline) {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::Compare {
@@ -1251,7 +1264,7 @@ fn main() {
             if let Err(e) =
                 cmd_quality::cmd_compare(server, &studio, &out, max_dur, &model, skip_transcribe)
             {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::Tune {
@@ -1278,7 +1291,7 @@ fn main() {
         }
         Cmd::Corpus { dir, vs } => {
             if let Err(e) = cmd_data::cmd_corpus(&dir, vs.as_ref()) {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::Train {
@@ -1303,7 +1316,7 @@ fn main() {
         }
         Cmd::Energy { file, frame_ms } => {
             if let Err(e) = cmd_quality::cmd_energy(&file, frame_ms) {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::TtsBench { url, phrase } => {
@@ -1340,7 +1353,7 @@ fn main() {
                 max_clip,
             };
             if let Err(e) = cmd_data::cmd_fetch(&url, &out, !no_split, &opts) {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::Clean { dir, out } => {
@@ -1353,20 +1366,29 @@ fn main() {
         }
         Cmd::Snapshot { model, vs } => {
             if let Err(e) = cmd_train::cmd_snapshot(server, &model, &vs) {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::CompareModels { model, vs } => {
             if let Err(e) = cmd_train::cmd_compare_models(server, &model, &vs) {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::Calibrate { text, vs, model } => {
             cmd_quality::cmd_calibrate(server, &text, &vs, &model);
         }
+        Cmd::Render {
+            manifest,
+            out,
+            play,
+        } => {
+            if let Err(e) = cmd_render::cmd_render(server, &manifest, &out, play) {
+                tracing::error!("{e}");
+            }
+        }
         Cmd::SweepShades { steps, out } => {
             if let Err(e) = cmd_sweep_shades::cmd_sweep_shades(server, steps, &out) {
-                eprintln!("✗ {e}");
+                tracing::error!("{e}");
             }
         }
         Cmd::Sweep {

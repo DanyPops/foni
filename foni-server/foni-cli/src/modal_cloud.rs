@@ -159,7 +159,7 @@ mod tests {
     #[tokio::test]
     async fn connect_to_modal() {
         if !has_token() {
-            eprintln!("skip: no token");
+            info!("skip: no token");
             return;
         }
         assert!(connect().await.is_ok());

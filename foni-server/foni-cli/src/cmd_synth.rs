@@ -6,6 +6,7 @@ use dialoguer::{theme::ColorfulTheme, Input, Select};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
 use std::process::Command;
+use tracing::{debug, error, info, warn};
 
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
@@ -104,7 +105,7 @@ pub fn cmd_synth(
         }
         Err(e) => {
             pb.finish_and_clear();
-            eprintln!("❌  {e} ({:.1}s)", t0.elapsed().as_secs_f64());
+            tracing::info!("❌  {e} ({:.1}s)", t0.elapsed().as_secs_f64());
             return;
         }
     }
@@ -385,20 +386,20 @@ pub fn cmd_studio(server: &str, text: &str, model: &str, from: Option<&std::path
 pub fn cmd_diagnose(server: &str, text: &str, model: &str) {
     use std::io::{BufRead, Write};
 
-    eprintln!("\n⚠  Diagnose — isolating noise sources");
+    info!("\n⚠  Diagnose — isolating noise sources");
     println!("   Phrase: «{text}»");
-    eprintln!("   Step 1: synthesizing RVC base (no DSP) …");
+    info!(" Step 1: synthesizing RVC base (no DSP) …");
 
     // Synthesize RVC without DSP once — this is the base for all variants.
     let rvc_wav = match synth_request(server, text, model, "ru", 150, false, serde_json::json!({}))
     {
         Ok(w) => w,
         Err(e) => {
-            eprintln!("  ❌ RVC synthesis failed: {e}");
+            info!("❌ RVC synthesis failed: {e}");
             return;
         }
     };
-    eprintln!("   Base: {} kB", rvc_wav.len() / 1024);
+    tracing::info!("   Base: {} kB", rvc_wav.len() / 1024);
 
     let full: serde_json::Value = serde_json::json!({
         "rmsTargetLufs": -8, "compressionRatio": 4, "compressionMakeupDb": 5,
@@ -550,14 +551,14 @@ pub fn cmd_process(
     let bytes = match std::fs::read(file) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("cannot read {}: {e}", file.display());
+            tracing::info!("cannot read {}: {e}", file.display());
             return;
         }
     };
     let opts: serde_json::Value = match serde_json::from_str(opts_str) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("invalid --opts JSON: {e}");
+            info!("invalid --opts JSON: {e}");
             return;
         }
     };
@@ -565,7 +566,7 @@ pub fn cmd_process(
     let result = match process_request(server, &bytes, opts) {
         Ok(w) => w,
         Err(e) => {
-            eprintln!("process failed: {e}");
+            info!("process failed: {e}");
             return;
         }
     };
@@ -576,7 +577,7 @@ pub fn cmd_process(
     });
 
     if let Err(e) = std::fs::write(&out_path, &result) {
-        eprintln!("cannot write {}: {e}", out_path.display());
+        tracing::info!("cannot write {}: {e}", out_path.display());
         return;
     }
     println!("{}", out_path.display());
@@ -585,7 +586,7 @@ pub fn cmd_process(
         let ref_bytes = match std::fs::read(ref_path) {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("cannot read reference: {e}");
+                info!("cannot read reference: {e}");
                 return;
             }
         };
@@ -776,7 +777,7 @@ pub fn cmd_mix(
             .collect();
 
         if !to_render.is_empty() {
-            eprintln!("  Rendering {} maquettes…", to_render.len());
+            tracing::info!("  Rendering {} maquettes…", to_render.len());
             let pb = ProgressBar::new(to_render.len() as u64);
             pb.set_style(
                 ProgressStyle::default_bar()

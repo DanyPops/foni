@@ -1,6 +1,7 @@
 use super::cmd_common::{process_request, synth_request};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
+use tracing::{debug, error, info, warn};
 
 pub fn cmd_analyse(
     file: &PathBuf,
@@ -208,7 +209,7 @@ pub fn cmd_compare(
         pb.inc(1);
     }
     pb.finish_and_clear();
-    eprintln!("  Pairs: {}  Skipped: {skipped}", pairs.len());
+    tracing::info!("  Pairs: {}  Skipped: {skipped}", pairs.len());
 
     if pairs.is_empty() {
         return Err("no pairs to compare".into());
@@ -337,9 +338,9 @@ pub fn cmd_compare(
         println!("\n  Studio vs Synthetic ({} matched pairs)", n as usize);
         println!("{}", Table::new(&rows).with(Style::rounded()));
     }
-    eprintln!("  Synthetic WAVs: {}/", out_dir.display());
+    tracing::info!("  Synthetic WAVs: {}/", out_dir.display());
 
-    eprintln!("  Synthetic WAVs: {}/", out_dir.display());
+    tracing::info!("  Synthetic WAVs: {}/", out_dir.display());
     Ok(())
 }
 
@@ -361,7 +362,7 @@ pub fn cmd_sweep(
         .filter_map(|s| s.trim().parse().ok())
         .collect();
     if values.is_empty() {
-        eprintln!("No valid values in '{values_csv}'");
+        info!("No valid values in '{values_csv}'");
         return;
     }
 
@@ -382,11 +383,11 @@ pub fn cmd_sweep(
         serde_json::json!({}),
     ) {
         Ok(b) => {
-            eprintln!("ok");
+            info!("ok");
             b
         }
         Err(e) => {
-            eprintln!("\n  \u{2717} {e}");
+            info!("\n  \u{2717} {e}");
             return;
         }
     };
@@ -481,10 +482,10 @@ pub fn cmd_sweep(
         });
     }
 
-    eprintln!("\n  Sweep: {knob}");
+    info!("\n  Sweep: {knob}");
     println!("{}", Table::new(&rows).with(Style::rounded()));
     if best_val.is_finite() {
-        eprintln!(
+        tracing::info!(
             "\n  Best: {} = {}  (mean gap {:.1}%)",
             knob.bold(),
             best_val,
@@ -520,11 +521,11 @@ pub fn cmd_diff(
         serde_json::json!({}),
     ) {
         Ok(b) => {
-            eprintln!("ok");
+            info!("ok");
             b
         }
         Err(e) => {
-            eprintln!("\n  \u{2717} {e}");
+            info!("\n  \u{2717} {e}");
             return;
         }
     };
@@ -692,11 +693,11 @@ pub fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str
         serde_json::json!({}),
     ) {
         Ok(b) => {
-            eprintln!("ok ({} kB)", b.len() / 1024);
+            tracing::info!("ok ({} kB)", b.len() / 1024);
             b
         }
         Err(e) => {
-            eprintln!("\n  \u{2717} {e}");
+            info!("\n  \u{2717} {e}");
             return;
         }
     };
@@ -845,8 +846,8 @@ pub fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str
 
     // Print as Rust const for controller.rs
     println!("\n  \u{2500}\u{2500} Rust const for dsp/controller.rs \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n");
-    eprintln!("  // Rows: tiltLowDb, tiltHighDb, rmsTargetLufs, presenceDb, compressionRatio");
-    eprintln!("  // Cols: brightness_hz, loudness_db, bass_balance_db, vocal_darkness_db_oct, breathiness_db");
+    info!("// Rows: tiltLowDb, tiltHighDb, rmsTargetLufs, presenceDb, compressionRatio");
+    info!("// Cols: brightness_hz, loudness_db, bass_balance_db, vocal_darkness_db_oct, breathiness_db");
     println!(
         "  const SENSITIVITY: [[f32; {}]; {}] = [",
         metrics.len(),
@@ -873,7 +874,7 @@ pub fn cmd_energy(file: &std::path::Path, frame_ms: usize) -> Result<(), String>
     let n_frames = wav.samples.len() / frame_size;
     let duration = wav.samples.len() as f64 / sr as f64;
 
-    eprintln!(
+    tracing::info!(
         "  {}  {:.2}s  {}Hz  {}ms frames\n",
         file.display(),
         duration,

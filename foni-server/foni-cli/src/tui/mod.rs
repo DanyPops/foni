@@ -10,6 +10,7 @@ use foni_client::{FoniClient, WireOpts};
 use ratatui::DefaultTerminal;
 
 use state::{load_session, session_path, InputMode, MixerApp, Track};
+use tracing::{debug, error, info, warn};
 
 /// Boot the TUI mixer.  Returns when the user presses q / Ctrl-C.
 pub fn run(
@@ -51,7 +52,7 @@ pub fn run(
     println!("\n  session saved → {}", session_path().display());
 
     if let Err(e) = result {
-        eprintln!("TUI error: {e}");
+        info!("TUI error: {e}");
     }
 }
 

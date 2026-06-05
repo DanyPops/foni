@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::Command;
+use tracing::{debug, error, info, warn};
 
 pub fn data_dir() -> PathBuf {
     std::env::var("XDG_DATA_HOME")
@@ -190,8 +191,8 @@ pub fn play_wav(path: &std::path::Path) {
     if let Some(dur) = wav_duration_secs(path) {
         std::thread::sleep(std::time::Duration::from_secs_f64(dur));
     }
-    eprintln!("⚠  No audio player found (tried paplay, afplay, mpv, aplay, ffplay)");
-    eprintln!("   File saved to: {}", path.display());
+    info!("⚠  No audio player found (tried paplay, afplay, mpv, aplay, ffplay)");
+    tracing::info!("   File saved to: {}", path.display());
 }
 
 pub fn save_and_maybe_play(bytes: &[u8], out: Option<&PathBuf>, play: bool) -> PathBuf {
@@ -327,14 +328,14 @@ pub fn load_maquettes(path: Option<&std::path::Path>) -> Vec<Maquette> {
     let raw = match std::fs::read_to_string(p) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("  ⚠  cannot read maquettes file {}: {e}", p.display());
+            tracing::info!("  ⚠  cannot read maquettes file {}: {e}", p.display());
             return default_maquettes();
         }
     };
     let entries: Vec<serde_json::Value> = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("  ⚠  invalid maquettes JSON: {e}");
+            info!("⚠  invalid maquettes JSON: {e}");
             return default_maquettes();
         }
     };

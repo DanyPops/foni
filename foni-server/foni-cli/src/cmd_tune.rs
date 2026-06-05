@@ -2,6 +2,7 @@ use super::cmd_common::{
     load_maquettes, play_wav, print_tune_results, process_request, synth_request, Maquette,
 };
 use std::path::PathBuf;
+use tracing::{debug, error, info, warn};
 
 pub fn cmd_tune(
     server: &str,
@@ -14,7 +15,7 @@ pub fn cmd_tune(
 
     let maquettes = load_maquettes(Some(presets_path));
     if maquettes.is_empty() {
-        eprintln!("No presets in {}", presets_path.display());
+        tracing::info!("No presets in {}", presets_path.display());
         return;
     }
 
@@ -31,11 +32,11 @@ pub fn cmd_tune(
     let base: Vec<u8> =
         match synth_request(server, text, model, "ru", 150, false, serde_json::json!({})) {
             Ok(b) => {
-                eprintln!("ok ({} kB)", b.len() / 1024);
+                tracing::info!("ok ({} kB)", b.len() / 1024);
                 b
             }
             Err(e) => {
-                eprintln!("\n  ❌ {e}");
+                info!("\n  ❌ {e}");
                 return;
             }
         };
@@ -56,7 +57,7 @@ pub fn cmd_tune(
             match process_request(server, &base, m.opts.clone()) {
                 Ok(wav) => {
                     std::fs::write(&wav_path, &wav).unwrap();
-                    eprintln!("ok");
+                    info!("ok");
                 }
                 Err(e) => {
                     println!("\n  ❌ {e}");
@@ -167,7 +168,7 @@ pub fn cmd_tune_auto(
     let tensor = match tensor {
         Some(t) => t,
         None => {
-            eprintln!("  ✗ --vs <reference.wav> required for auto-tuning");
+            error!("--vs <reference.wav> required for auto-tuning");
             return;
         }
     };
@@ -185,11 +186,11 @@ pub fn cmd_tune_auto(
         serde_json::json!({}),
     ) {
         Ok(b) => {
-            eprintln!("ok ({} kB)", b.len() / 1024);
+            tracing::info!("ok ({} kB)", b.len() / 1024);
             b
         }
         Err(e) => {
-            eprintln!("\n  ✗ {e}");
+            info!("\n  ✗ {e}");
             return;
         }
     };
@@ -271,8 +272,8 @@ pub fn cmd_tune_auto(
 
     let mut best_score = gap_score(&best).unwrap_or(100.0);
 
-    eprintln!("\n  Starting gap score: {best_score:.1}%");
-    eprintln!("  Running {n_iter} iterations of coordinate descent…");
+    info!("\n  Starting gap score: {best_score:.1}%");
+    info!("Running {n_iter} iterations of coordinate descent…");
     println!();
 
     let steps: &[(&str, &dyn Fn(&mut Knobs, f32), f32, f32, f32)] = &[
@@ -344,7 +345,7 @@ pub fn cmd_tune_auto(
         );
 
         if !changed && iter > 3 {
-            eprintln!("  Converged early at iteration {}.", iter + 1);
+            tracing::info!("  Converged early at iteration {}.", iter + 1);
             break;
         }
     }
@@ -374,13 +375,13 @@ pub fn cmd_tune_auto(
         );
     }
 
-    eprintln!("\n  Best knobs:");
-    eprintln!("    tiltLowDb:        {:.1}", top3[0].0.tilt_low_db);
-    eprintln!("    tiltHighDb:       {:.1}", top3[0].0.tilt_high_db);
-    eprintln!("    rmsTargetLufs:    {:.1}", top3[0].0.rms_lufs);
-    eprintln!("    compressionRatio: {:.1}", top3[0].0.compression);
-    eprintln!("    presenceDb:       {:.1}", top3[0].0.presence_db);
-    eprintln!("    Final gap score:  {:.1}%", top3[0].1);
+    info!("\n  Best knobs:");
+    tracing::info!("    tiltLowDb:        {:.1}", top3[0].0.tilt_low_db);
+    tracing::info!("    tiltHighDb:       {:.1}", top3[0].0.tilt_high_db);
+    tracing::info!("    rmsTargetLufs:    {:.1}", top3[0].0.rms_lufs);
+    tracing::info!("    compressionRatio: {:.1}", top3[0].0.compression);
+    tracing::info!("    presenceDb:       {:.1}", top3[0].0.presence_db);
+    tracing::info!("    Final gap score:  {:.1}%", top3[0].1);
 }
 
 pub fn cmd_test_policy(script: &PathBuf, brightness: f32, loudness: f32, bass: f32, darkness: f32) {
@@ -389,7 +390,7 @@ pub fn cmd_test_policy(script: &PathBuf, brightness: f32, loudness: f32, bass: f
     let engine = match foni_synth::quality::dsp::policy::PolicyEngine::load(script) {
         Some(e) => e,
         None => {
-            eprintln!("  Failed to load script: {}", script.display());
+            tracing::info!("  Failed to load script: {}", script.display());
             return;
         }
     };
@@ -456,11 +457,11 @@ pub fn cmd_test_policy(script: &PathBuf, brightness: f32, loudness: f32, bass: f
                     delta: format!("{:+.1}", snap.correction_de_harsh_db),
                 },
             ];
-            eprintln!("  Input: brightness={brightness} loudness={loudness} bass={bass} darkness={darkness}");
+            info!("Input: brightness={brightness} loudness={loudness} bass={bass} darkness={darkness}");
             println!("{}", Table::new(&rows).with(Style::rounded()));
         }
         None => {
-            eprintln!("  Script evaluation failed. Check for runtime errors.");
+            info!("Script evaluation failed. Check for runtime errors.");
         }
     }
 }

@@ -1,6 +1,7 @@
 use super::cmd_common::{data_dir, synth_request};
 use super::modal_cloud;
 use std::path::PathBuf;
+use tracing::{debug, error, info, warn};
 
 const SNAPSHOT_PHRASES: &[&str] = &[
     "Подойди-ка, надо тебе ситуацию прояснить.",
@@ -27,16 +28,15 @@ pub fn cmd_train(
     } else {
         "LIVE".green().bold().to_string()
     };
-    eprintln!("\n  ▶  Fish Speech training [{mode}]");
-    eprintln!("    Model: {model}");
-    eprintln!("    Steps: {steps}");
-    eprintln!("    Cloud: Modal (L4 GPU)");
-    eprintln!();
+    info!("\n  ▶  Fish Speech training [{mode}]");
+    info!("  Model: {model}");
+    info!("  Steps: {steps}");
+    info!("  Cloud: Modal (L4 GPU)");
 
     if dry_run {
-        eprintln!("  ✓ Dry run — would spawn Modal function:");
-        eprintln!("    modal_cloud::spawn_training(\"{model}\", {steps})");
-        eprintln!("    Then poll/stream logs until completion.");
+        info!("✓ Dry run — would spawn Modal function:");
+        info!("  modal_cloud::spawn_training(\"{model}\", {steps})");
+        info!("  Then poll/stream logs until completion.");
         return;
     }
 
@@ -45,32 +45,32 @@ pub fn cmd_train(
         let mut client = match modal_cloud::connect().await {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("  ✗ {e}");
-                eprintln!("    Run: modal token new");
+                error!("{e}");
+                info!("  Run: modal token new");
                 return;
             }
         };
-        eprintln!("  ✓ Modal connected");
+        info!("✓ Modal connected");
 
         let call_id = match modal_cloud::spawn_training(&mut client, model, steps).await {
             Ok(id) => id,
             Err(e) => {
-                eprintln!("  ✗ spawn failed: {e}");
-                eprintln!("    Run: modal deploy training/modal-train.py");
+                error!("spawn failed: {e}");
+                info!("  Run: modal deploy training/modal-train.py");
                 return;
             }
         };
-        eprintln!("  ✓ Job spawned: {call_id}");
+        info!("✓ Job spawned: {call_id}");
 
         if !follow {
-            eprintln!("\n  Job running in background.");
-            eprintln!("  Check status:  fonictl train-status {call_id}");
-            eprintln!("  Stream logs:   fonictl train-logs {call_id}");
-            eprintln!("  Cancel:        fonictl train-cancel {call_id}");
+            info!("\n  Job running in background.");
+            info!("Check status:  fonictl train-status {call_id}");
+            info!("Stream logs:   fonictl train-logs {call_id}");
+            info!("Cancel:        fonictl train-cancel {call_id}");
             return;
         }
 
-        eprintln!("  ▶ Tailing logs...\n");
+        info!("▶ Tailing logs...\n");
         match modal_cloud::tail_logs(&mut client, &call_id, 50).await {
             Ok(lines) => {
                 for line in &lines {
@@ -78,15 +78,15 @@ pub fn cmd_train(
                 }
                 // Check final status
                 match modal_cloud::job_status(&mut client, &call_id).await {
-                    Ok(modal_cloud::JobStatus::Success(r)) => eprintln!("\n  ✓ Complete: {r}"),
+                    Ok(modal_cloud::JobStatus::Success(r)) => info!("\n  ✓ Complete: {r}"),
                     Ok(modal_cloud::JobStatus::Running) => {
-                        eprintln!("\n  ⏳ Still running. Check: fonictl train-status {call_id}")
+                        info!("\n  ⏳ Still running. Check: fonictl train-status {call_id}")
                     }
-                    Ok(modal_cloud::JobStatus::Failed(r)) => eprintln!("\n  ✗ Failed: {r}"),
-                    Err(e) => eprintln!("\n  ✗ {e}"),
+                    Ok(modal_cloud::JobStatus::Failed(r)) => info!("\n  ✗ Failed: {r}"),
+                    Err(e) => info!("\n  ✗ {e}"),
                 }
             }
-            Err(e) => eprintln!("  ✗ {e}"),
+            Err(e) => error!("{e}"),
         }
     });
 }
@@ -97,7 +97,7 @@ pub fn cmd_train_status(call_id: &str) {
         let mut client = match modal_cloud::connect().await {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("  ✗ {e}");
+                error!("{e}");
                 return;
             }
         };
@@ -105,8 +105,8 @@ pub fn cmd_train_status(call_id: &str) {
         match modal_cloud::job_status(&mut client, call_id).await {
             Ok(modal_cloud::JobStatus::Success(result)) => println!("✓ Complete: {result}"),
             Ok(modal_cloud::JobStatus::Running) => println!("⏳ Running..."),
-            Ok(modal_cloud::JobStatus::Failed(reason)) => eprintln!("✗ Failed: {reason}"),
-            Err(e) => eprintln!("✗ {e}"),
+            Ok(modal_cloud::JobStatus::Failed(reason)) => info!("✗ Failed: {reason}"),
+            Err(e) => info!("✗ {e}"),
         }
     });
 }
@@ -117,7 +117,7 @@ pub fn cmd_train_logs(call_id: &str) {
         let mut client = match modal_cloud::connect().await {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("  ✗ {e}");
+                error!("{e}");
                 return;
             }
         };
@@ -125,14 +125,14 @@ pub fn cmd_train_logs(call_id: &str) {
         match modal_cloud::tail_logs(&mut client, call_id, 10).await {
             Ok(lines) => {
                 if lines.is_empty() {
-                    eprintln!("(no logs yet)");
+                    info!("(no logs yet)");
                 } else {
                     for line in &lines {
                         eprint!("{line}");
                     }
                 }
             }
-            Err(e) => eprintln!("✗ {e}"),
+            Err(e) => info!("✗ {e}"),
         }
     });
 }
@@ -143,14 +143,14 @@ pub fn cmd_train_cancel(call_id: &str) {
         let mut client = match modal_cloud::connect().await {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("  ✗ {e}");
+                error!("{e}");
                 return;
             }
         };
 
         match modal_cloud::cancel_job(&mut client, call_id).await {
             Ok(()) => println!("✓ Job cancelled"),
-            Err(e) => eprintln!("✗ {e}"),
+            Err(e) => info!("✗ {e}"),
         }
     });
 }
@@ -159,7 +159,7 @@ pub fn cmd_snapshot(server: &str, model: &str, ref_path: &PathBuf) -> Result<(),
     use foni_analyse::{analyse, compute_gap, decode_wav, TargetTensor};
     use owo_colors::OwoColorize;
 
-    eprintln!("\n  ▶  Snapshot — saving baseline scores for {model}");
+    info!("\n  ▶  Snapshot — saving baseline scores for {model}");
 
     let ref_bytes = std::fs::read(ref_path).map_err(|e| format!("{}: {e}", ref_path.display()))?;
     let ref_wav = decode_wav(&ref_bytes).expect("decode reference WAV");
@@ -180,14 +180,14 @@ pub fn cmd_snapshot(server: &str, model: &str, ref_path: &PathBuf) -> Result<(),
         ) {
             Ok(w) => w,
             Err(e) => {
-                eprintln!("✗ {e}");
+                info!("✗ {e}");
                 continue;
             }
         };
         let synth_wav = decode_wav(&wav).expect("decode synth WAV");
         let synth_analysis = analyse(&synth_wav.samples, synth_wav.sample_rate);
         let gap = compute_gap(phrase, &synth_analysis, &tensor);
-        eprintln!(
+        tracing::info!(
             "gap={:.1}%  «{}»",
             gap.mean_gap_pct,
             &phrase[..phrase.len().min(40)]
@@ -211,7 +211,7 @@ pub fn cmd_snapshot(server: &str, model: &str, ref_path: &PathBuf) -> Result<(),
         "reference": ref_path.display().to_string(),
     });
     std::fs::write(&path, serde_json::to_string_pretty(&snapshot).unwrap()).ok();
-    eprintln!(
+    tracing::info!(
         "\n  ✓ Baseline saved: {} (mean gap {:.1}%)",
         path.display(),
         avg.bold()
@@ -256,14 +256,14 @@ pub fn cmd_compare_models(server: &str, model: &str, ref_path: &PathBuf) -> Resu
         ) {
             Ok(w) => w,
             Err(e) => {
-                eprintln!("✗ {e}");
+                info!("✗ {e}");
                 continue;
             }
         };
         let synth_wav = decode_wav(&wav).expect("decode synth WAV");
         let synth_analysis = analyse(&synth_wav.samples, synth_wav.sample_rate);
         let gap = compute_gap(phrase, &synth_analysis, &tensor);
-        eprintln!("gap={:.1}%", gap.mean_gap_pct);
+        tracing::info!("gap={:.1}%", gap.mean_gap_pct);
         scores.push(gap.mean_gap_pct);
     }
 
@@ -274,17 +274,17 @@ pub fn cmd_compare_models(server: &str, model: &str, ref_path: &PathBuf) -> Resu
     let new_avg: f32 = scores.iter().sum::<f32>() / scores.len() as f32;
     let delta = old_avg - new_avg;
 
-    eprintln!("\n  ═══ Comparison ═══");
-    eprintln!("    Baseline:  {:.1}%", old_avg);
-    eprintln!("    Current:   {:.1}%", new_avg);
+    info!("\n  ═══ Comparison ═══");
+    tracing::info!("    Baseline:  {:.1}%", old_avg);
+    tracing::info!("    Current:   {:.1}%", new_avg);
     if delta > 0.0 {
-        eprintln!(
+        tracing::info!(
             "    Result:    {} ({:.1}% improvement)",
             "PASS ✓".green().bold(),
             delta
         );
     } else {
-        eprintln!(
+        tracing::info!(
             "    Result:    {} ({:.1}% regression)",
             "FAIL ✗".red().bold(),
             -delta
@@ -300,8 +300,8 @@ pub fn cmd_tts_compare(phrase: &str) {
         let token = std::env::var("FONI_TTS_TOKEN").unwrap_or_default();
         let body = serde_json::json!({"text": phrase, "language": "ru", "token": token});
 
-        eprintln!("\n  ▶  Comparing TTS models in parallel");
-        eprintln!(
+        info!("\n  ▶  Comparing TTS models in parallel");
+        tracing::info!(
             "    Phrase: «{}»\n",
             phrase.chars().take(40).collect::<String>()
         );
@@ -328,12 +328,12 @@ pub fn cmd_tts_compare(phrase: &str) {
                 let wav = resp.bytes().await.unwrap_or_default();
                 let path = "/tmp/fonictl_compare_chatterbox.wav";
                 std::fs::write(path, &wav).ok();
-                eprintln!("  ✓ Chatterbox:  {} bytes, {}ms", wav.len(), cb_ms);
-                eprintln!("    Playing...");
+                tracing::info!("  ✓ Chatterbox:  {} bytes, {}ms", wav.len(), cb_ms);
+                info!("  Playing...");
                 super::cmd_common::play_wav(std::path::Path::new(path));
             }
-            Ok(resp) => eprintln!("  ✗ Chatterbox: HTTP {}", resp.status()),
-            Err(e) => eprintln!("  ✗ Chatterbox: {e}"),
+            Ok(resp) => tracing::info!("  ✗ Chatterbox: HTTP {}", resp.status()),
+            Err(e) => error!("Chatterbox: {e}"),
         }
 
         let fs_ms = t0.elapsed().as_millis();
@@ -343,15 +343,15 @@ pub fn cmd_tts_compare(phrase: &str) {
                 let wav = resp.bytes().await.unwrap_or_default();
                 let path = "/tmp/fonictl_compare_fish.wav";
                 std::fs::write(path, &wav).ok();
-                eprintln!("  ✓ Fish S2-Pro: {} bytes, {}ms", wav.len(), fs_ms);
-                eprintln!("    Playing...");
+                tracing::info!("  ✓ Fish S2-Pro: {} bytes, {}ms", wav.len(), fs_ms);
+                info!("  Playing...");
                 super::cmd_common::play_wav(std::path::Path::new(path));
             }
             Ok(resp) => {
                 let body = resp.text().await.unwrap_or_default();
-                eprintln!("  ✗ Fish S2-Pro: {body}");
+                error!("Fish S2-Pro: {body}");
             }
-            Err(e) => eprintln!("  ✗ Fish S2-Pro: {e}"),
+            Err(e) => error!("Fish S2-Pro: {e}"),
         }
     });
 }
@@ -363,9 +363,9 @@ pub fn cmd_tts_bench(url: &str, phrase: &str) {
         let token = std::env::var("FONI_TTS_TOKEN").unwrap_or_default();
         let body = serde_json::json!({"text": phrase, "language": "ru", "token": token});
 
-        eprintln!("\n  ▶  TTS latency benchmark");
-        eprintln!("    Endpoint: {url}");
-        eprintln!(
+        info!("\n  ▶  TTS latency benchmark");
+        info!("  Endpoint: {url}");
+        tracing::info!(
             "    Phrase:   «{}»\n",
             phrase.chars().take(50).collect::<String>()
         );
@@ -387,7 +387,7 @@ pub fn cmd_tts_bench(url: &str, phrase: &str) {
                     let bytes = r.bytes().await.unwrap_or_default();
                     let dur_secs = bytes.len() as f64 / (22050.0 * 2.0);
                     let rtf = ms as f64 / 1000.0 / dur_secs;
-                    eprintln!(
+                    tracing::info!(
                         "  [{i}] {label:4} {ms:>6}ms  {:.0}KB  {dur_secs:.1}s audio  RTF={rtf:.1}x",
                         bytes.len() as f64 / 1024.0
                     );
@@ -396,19 +396,19 @@ pub fn cmd_tts_bench(url: &str, phrase: &str) {
                     if i == 0 {
                         let path = "/tmp/fonictl_bench.wav";
                         std::fs::write(path, &bytes).ok();
-                        eprintln!("       Playing...");
+                        info!("     Playing...");
                         super::cmd_common::play_wav(std::path::Path::new(path));
                     }
                 }
-                Ok(r) => eprintln!("  [{i}] {label:4} HTTP {}", r.status()),
-                Err(e) => eprintln!("  [{i}] {label:4} {e}"),
+                Ok(r) => tracing::info!("  [{i}] {label:4} HTTP {}", r.status()),
+                Err(e) => info!("[{i}] {label:4} {e}"),
             }
         }
 
         if results.len() >= 2 {
             let warm_avg = results[1..].iter().sum::<u64>() / (results.len() - 1) as u64;
-            eprintln!("\n  Cold:     {}ms", results[0]);
-            eprintln!("  Warm avg: {}ms", warm_avg);
+            tracing::info!("\n  Cold:     {}ms", results[0]);
+            tracing::info!("  Warm avg: {}ms", warm_avg);
         }
     });
 }

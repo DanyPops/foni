@@ -1,10 +1,11 @@
 use foni_analyse::{analyse, compute_gap, decode_wav, format_gap_table, TargetTensor};
 use std::path::PathBuf;
+use tracing::{debug, error, info, warn};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: foni-cli <file.wav> [--vs <reference.wav>] [--json]");
+        info!("Usage: foni-cli <file.wav> [--vs <reference.wav>] [--json]");
         std::process::exit(1);
     }
 
@@ -12,12 +13,12 @@ fn main() {
     let json_mode = args.contains(&"--json".to_string());
 
     let bytes = std::fs::read(&path).unwrap_or_else(|e| {
-        eprintln!("error reading {}: {e}", path.display());
+        tracing::info!("error reading {}: {e}", path.display());
         std::process::exit(1);
     });
 
     let wav = decode_wav(&bytes).unwrap_or_else(|e| {
-        eprintln!("WAV decode error: {e}");
+        info!("WAV decode error: {e}");
         std::process::exit(1);
     });
 
