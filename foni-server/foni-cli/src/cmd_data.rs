@@ -1,4 +1,184 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const CHATTERBOX_SAMPLE_RATE: u32 = 24_000;
+const DEFAULT_SILENCE_DB: i32 = -30;
+const DEFAULT_MIN_GAP_SECS: f64 = 0.4;
+const DEFAULT_MIN_CLIP_SECS: f64 = 0.5;
+const DEFAULT_MAX_CLIP_SECS: f64 = 15.0;
+
+pub struct FetchOpts {
+    pub silence_db: i32,
+    pub min_gap: f64,
+    pub min_clip: f64,
+    pub max_clip: f64,
+}
+
+impl Default for FetchOpts {
+    fn default() -> Self {
+        Self {
+            silence_db: DEFAULT_SILENCE_DB,
+            min_gap: DEFAULT_MIN_GAP_SECS,
+            min_clip: DEFAULT_MIN_CLIP_SECS,
+            max_clip: DEFAULT_MAX_CLIP_SECS,
+        }
+    }
+}
+
+pub fn cmd_fetch(url: &str, out: &Path, split: bool, opts: &FetchOpts) -> Result<(), String> {
+    std::fs::create_dir_all(out).map_err(|e| format!("cannot create {}: {e}", out.display()))?;
+
+    // 1. Download via yt-dlp
+    let raw = out.join("_raw.wav");
+    eprintln!("  ▶  Downloading {url}");
+    let status = Command::new("yt-dlp")
+        .args(["-x", "--audio-format", "wav", "-o"])
+        .arg(&raw)
+        .arg(url)
+        .status()
+        .map_err(|e| format!("yt-dlp not found: {e}"))?;
+    if !status.success() {
+        return Err("yt-dlp failed".into());
+    }
+
+    // 2. Convert to mono 24kHz
+    let mono = out.join("_mono.wav");
+    eprintln!("  ▶  Converting to mono {CHATTERBOX_SAMPLE_RATE}Hz");
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-i"])
+        .arg(&raw)
+        .args(["-ac", "1", "-ar"])
+        .arg(CHATTERBOX_SAMPLE_RATE.to_string())
+        .arg(&mono)
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("ffmpeg not found: {e}"))?;
+    if !status.success() {
+        return Err("ffmpeg conversion failed".into());
+    }
+    std::fs::remove_file(&raw).ok();
+
+    if !split {
+        let final_path = out.join("full.wav");
+        std::fs::rename(&mono, &final_path).map_err(|e| format!("rename: {e}"))?;
+        eprintln!("  ✓  {}", final_path.display());
+        return Ok(());
+    }
+
+    // 3. Detect silence boundaries
+    eprintln!(
+        "  ▶  Detecting silence ({}dB, {:.1}s min gap)",
+        opts.silence_db, opts.min_gap
+    );
+    let silences = detect_silences(&mono, opts.silence_db, opts.min_gap)?;
+
+    // 4. Split into clips
+    let clips = split_by_silence(&mono, &silences)?;
+    let mut kept = 0u32;
+    for (i, (start, end)) in clips.iter().enumerate() {
+        let dur = end - start;
+        if dur < opts.min_clip || dur > opts.max_clip {
+            continue;
+        }
+        kept += 1;
+        let clip_path = out.join(format!("{kept:03}.wav"));
+        let status = Command::new("ffmpeg")
+            .args(["-y", "-i"])
+            .arg(&mono)
+            .args(["-ss", &format!("{start:.3}"), "-to", &format!("{end:.3}")])
+            .args(["-c", "copy"])
+            .arg(&clip_path)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_err(|e| format!("ffmpeg split: {e}"))?;
+        if !status.success() {
+            eprintln!("  ⚠  clip {i} failed");
+        }
+    }
+    std::fs::remove_file(&mono).ok();
+    eprintln!(
+        "  ✓  {kept} clips ({}–{}s) → {}/",
+        opts.min_clip,
+        opts.max_clip,
+        out.display()
+    );
+    Ok(())
+}
+
+fn detect_silences(wav: &Path, threshold_db: i32, min_gap: f64) -> Result<Vec<(f64, f64)>, String> {
+    let output = Command::new("ffmpeg")
+        .args(["-i"])
+        .arg(wav)
+        .args([
+            "-af",
+            &format!("silencedetect=noise={threshold_db}dB:d={min_gap}"),
+            "-f",
+            "null",
+            "-",
+        ])
+        .output()
+        .map_err(|e| format!("ffmpeg silencedetect: {e}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let mut silences = Vec::new();
+    let mut start = None;
+    for line in stderr.lines() {
+        if let Some(s) = line.strip_suffix(|_: char| false).or(Some(line)) {
+            if s.contains("silence_start:") {
+                if let Some(val) = s.split("silence_start:").nth(1) {
+                    start = val.trim().parse::<f64>().ok();
+                }
+            } else if s.contains("silence_end:") {
+                if let (Some(st), Some(val)) = (start, s.split("silence_end:").nth(1)) {
+                    if let Some(end) = val
+                        .split('|')
+                        .next()
+                        .and_then(|v| v.trim().parse::<f64>().ok())
+                    {
+                        silences.push((st, end));
+                        start = None;
+                    }
+                }
+            }
+        }
+    }
+    Ok(silences)
+}
+
+fn split_by_silence(wav: &Path, silences: &[(f64, f64)]) -> Result<Vec<(f64, f64)>, String> {
+    let duration = {
+        let output = Command::new("ffprobe")
+            .args(["-i"])
+            .arg(wav)
+            .args([
+                "-show_entries",
+                "format=duration",
+                "-v",
+                "quiet",
+                "-of",
+                "csv=p=0",
+            ])
+            .output()
+            .map_err(|e| format!("ffprobe: {e}"))?;
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<f64>()
+            .map_err(|e| format!("parse duration: {e}"))?
+    };
+
+    let mut clips = Vec::new();
+    let mut pos = 0.0;
+    for (sil_start, sil_end) in silences {
+        if *sil_start > pos {
+            clips.push((pos, *sil_start));
+        }
+        pos = *sil_end;
+    }
+    if pos < duration {
+        clips.push((pos, duration));
+    }
+    Ok(clips)
+}
 
 pub fn cmd_clean(dir: &PathBuf, out: &PathBuf) {
     use foni_analyse::decode_wav;

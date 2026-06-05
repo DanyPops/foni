@@ -243,6 +243,30 @@ enum Cmd {
         darkness: f32,
     },
 
+    /// Download audio from URL, convert to mono 24kHz WAV, split into clips by silence
+    Fetch {
+        /// YouTube or direct audio URL
+        url: String,
+        /// Output directory for WAV clips
+        #[arg(short, long, default_value = "dataset")]
+        out: PathBuf,
+        /// Keep as single file instead of splitting
+        #[arg(long)]
+        no_split: bool,
+        /// Silence threshold in dB (default: -30)
+        #[arg(long, default_value_t = -30, allow_negative_numbers = true)]
+        silence_db: i32,
+        /// Minimum silence gap to split on, in seconds (default: 0.4)
+        #[arg(long, default_value_t = 0.4)]
+        min_gap: f64,
+        /// Minimum clip duration in seconds (default: 0.5)
+        #[arg(long, default_value_t = 0.5)]
+        min_clip: f64,
+        /// Maximum clip duration in seconds (default: 15)
+        #[arg(long, default_value_t = 15.0)]
+        max_clip: f64,
+    },
+
     /// Clean a dataset directory — trim silence, normalize volume, report clipping
     Clean {
         /// Input directory of WAV files
@@ -1076,6 +1100,25 @@ fn main() {
             darkness,
         } => {
             cmd_tune::cmd_test_policy(&script, brightness, loudness, bass, darkness);
+        }
+        Cmd::Fetch {
+            url,
+            out,
+            no_split,
+            silence_db,
+            min_gap,
+            min_clip,
+            max_clip,
+        } => {
+            let opts = cmd_data::FetchOpts {
+                silence_db,
+                min_gap,
+                min_clip,
+                max_clip,
+            };
+            if let Err(e) = cmd_data::cmd_fetch(&url, &out, !no_split, &opts) {
+                eprintln!("✗ {e}");
+            }
         }
         Cmd::Clean { dir, out } => {
             let out = out.unwrap_or_else(|| data_dir().join("training/clean"));
