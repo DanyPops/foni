@@ -93,6 +93,12 @@ fn cache_key(req: &SynthRequest) -> [u8; 32] {
     {
         h.update(val.to_le_bytes());
     }
+    for val in [req.exaggeration, req.cfg_weight, req.temperature]
+        .into_iter()
+        .flatten()
+    {
+        h.update(val.to_le_bytes());
+    }
     h.finalize().into()
 }
 
