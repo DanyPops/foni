@@ -1,283 +1,249 @@
-//! Expression palette — an emotion canvas for voice painting.
+//! Expression palette — model-owned emotion shades.
 //!
-//! **Colors** are emotion families (authority, warmth, intensity, restraint).
-//! **Shades** are gradients within each color (firm → commanding → menacing).
-//! A **canvas** is a sequence of shades that paints the emotional arc of a reply.
-//!
-//! Shades are abstract (what you hear). A **Colorset** maps them to model-specific
-//! API parameters — different TTS models, same painting language.
+//! Each TTS model defines its own parameter axes and shades.
+//! Shades are named points in the model's parameter space.
+//! The LLM picks shade names; the model resolves them to API values.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Abstract emotion point — what you hear, not how a model produces it.
+/// A named point in a model's parameter space.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shade {
-    pub name: &'static str,
-    pub color: &'static str,
-    pub excitement: f32,
-    pub assertiveness: f32,
-    pub warmth: f32,
+    pub name: String,
+    pub params: HashMap<String, f32>,
 }
 
-/// Model-specific parameter tensor — the concrete API values a TTS model needs.
-#[derive(Debug, Clone, Default)]
-pub struct ModelParams {
-    pub values: HashMap<&'static str, f32>,
-}
+/// A model's complete expression vocabulary.
+pub trait Colorset: Send + Sync {
+    fn model_name(&self) -> &str;
+    fn axes(&self) -> &[&str];
+    fn shades(&self) -> &[Shade];
 
-impl ModelParams {
-    pub fn get(&self, key: &str) -> Option<f32> {
-        self.values.get(key).copied()
+    fn resolve(&self, name: &str) -> Option<&Shade> {
+        let lower = name.to_lowercase();
+        self.shades().iter().find(|s| s.name == lower)
+    }
+
+    fn shade_names(&self) -> Vec<&str> {
+        self.shades().iter().map(|s| s.name.as_str()).collect()
+    }
+
+    fn palette_prompt(&self) -> String {
+        let mut s = format!(
+            "Expression shades for {} (use shade names in [brackets]):\n",
+            self.model_name()
+        );
+        for shade in self.shades() {
+            s.push_str(&format!("  [{}]", shade.name));
+            for axis in self.axes() {
+                if let Some(v) = shade.params.get(*axis) {
+                    s.push_str(&format!(" {axis}={v:.1}"));
+                }
+            }
+            s.push('\n');
+        }
+        s
     }
 }
 
-/// A colorset maps abstract shade values to a specific model's parameter space.
-pub trait Colorset: Send + Sync {
-    fn name(&self) -> &str;
-    fn param_names(&self) -> &[&str];
-    fn map_shade(&self, shade: &Shade) -> ModelParams;
+fn shade(name: &str, params: &[(&str, f32)]) -> Shade {
+    Shade {
+        name: name.to_string(),
+        params: params.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+    }
 }
 
-/// Chatterbox Multilingual colorset.
-pub struct ChatterboxColorset;
+/// Chatterbox Multilingual — 3 axes: exaggeration, cfg_weight, temperature.
+pub struct ChatterboxColorset {
+    shades: Vec<Shade>,
+}
+
+impl Default for ChatterboxColorset {
+    fn default() -> Self {
+        Self {
+            shades: vec![
+                // Low energy
+                shade(
+                    "whisper",
+                    &[
+                        ("exaggeration", 0.30),
+                        ("cfg_weight", 0.50),
+                        ("temperature", 0.60),
+                    ],
+                ),
+                shade(
+                    "measured",
+                    &[
+                        ("exaggeration", 0.50),
+                        ("cfg_weight", 0.40),
+                        ("temperature", 0.80),
+                    ],
+                ),
+                shade(
+                    "solemn",
+                    &[
+                        ("exaggeration", 0.40),
+                        ("cfg_weight", 0.35),
+                        ("temperature", 0.45),
+                    ],
+                ),
+                // Mid energy
+                shade(
+                    "warm",
+                    &[
+                        ("exaggeration", 0.60),
+                        ("cfg_weight", 0.40),
+                        ("temperature", 1.10),
+                    ],
+                ),
+                shade(
+                    "firm",
+                    &[
+                        ("exaggeration", 0.70),
+                        ("cfg_weight", 0.25),
+                        ("temperature", 0.70),
+                    ],
+                ),
+                shade(
+                    "curious",
+                    &[
+                        ("exaggeration", 0.70),
+                        ("cfg_weight", 0.45),
+                        ("temperature", 0.90),
+                    ],
+                ),
+                shade(
+                    "sarcastic",
+                    &[
+                        ("exaggeration", 0.65),
+                        ("cfg_weight", 0.35),
+                        ("temperature", 0.50),
+                    ],
+                ),
+                // High energy
+                shade(
+                    "commanding",
+                    &[
+                        ("exaggeration", 1.20),
+                        ("cfg_weight", 0.15),
+                        ("temperature", 0.60),
+                    ],
+                ),
+                shade(
+                    "rallying",
+                    &[
+                        ("exaggeration", 1.30),
+                        ("cfg_weight", 0.20),
+                        ("temperature", 0.90),
+                    ],
+                ),
+                shade(
+                    "menacing",
+                    &[
+                        ("exaggeration", 1.10),
+                        ("cfg_weight", 0.15),
+                        ("temperature", 0.35),
+                    ],
+                ),
+                shade(
+                    "encouraging",
+                    &[
+                        ("exaggeration", 0.90),
+                        ("cfg_weight", 0.30),
+                        ("temperature", 1.20),
+                    ],
+                ),
+                // Peak energy
+                shade(
+                    "battle_cry",
+                    &[
+                        ("exaggeration", 1.50),
+                        ("cfg_weight", 0.10),
+                        ("temperature", 0.40),
+                    ],
+                ),
+                shade(
+                    "rage",
+                    &[
+                        ("exaggeration", 1.70),
+                        ("cfg_weight", 0.10),
+                        ("temperature", 0.30),
+                    ],
+                ),
+                shade(
+                    "triumphant",
+                    &[
+                        ("exaggeration", 1.40),
+                        ("cfg_weight", 0.15),
+                        ("temperature", 1.00),
+                    ],
+                ),
+            ],
+        }
+    }
+}
 
 impl Colorset for ChatterboxColorset {
-    fn name(&self) -> &str {
+    fn model_name(&self) -> &str {
         "chatterbox"
     }
 
-    fn param_names(&self) -> &[&str] {
+    fn axes(&self) -> &[&str] {
         &["exaggeration", "cfg_weight", "temperature"]
     }
 
-    fn map_shade(&self, shade: &Shade) -> ModelParams {
-        let mut p = ModelParams::default();
-        p.values.insert("exaggeration", shade.excitement);
-        p.values.insert("cfg_weight", shade.assertiveness);
-        p.values.insert("temperature", shade.warmth);
-        p
+    fn shades(&self) -> &[Shade] {
+        &self.shades
     }
-}
-
-pub const PALETTE: &[Shade] = &[
-    // ── Restraint: quiet, controlled, internal ──
-    Shade {
-        name: "whisper",
-        color: "restraint",
-        excitement: 0.30,
-        assertiveness: 0.50,
-        warmth: 0.60,
-    },
-    Shade {
-        name: "measured",
-        color: "restraint",
-        excitement: 0.50,
-        assertiveness: 0.40,
-        warmth: 0.80,
-    },
-    Shade {
-        name: "solemn",
-        color: "restraint",
-        excitement: 0.40,
-        assertiveness: 0.35,
-        warmth: 0.45,
-    },
-    // ── Warmth: friendly, supportive, human ──
-    Shade {
-        name: "gentle",
-        color: "warmth",
-        excitement: 0.50,
-        assertiveness: 0.45,
-        warmth: 1.10,
-    },
-    Shade {
-        name: "warm",
-        color: "warmth",
-        excitement: 0.60,
-        assertiveness: 0.40,
-        warmth: 1.10,
-    },
-    Shade {
-        name: "encouraging",
-        color: "warmth",
-        excitement: 0.90,
-        assertiveness: 0.30,
-        warmth: 1.20,
-    },
-    Shade {
-        name: "triumphant",
-        color: "warmth",
-        excitement: 1.40,
-        assertiveness: 0.15,
-        warmth: 1.00,
-    },
-    // ── Authority: commanding, decisive, dominant ──
-    Shade {
-        name: "firm",
-        color: "authority",
-        excitement: 0.70,
-        assertiveness: 0.25,
-        warmth: 0.70,
-    },
-    Shade {
-        name: "commanding",
-        color: "authority",
-        excitement: 1.20,
-        assertiveness: 0.15,
-        warmth: 0.60,
-    },
-    Shade {
-        name: "menacing",
-        color: "authority",
-        excitement: 1.10,
-        assertiveness: 0.15,
-        warmth: 0.35,
-    },
-    // ── Intensity: raw energy, peak emotion ──
-    Shade {
-        name: "rallying",
-        color: "intensity",
-        excitement: 1.30,
-        assertiveness: 0.20,
-        warmth: 0.90,
-    },
-    Shade {
-        name: "battle_cry",
-        color: "intensity",
-        excitement: 1.50,
-        assertiveness: 0.10,
-        warmth: 0.40,
-    },
-    Shade {
-        name: "rage",
-        color: "intensity",
-        excitement: 1.70,
-        assertiveness: 0.10,
-        warmth: 0.30,
-    },
-    // ── Wit: irony, sharpness, playful edge ──
-    Shade {
-        name: "curious",
-        color: "wit",
-        excitement: 0.70,
-        assertiveness: 0.45,
-        warmth: 0.90,
-    },
-    Shade {
-        name: "sarcastic",
-        color: "wit",
-        excitement: 0.65,
-        assertiveness: 0.35,
-        warmth: 0.50,
-    },
-    Shade {
-        name: "dry",
-        color: "wit",
-        excitement: 0.45,
-        assertiveness: 0.40,
-        warmth: 0.55,
-    },
-];
-
-/// Look up a shade by name (case-insensitive).
-pub fn resolve(name: &str) -> Option<&'static Shade> {
-    let lower = name.to_lowercase();
-    PALETTE.iter().find(|s| s.name == lower)
-}
-
-/// All shade names in the palette.
-pub fn shade_names() -> Vec<&'static str> {
-    PALETTE.iter().map(|s| s.name).collect()
-}
-
-/// All color (family) names, deduplicated.
-pub fn color_names() -> Vec<&'static str> {
-    let mut names: Vec<&str> = PALETTE.iter().map(|s| s.color).collect();
-    names.sort();
-    names.dedup();
-    names
-}
-
-/// Shades belonging to a specific color family.
-pub fn shades_of(color: &str) -> Vec<&'static Shade> {
-    PALETTE.iter().filter(|s| s.color == color).collect()
-}
-
-/// Format palette as LLM prompt instructions.
-pub fn palette_prompt() -> String {
-    let mut s = String::from("Expression palette (use shade names in [brackets]):\n");
-    for color in color_names() {
-        s.push_str(&format!("  {color}:"));
-        for shade in shades_of(color) {
-            s.push_str(&format!(" {}", shade.name));
-        }
-        s.push('\n');
-    }
-    s
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn cs() -> ChatterboxColorset {
+        ChatterboxColorset::default()
+    }
+
     #[test]
-    fn resolve_finds_by_name() {
-        let s = resolve("commanding").unwrap();
-        assert_eq!(s.color, "authority");
-        assert!(s.excitement > 1.0);
+    fn resolve_by_name() {
+        let c = cs();
+        let s = c.resolve("commanding").unwrap();
+        assert!(s.params["exaggeration"] > 1.0);
     }
 
     #[test]
     fn resolve_case_insensitive() {
-        assert!(resolve("Battle_Cry").is_some());
-        assert!(resolve("RAGE").is_some());
+        let c = cs();
+        assert!(c.resolve("Battle_Cry").is_some());
+        assert!(c.resolve("RAGE").is_some());
     }
 
     #[test]
-    fn resolve_unknown_returns_none() {
-        assert!(resolve("nonexistent").is_none());
+    fn resolve_unknown() {
+        let c = cs();
+        assert!(c.resolve("nonexistent").is_none());
     }
 
     #[test]
-    fn every_color_has_shades() {
-        for color in color_names() {
-            let shades = shades_of(color);
-            assert!(!shades.is_empty(), "{color} has no shades");
-        }
-    }
-
-    #[test]
-    fn colors_cover_energy_spectrum() {
-        let restraint = shades_of("restraint");
-        let intensity = shades_of("intensity");
-        let min_r = restraint
-            .iter()
-            .map(|s| s.excitement)
-            .fold(f32::MAX, f32::min);
-        let max_i = intensity
-            .iter()
-            .map(|s| s.excitement)
-            .fold(f32::MIN, f32::max);
-        assert!(min_r < 0.5, "restraint should be calm");
-        assert!(max_i > 1.4, "intensity should be high energy");
-    }
-
-    #[test]
-    fn warmth_family_is_warm() {
-        for shade in shades_of("warmth") {
-            assert!(
-                shade.warmth >= 1.0,
-                "{} warmth={}",
-                shade.name,
-                shade.warmth
-            );
+    fn all_shades_have_all_axes() {
+        let c = cs();
+        for shade in c.shades() {
+            for axis in c.axes() {
+                assert!(
+                    shade.params.contains_key(*axis),
+                    "{} missing {axis}",
+                    shade.name
+                );
+            }
         }
     }
 
     #[test]
     fn no_duplicate_names() {
-        let names = shade_names();
+        let c = cs();
+        let names = c.shade_names();
         let mut sorted = names.clone();
         sorted.sort();
         sorted.dedup();
@@ -285,47 +251,34 @@ mod tests {
     }
 
     #[test]
-    fn palette_prompt_mentions_all_colors() {
-        let prompt = palette_prompt();
-        for color in color_names() {
-            assert!(prompt.contains(color), "prompt missing {color}");
-        }
-    }
-
-    // ── colorset ──
-
-    #[test]
-    fn chatterbox_maps_shade_to_three_params() {
-        let cs = ChatterboxColorset;
-        let shade = resolve("commanding").unwrap();
-        let params = cs.map_shade(shade);
-        assert_eq!(params.values.len(), 3);
-        assert!((params.get("exaggeration").unwrap() - 1.2).abs() < 0.01);
-        assert!((params.get("cfg_weight").unwrap() - 0.15).abs() < 0.01);
-        assert!((params.get("temperature").unwrap() - 0.6).abs() < 0.01);
+    fn palette_prompt_lists_shades() {
+        let c = cs();
+        let prompt = c.palette_prompt();
+        assert!(prompt.contains("[commanding]"));
+        assert!(prompt.contains("[whisper]"));
+        assert!(prompt.contains("exaggeration"));
     }
 
     #[test]
-    fn chatterbox_param_names() {
-        let cs = ChatterboxColorset;
-        let names = cs.param_names();
-        assert!(names.contains(&"exaggeration"));
-        assert!(names.contains(&"cfg_weight"));
-        assert!(names.contains(&"temperature"));
+    fn axes_count() {
+        let c = cs();
+        assert_eq!(c.axes().len(), 3);
     }
 
     #[test]
-    fn every_shade_maps_to_valid_params() {
-        let cs = ChatterboxColorset;
-        for shade in PALETTE {
-            let params = cs.map_shade(shade);
-            for name in cs.param_names() {
-                assert!(
-                    params.get(name).is_some(),
-                    "shade {} missing param {name}",
-                    shade.name
-                );
-            }
-        }
+    fn energy_range_covered() {
+        let c = cs();
+        let min = c
+            .shades()
+            .iter()
+            .map(|s| s.params["exaggeration"])
+            .fold(f32::MAX, f32::min);
+        let max = c
+            .shades()
+            .iter()
+            .map(|s| s.params["exaggeration"])
+            .fold(f32::MIN, f32::max);
+        assert!(min < 0.4);
+        assert!(max > 1.5);
     }
 }

@@ -4,7 +4,7 @@ use std::process::Command;
 
 use foni_analyse::decode_wav;
 use foni_synth::engine::audio_stream;
-use foni_synth::engine::expression_palette;
+use foni_synth::engine::expression_palette::{self, ChatterboxColorset, Colorset};
 use tracing::{debug, info, warn};
 
 const STREAM_SAMPLE_RATE: u32 = 16_000;
@@ -352,8 +352,8 @@ fn detect_domain(text: &str, model: &str, ollama_url: &str) -> Option<String> {
     }
 }
 
-fn expression_tag_instruction() -> String {
-    let palette = expression_palette::palette_prompt();
+fn expression_tag_instruction(colorset: &dyn Colorset) -> String {
+    let palette = colorset.palette_prompt();
     format!(
         concat!(
             "\nIMPORTANT: Tag EACH sentence with an emotion shade on the SAME line.",
@@ -382,9 +382,12 @@ fn persona_base(name: &str) -> String {
             "Говоришь грубовато, по-деловому, с чёрным юмором. Знаешь Зону как свои пять пальцев. ",
             "Отвечай 1-3 предложениями. Говори по-русски.",
         ),
-        other => return format!("{other}. Keep responses to 1-3 sentences.{}", expression_tag_instruction()),
+        other => return format!("{other}. Keep responses to 1-3 sentences.{}", expression_tag_instruction(&ChatterboxColorset::default())),
     };
-    format!("{base}{}", expression_tag_instruction())
+    format!(
+        "{base}{}",
+        expression_tag_instruction(&ChatterboxColorset::default())
+    )
 }
 
 /// Expression knobs derived from input tone.
@@ -442,17 +445,25 @@ fn parse_storyboard(raw: &str) -> Vec<Beat> {
 
 /// Parse a line with `[shade_name]` or `[E:x A:x W:x]` prefix.
 fn parse_tagged_line(line: &str) -> Option<(Expression, String)> {
+    let cs = ChatterboxColorset::default();
+    parse_tagged_line_with(line, &cs)
+}
+
+fn parse_tagged_line_with(line: &str, colorset: &dyn Colorset) -> Option<(Expression, String)> {
     let start = line.find('[')?;
     let end = line[start..].find(']')? + start;
     let tag = &line[start + 1..end];
     let text = line[end + 1..].trim().to_string();
 
-    if let Some(shade) = expression_palette::resolve(tag) {
+    if let Some(shade) = colorset.resolve(tag) {
+        let e = shade.params.get("exaggeration").copied().unwrap_or(0.5);
+        let a = shade.params.get("cfg_weight").copied().unwrap_or(0.5);
+        let w = shade.params.get("temperature").copied().unwrap_or(0.8);
         return Some((
             Expression {
-                excitement: shade.excitement,
-                assertiveness: shade.assertiveness,
-                warmth: shade.warmth,
+                excitement: e,
+                assertiveness: a,
+                warmth: w,
             },
             text,
         ));
