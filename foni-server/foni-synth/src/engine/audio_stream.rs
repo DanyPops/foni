@@ -5,20 +5,14 @@
 //!
 //! Both turn a continuous stream into discrete chunks for batch processing.
 
-const FRAME_SIZE: usize = 480; // 30ms at 16kHz
-const SAMPLE_RATE: u32 = 16_000;
-
 /// Silence threshold in linear RMS amplitude (~-30dB).
 const SILENCE_THRESHOLD: f32 = 0.03;
 
-/// Minimum silence duration to consider a boundary (in frames).
-const MIN_SILENCE_FRAMES: usize = 10; // 300ms
-
-/// Minimum speech duration to emit (in frames).
-const MIN_SPEECH_FRAMES: usize = 17; // ~500ms
-
-/// Maximum utterance before forced flush (in frames).
-const MAX_UTTERANCE_FRAMES: usize = 500; // ~15s
+/// Timing constants (in seconds, converted to frames at runtime).
+const FRAME_SECS: f32 = 0.03; // 30ms per frame
+const MIN_SILENCE_SECS: f32 = 0.4; // gap to split on
+const MIN_SPEECH_SECS: f32 = 0.5; // discard shorter
+const MAX_UTTERANCE_SECS: f32 = 15.0; // force-flush
 
 #[derive(Debug, Clone)]
 pub struct AudioStreamState {
@@ -26,6 +20,10 @@ pub struct AudioStreamState {
     silence_count: usize,
     speech_count: usize,
     is_speaking: bool,
+    frame_size: usize,
+    min_silence_frames: usize,
+    min_speech_frames: usize,
+    max_utterance_frames: usize,
 }
 
 pub struct DrainResult {
@@ -35,27 +33,31 @@ pub struct DrainResult {
     pub buffered_secs: f32,
 }
 
-impl Default for AudioStreamState {
-    fn default() -> Self {
-        Self {
-            buffer: Vec::with_capacity(SAMPLE_RATE as usize * 5),
-            silence_count: 0,
-            speech_count: 0,
-            is_speaking: false,
-        }
-    }
+pub fn fresh_state() -> AudioStreamState {
+    fresh_state_with_rate(16_000)
 }
 
-pub fn fresh_state() -> AudioStreamState {
-    AudioStreamState::default()
+pub fn fresh_state_with_rate(sample_rate: u32) -> AudioStreamState {
+    let frame_size = (sample_rate as f32 * FRAME_SECS) as usize;
+    AudioStreamState {
+        buffer: Vec::with_capacity(sample_rate as usize * 5),
+        silence_count: 0,
+        speech_count: 0,
+        is_speaking: false,
+        frame_size,
+        min_silence_frames: (MIN_SILENCE_SECS / FRAME_SECS) as usize,
+        min_speech_frames: (MIN_SPEECH_SECS / FRAME_SECS) as usize,
+        max_utterance_frames: (MAX_UTTERANCE_SECS / FRAME_SECS) as usize,
+    }
 }
 
 /// Feed raw audio samples (mono, 16kHz). Returns chunks when silence boundaries detected.
 pub fn feed_audio(state: &mut AudioStreamState, samples: &[f32]) -> DrainResult {
     let mut chunks = Vec::new();
 
-    for frame_start in (0..samples.len()).step_by(FRAME_SIZE) {
-        let frame_end = (frame_start + FRAME_SIZE).min(samples.len());
+    let frame_size = state.frame_size;
+    for frame_start in (0..samples.len()).step_by(frame_size) {
+        let frame_end = (frame_start + frame_size).min(samples.len());
         let frame = &samples[frame_start..frame_end];
 
         let rms = frame_rms(frame);
@@ -73,9 +75,9 @@ pub fn feed_audio(state: &mut AudioStreamState, samples: &[f32]) -> DrainResult 
             state.silence_count += 1;
             state.buffer.extend_from_slice(frame);
 
-            if state.silence_count >= MIN_SILENCE_FRAMES {
-                if state.speech_count >= MIN_SPEECH_FRAMES {
-                    let trim_samples = state.silence_count * FRAME_SIZE;
+            if state.silence_count >= state.min_silence_frames {
+                if state.speech_count >= state.min_speech_frames {
+                    let trim_samples = state.silence_count * frame_size;
                     let keep = state.buffer.len().saturating_sub(trim_samples);
                     let utterance = state.buffer[..keep].to_vec();
                     chunks.push(utterance);
@@ -87,7 +89,7 @@ pub fn feed_audio(state: &mut AudioStreamState, samples: &[f32]) -> DrainResult 
             }
         }
 
-        if state.speech_count >= MAX_UTTERANCE_FRAMES {
+        if state.speech_count >= state.max_utterance_frames {
             let utterance = std::mem::take(&mut state.buffer);
             chunks.push(utterance);
             state.speech_count = 0;
@@ -98,13 +100,13 @@ pub fn feed_audio(state: &mut AudioStreamState, samples: &[f32]) -> DrainResult 
 
     DrainResult {
         chunks,
-        buffered_secs: state.buffer.len() as f32 / SAMPLE_RATE as f32,
+        buffered_secs: state.buffer.len() as f32 / (state.frame_size as f32 / FRAME_SECS),
     }
 }
 
 /// Force-flush any buffered audio (end of stream).
 pub fn flush(state: &mut AudioStreamState) -> Option<Vec<f32>> {
-    if state.speech_count >= MIN_SPEECH_FRAMES {
+    if state.speech_count >= state.min_speech_frames {
         let utterance = std::mem::take(&mut state.buffer);
         state.speech_count = 0;
         state.silence_count = 0;
@@ -130,17 +132,16 @@ fn frame_rms(frame: &[f32]) -> f32 {
 mod tests {
     use super::*;
 
+    const SR: u32 = 16_000;
+
     fn silence(duration_ms: usize) -> Vec<f32> {
-        vec![0.0f32; SAMPLE_RATE as usize * duration_ms / 1000]
+        vec![0.0f32; SR as usize * duration_ms / 1000]
     }
 
     fn tone(duration_ms: usize, amplitude: f32) -> Vec<f32> {
-        let n = SAMPLE_RATE as usize * duration_ms / 1000;
+        let n = SR as usize * duration_ms / 1000;
         (0..n)
-            .map(|i| {
-                amplitude
-                    * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin()
-            })
+            .map(|i| amplitude * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SR as f32).sin())
             .collect()
     }
 
@@ -170,7 +171,7 @@ mod tests {
         let result = feed_audio(&mut state, &audio);
         assert_eq!(result.chunks.len(), 1);
         // Chunk should be roughly 1s of audio (silence trimmed)
-        let chunk_secs = result.chunks[0].len() as f32 / SAMPLE_RATE as f32;
+        let chunk_secs = result.chunks[0].len() as f32 / SR as f32;
         assert!(
             chunk_secs > 0.8 && chunk_secs < 1.2,
             "chunk was {chunk_secs}s"

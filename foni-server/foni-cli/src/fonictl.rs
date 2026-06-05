@@ -98,6 +98,22 @@ enum Cmd {
         max_secs: u32,
     },
 
+    /// Continuous conversation — speak naturally, pauses become chunk boundaries
+    Converse {
+        /// Persona
+        #[arg(short, long, default_value = "diomedes")]
+        persona: String,
+        /// Whisper language
+        #[arg(short, long, default_value = "en")]
+        lang: String,
+        /// Ollama model
+        #[arg(long, default_value = "llama3.2")]
+        llm: String,
+        /// Ollama URL
+        #[arg(long, env = "OLLAMA_URL", default_value = "http://localhost:11434")]
+        ollama_url: String,
+    },
+
     /// Synthesize text → WAV
     Synth {
         /// Text to speak (or reads from stdin)
@@ -1062,6 +1078,16 @@ fn main() {
             ollama_url,
         } => {
             if let Err(e) = cmd_voice::cmd_think(text.as_deref(), &persona, &model, &ollama_url) {
+                eprintln!("✗ {e}");
+            }
+        }
+        Cmd::Converse {
+            persona,
+            lang,
+            llm,
+            ollama_url,
+        } => {
+            if let Err(e) = cmd_voice::cmd_converse(server, &persona, &lang, &llm, &ollama_url) {
                 eprintln!("✗ {e}");
             }
         }
