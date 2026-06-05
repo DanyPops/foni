@@ -45,7 +45,7 @@ impl Energy {
 
 /// Cfg_weight axis: how tight/controlled the pacing is.
 #[derive(Debug, Clone, Copy)]
-pub enum Grip {
+pub enum Authority {
     Commanding, // 0.10
     Firm,       // 0.20
     Confident,  // 0.30
@@ -54,7 +54,7 @@ pub enum Grip {
     Loose,      // 0.60
 }
 
-impl Grip {
+impl Authority {
     pub fn value(self) -> f32 {
         match self {
             Self::Commanding => 0.10,
@@ -92,7 +92,7 @@ impl Tone {
 }
 
 /// Sugar: build a Chatterbox shade from labels.
-fn cb(name: &str, energy: Energy, grip: Grip, tone: Tone) -> Shade {
+fn cb(name: &str, energy: Energy, grip: Authority, tone: Tone) -> Shade {
     Shade {
         name: name.to_string(),
         params: HashMap::from([
@@ -143,21 +143,26 @@ pub struct ChatterboxColorset {
 
 impl Default for ChatterboxColorset {
     fn default() -> Self {
+        use Authority::*;
         use Energy::*;
-        use Grip::*;
         use Tone::*;
         Self {
             shades: vec![
-                //                 Energy      Grip         Tone
+                //                 Energy      Authority         Tone
                 cb("whisper", Flat, Loose, Cool),
-                cb("measured", Energy::Calm, Grip::Neutral, Tone::Neutral),
+                cb("measured", Energy::Calm, Authority::Neutral, Tone::Neutral),
                 cb("solemn", Flat, Confident, Cold),
-                cb("warm", Energy::Moderate, Grip::Neutral, Tone::Warm),
+                cb("warm", Energy::Moderate, Authority::Neutral, Tone::Warm),
                 cb("firm", Moderate, Firm, Cool),
-                cb("curious", Energy::Moderate, Grip::Tentative, Tone::Neutral),
+                cb(
+                    "curious",
+                    Energy::Moderate,
+                    Authority::Tentative,
+                    Tone::Neutral,
+                ),
                 cb("sarcastic", Moderate, Confident, Cold),
                 cb("commanding", Intense, Commanding, Cool),
-                cb("rallying", Energy::Intense, Grip::Firm, Tone::Neutral),
+                cb("rallying", Energy::Intense, Authority::Firm, Tone::Neutral),
                 cb("menacing", Strong, Commanding, Frozen),
                 cb("encouraging", Strong, Confident, Hot),
                 cb("battle_cry", Explosive, Commanding, Frozen),
@@ -280,11 +285,11 @@ mod tests {
 
     #[test]
     fn grip_labels_ordered() {
-        assert!(Grip::Commanding.value() < Grip::Firm.value());
-        assert!(Grip::Firm.value() < Grip::Confident.value());
-        assert!(Grip::Confident.value() < Grip::Neutral.value());
-        assert!(Grip::Neutral.value() < Grip::Tentative.value());
-        assert!(Grip::Tentative.value() < Grip::Loose.value());
+        assert!(Authority::Commanding.value() < Authority::Firm.value());
+        assert!(Authority::Firm.value() < Authority::Confident.value());
+        assert!(Authority::Confident.value() < Authority::Neutral.value());
+        assert!(Authority::Neutral.value() < Authority::Tentative.value());
+        assert!(Authority::Tentative.value() < Authority::Loose.value());
     }
 
     #[test]
@@ -298,7 +303,7 @@ mod tests {
 
     #[test]
     fn cb_sugar_matches_manual() {
-        let sugar = cb("test", Energy::Intense, Grip::Commanding, Tone::Cool);
+        let sugar = cb("test", Energy::Intense, Authority::Commanding, Tone::Cool);
         assert!((sugar.params["exaggeration"] - 1.20).abs() < 0.01);
         assert!((sugar.params["cfg_weight"] - 0.10).abs() < 0.01);
         assert!((sugar.params["temperature"] - 0.65).abs() < 0.01);
@@ -309,6 +314,6 @@ mod tests {
         let c = cs();
         let s = c.resolve("commanding").unwrap();
         assert!((s.params["exaggeration"] - Energy::Intense.value()).abs() < 0.01);
-        assert!((s.params["cfg_weight"] - Grip::Commanding.value()).abs() < 0.01);
+        assert!((s.params["cfg_weight"] - Authority::Commanding.value()).abs() < 0.01);
     }
 }
