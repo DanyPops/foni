@@ -1,5 +1,6 @@
 pub mod audio_stream;
 pub mod emotion;
+pub mod emotion_arc;
 pub mod engine_config;
 pub mod expression_palette;
 pub mod facade;
