@@ -28,7 +28,7 @@ impl Default for Emotion {
 
 /// Where a persona rests on an axis when input is neutral.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Anchor {
+pub enum Rest {
     Silent,   // 0.1
     Low,      // 0.3
     Mid,      // 0.5
@@ -36,7 +36,7 @@ pub enum Anchor {
     VeryHigh, // 0.9
 }
 
-impl Anchor {
+impl Rest {
     pub fn value(self) -> f32 {
         match self {
             Self::Silent => 0.1,
@@ -50,7 +50,7 @@ impl Anchor {
 
 /// How a persona responds to input on this axis.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Weight {
+pub enum Reacts {
     Inverts,   // -1.0 — opposite of input
     Counters,  // -0.5 — mildly opposite
     Ignores,   //  0.0 — stays at anchor
@@ -59,7 +59,7 @@ pub enum Weight {
     Amplifies, //  1.5 — exaggerates input
 }
 
-impl Weight {
+impl Reacts {
     pub fn value(self) -> f32 {
         match self {
             Self::Inverts => -1.0,
@@ -76,20 +76,20 @@ impl Weight {
 ///
 /// `output = anchor + (input - 0.5) * weight`, clamped to 0–1.
 #[derive(Debug, Clone, Copy)]
-pub struct AxisWeight {
+pub struct AxisReacts {
     pub anchor: f32,
     pub weight: f32,
 }
 
-impl AxisWeight {
+impl AxisReacts {
     pub fn apply(&self, input: f32) -> f32 {
         (self.anchor + (input - 0.5) * self.weight).clamp(0.0, 1.0)
     }
 }
 
-/// Sugar: build an AxisWeight from labels.
-pub fn axis(anchor: Anchor, weight: Weight) -> AxisWeight {
-    AxisWeight {
+/// Sugar: build an AxisReacts from labels.
+pub fn axis(anchor: Rest, weight: Reacts) -> AxisReacts {
+    AxisReacts {
         anchor: anchor.value(),
         weight: weight.value(),
     }
@@ -99,9 +99,9 @@ pub fn axis(anchor: Anchor, weight: Weight) -> AxisWeight {
 #[derive(Debug, Clone)]
 pub struct PersonaReaction {
     pub name: String,
-    pub arousal: AxisWeight,
-    pub dominance: AxisWeight,
-    pub valence: AxisWeight,
+    pub arousal: AxisReacts,
+    pub dominance: AxisReacts,
+    pub valence: AxisReacts,
 }
 
 impl PersonaReaction {
@@ -118,9 +118,9 @@ impl PersonaReaction {
 pub fn diomedes() -> PersonaReaction {
     PersonaReaction {
         name: "diomedes".into(),
-        arousal: axis(Anchor::High, Weight::Amplifies), // never calm, amplifies input
-        dominance: axis(Anchor::VeryHigh, Weight::Ignores), // always commanding
-        valence: axis(Anchor::Low, Weight::Dampens),    // cold, barely warms
+        arousal: axis(Rest::High, Reacts::Amplifies), // never calm, amplifies input
+        dominance: axis(Rest::VeryHigh, Reacts::Ignores), // always commanding
+        valence: axis(Rest::Low, Reacts::Dampens),    // cold, barely warms
     }
 }
 
@@ -128,9 +128,9 @@ pub fn diomedes() -> PersonaReaction {
 pub fn sidorovich() -> PersonaReaction {
     PersonaReaction {
         name: "sidorovich".into(),
-        arousal: axis(Anchor::Low, Weight::Dampens), // flat, barely reacts
-        dominance: axis(Anchor::Mid, Weight::Dampens), // casually in control
-        valence: axis(Anchor::Low, Weight::Counters), // you're happy → he's drier
+        arousal: axis(Rest::Low, Reacts::Dampens), // flat, barely reacts
+        dominance: axis(Rest::Mid, Reacts::Dampens), // casually in control
+        valence: axis(Rest::Low, Reacts::Counters), // you're happy → he's drier
     }
 }
 
@@ -140,9 +140,9 @@ pub fn persona(name: &str) -> PersonaReaction {
         "sidorovich" => sidorovich(),
         _ => PersonaReaction {
             name: name.into(),
-            arousal: axis(Anchor::Mid, Weight::Mirrors),
-            dominance: axis(Anchor::Mid, Weight::Mirrors),
-            valence: axis(Anchor::Mid, Weight::Mirrors),
+            arousal: axis(Rest::Mid, Reacts::Mirrors),
+            dominance: axis(Rest::Mid, Reacts::Mirrors),
+            valence: axis(Rest::Mid, Reacts::Mirrors),
         },
     }
 }
@@ -277,25 +277,25 @@ mod tests {
 
     #[test]
     fn anchor_values_ordered() {
-        assert!(Anchor::Silent.value() < Anchor::Low.value());
-        assert!(Anchor::Low.value() < Anchor::Mid.value());
-        assert!(Anchor::Mid.value() < Anchor::High.value());
-        assert!(Anchor::High.value() < Anchor::VeryHigh.value());
+        assert!(Rest::Silent.value() < Rest::Low.value());
+        assert!(Rest::Low.value() < Rest::Mid.value());
+        assert!(Rest::Mid.value() < Rest::High.value());
+        assert!(Rest::High.value() < Rest::VeryHigh.value());
     }
 
     #[test]
     fn weight_values_ordered() {
-        assert!(Weight::Inverts.value() < Weight::Counters.value());
-        assert!(Weight::Counters.value() < Weight::Ignores.value());
-        assert!(Weight::Ignores.value() < Weight::Dampens.value());
-        assert!(Weight::Dampens.value() < Weight::Mirrors.value());
-        assert!(Weight::Mirrors.value() < Weight::Amplifies.value());
+        assert!(Reacts::Inverts.value() < Reacts::Counters.value());
+        assert!(Reacts::Counters.value() < Reacts::Ignores.value());
+        assert!(Reacts::Ignores.value() < Reacts::Dampens.value());
+        assert!(Reacts::Dampens.value() < Reacts::Mirrors.value());
+        assert!(Reacts::Mirrors.value() < Reacts::Amplifies.value());
     }
 
     #[test]
     fn axis_sugar_matches_manual() {
-        let sugar = axis(Anchor::High, Weight::Amplifies);
-        let manual = AxisWeight {
+        let sugar = axis(Rest::High, Reacts::Amplifies);
+        let manual = AxisReacts {
             anchor: 0.7,
             weight: 1.5,
         };
@@ -303,11 +303,11 @@ mod tests {
         assert!((sugar.weight - manual.weight).abs() < 0.01);
     }
 
-    // ── AxisWeight ──
+    // ── AxisReacts ──
 
     #[test]
     fn weight_positive_amplifies() {
-        let w = AxisWeight {
+        let w = AxisReacts {
             anchor: 0.5,
             weight: 2.0,
         };
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn weight_zero_ignores_input() {
-        let w = AxisWeight {
+        let w = AxisReacts {
             anchor: 0.7,
             weight: 0.0,
         };
@@ -327,7 +327,7 @@ mod tests {
 
     #[test]
     fn weight_negative_inverts() {
-        let w = AxisWeight {
+        let w = AxisReacts {
             anchor: 0.5,
             weight: -1.0,
         };
@@ -337,12 +337,12 @@ mod tests {
 
     #[test]
     fn weight_clamps_to_unit() {
-        let w = AxisWeight {
+        let w = AxisReacts {
             anchor: 0.9,
             weight: 3.0,
         };
         assert!(w.apply(1.0) <= 1.0);
-        let w2 = AxisWeight {
+        let w2 = AxisReacts {
             anchor: 0.1,
             weight: 3.0,
         };
