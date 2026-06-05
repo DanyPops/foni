@@ -1,20 +1,13 @@
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use console::{style, Emoji};
 use foni_analyse::decode_wav;
 use foni_synth::engine::audio_stream;
+use tracing::{debug, info, warn};
 
 const STREAM_SAMPLE_RATE: u32 = 16_000;
 const RECORD_SAMPLE_RATE: u32 = 24_000;
-
-static MIC: Emoji = Emoji("🎙 ", ">> ");
-static PEN: Emoji = Emoji("📝 ", ">> ");
-static BRAIN: Emoji = Emoji("🧠 ", ">> ");
-static SPEAKER: Emoji = Emoji("🔊 ", ">> ");
-static CHECK: Emoji = Emoji("✓ ", "ok ");
-static CROSS: Emoji = Emoji("✗ ", "x  ");
 
 /// Read text from arg or stdin (for pipe support).
 pub fn resolve_text(arg: Option<String>) -> Option<String> {
@@ -52,11 +45,11 @@ pub fn cmd_rec(
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("foni_rec.wav"));
 
-    eprintln!(
-        "  {MIC}Recording ({}s max, silence {}dB/{}s to stop)",
+    info!(
+        "Recording ({}s max, silence {}dB/{}s to stop)",
         max_secs, silence_db, silence_secs
     );
-    eprintln!("  Press Ctrl+C to stop early\n");
+    info!("press Ctrl+C to stop");
 
     let raw_path = std::env::temp_dir().join("foni_rec_raw.wav");
     let status = Command::new("parecord")
@@ -97,11 +90,7 @@ pub fn cmd_rec(
     }
 
     let dur = wav_duration(&out_path).unwrap_or(0.0);
-    eprintln!(
-        "  {CHECK}{:.1}s recorded {}",
-        dur,
-        style(out_path.display()).dim()
-    );
+    info!("{:.1}s recorded {}", dur, out_path.display());
 
     println!("{}", out_path.display());
     Ok(())
@@ -125,12 +114,7 @@ pub fn cmd_transcribe(file: Option<&Path>, lang: &str, model: &str) -> Result<()
         return Err(format!("{}: not found", path.display()));
     }
 
-    eprintln!(
-        "  {PEN}Transcribing {} ({}, {})",
-        style(path.display()).dim(),
-        model,
-        lang
-    );
+    info!("Transcribing {} ({}, {})", path.display(), model, lang);
 
     let output = Command::new("whisper")
         .args([
@@ -158,7 +142,7 @@ pub fn cmd_transcribe(file: Option<&Path>, lang: &str, model: &str) -> Result<()
     let text = std::fs::read_to_string(&txt_path).map_err(|e| format!("read transcript: {e}"))?;
     let text = text.trim();
 
-    eprintln!("  {CHECK}\"{}\"", truncate(text, 80));
+    info!("\"{}\"", truncate(text, 80));
     println!("{text}");
     Ok(())
 }
@@ -169,6 +153,7 @@ pub fn cmd_think(
     persona: &str,
     model: &str,
     ollama_url: &str,
+    ctx: &VoiceContext,
 ) -> Result<(), String> {
     let input = match text {
         Some(t) => t.to_string(),
@@ -186,7 +171,12 @@ pub fn cmd_think(
         return Err("no input text".into());
     }
 
-    let reply = think_blocking(&input, persona, model, ollama_url)?;
+    let mut ctx = ctx.clone();
+    if ctx.domain.is_none() {
+        ctx.domain = detect_domain(&input, model, ollama_url);
+    }
+
+    let reply = think_blocking(&input, persona, model, ollama_url, &ctx)?;
     println!("{reply}");
     Ok(())
 }
@@ -199,14 +189,35 @@ pub fn cmd_reply(
     llm_model: &str,
     ollama_url: &str,
     max_secs: u32,
+    ctx: &VoiceContext,
+    file: Option<&Path>,
 ) -> Result<(), String> {
-    let wav_path = std::env::temp_dir().join("foni_reply.wav");
-    cmd_rec(Some(&wav_path), -30, 1.5, max_secs)?;
+    let wav_path = match file {
+        Some(f) => {
+            // Convert input file to mono WAV if needed
+            let tmp = std::env::temp_dir().join("foni_reply_input.wav");
+            let status = Command::new("ffmpeg")
+                .args(["-y", "-i"])
+                .arg(f)
+                .args(["-ac", "1", "-ar", "24000"])
+                .arg(&tmp)
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map_err(|e| format!("ffmpeg: {e}"))?;
+            if !status.success() {
+                return Err(format!("failed to convert {}", f.display()));
+            }
+            tmp
+        }
+        None => {
+            let tmp = std::env::temp_dir().join("foni_reply.wav");
+            cmd_rec(Some(&tmp), -30, 1.5, max_secs)?;
+            tmp
+        }
+    };
 
-    eprintln!();
     let expr = read_tone(&wav_path).unwrap_or_default();
 
-    eprintln!();
     cmd_transcribe(Some(&wav_path), lang, "base")?;
     let stem = wav_path.file_stem().ok_or("no stem")?;
     let txt_path = std::env::temp_dir().join(format!("{}.txt", stem.to_string_lossy()));
@@ -219,12 +230,13 @@ pub fn cmd_reply(
         return Err("nothing transcribed".into());
     }
 
-    eprintln!();
-    let reply = think_blocking(&input, persona, llm_model, ollama_url)?;
+    let mut ctx = ctx.clone();
+    if ctx.domain.is_none() {
+        ctx.domain = detect_domain(&input, llm_model, ollama_url);
+    }
+    let reply = think_blocking(&input, persona, llm_model, ollama_url, &ctx)?;
 
-    eprintln!();
-    eprintln!("  {SPEAKER}Synthesizing reply");
-    std::io::stderr().flush().ok();
+    info!("Synthesizing reply");
 
     let client = foni_client::FoniClient::new(server);
     let mut req = foni_client::SynthRequest {
@@ -245,7 +257,7 @@ pub fn cmd_reply(
     let out_path = std::env::temp_dir().join("foni_reply_out.wav");
     std::fs::write(&out_path, &wav_data.0).map_err(|e| format!("write: {e}"))?;
     let dur = wav_data.0.len() as f64 / (RECORD_SAMPLE_RATE * 2) as f64;
-    eprintln!("  {CHECK}{:.1}s", dur);
+    info!("{:.1}s", dur);
 
     Command::new("paplay")
         .arg(&out_path)
@@ -255,19 +267,24 @@ pub fn cmd_reply(
     Ok(())
 }
 
+/// Context layers for the LLM system prompt.
+/// `audience` is known before the conversation (who you're talking to).
+/// `domain` is derived from what they say — detected automatically, not pre-configured.
+#[derive(Clone, Default)]
+pub struct VoiceContext {
+    pub domain: Option<String>,
+    pub audience: Option<String>,
+}
+
 fn think_blocking(
     input: &str,
     persona: &str,
     model: &str,
     ollama_url: &str,
+    ctx: &VoiceContext,
 ) -> Result<String, String> {
-    let system = persona_prompt(persona);
-    eprintln!(
-        "  {BRAIN}Thinking ({}, persona={})",
-        model,
-        style(persona).cyan()
-    );
-    std::io::stderr().flush().ok();
+    let system = build_system_prompt(persona, ctx.domain.as_deref(), ctx.audience.as_deref());
+    info!("Thinking ({}, persona={})", model, persona);
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
@@ -295,11 +312,57 @@ fn think_blocking(
         .trim()
         .to_string();
 
-    eprintln!("  {CHECK}\"{}\"", truncate(&reply, 80));
+    info!("\"{}\"", truncate(&reply, 80));
     Ok(reply)
 }
 
-fn persona_prompt(name: &str) -> String {
+/// Build the full system prompt from persona + optional context layers.
+fn build_system_prompt(persona: &str, domain: Option<&str>, audience: Option<&str>) -> String {
+    let mut prompt = persona_base(persona);
+
+    if let Some(d) = domain {
+        prompt.push_str(&format!(
+            "\nThe conversation topic is: {d}. Frame your responses within this domain."
+        ));
+    }
+    if let Some(a) = audience {
+        prompt.push_str(&format!("\nYou are speaking to {a}. Address them by name."));
+    }
+
+    prompt
+}
+
+/// Detect the domain/topic from a transcript via a quick LLM call.
+fn detect_domain(text: &str, model: &str, ollama_url: &str) -> Option<String> {
+    info!("Detecting topic");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .ok()?;
+    let resp = client
+        .post(format!("{ollama_url}/api/generate"))
+        .json(&serde_json::json!({
+            "model": model,
+            "system": "Extract the topic of the following message in 2-5 words. Reply with ONLY the topic, nothing else.",
+            "prompt": text,
+            "stream": false,
+        }))
+        .send()
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: serde_json::Value = resp.json().ok()?;
+    let topic = body["response"].as_str()?.trim().to_string();
+    if topic.is_empty() {
+        None
+    } else {
+        info!("\"{topic}\"");
+        Some(topic)
+    }
+}
+
+fn persona_base(name: &str) -> String {
     match name {
         "diomedes" => concat!(
             "You are Captain Diomedes of the Blood Ravens Space Marines from Warhammer 40,000. ",
@@ -336,8 +399,6 @@ impl Default for Expression {
     }
 }
 
-static DIAL: Emoji = Emoji("🎛 ", "~~ ");
-
 const EMOTION_MODEL: &str = "training/models/emotion-ser/model.onnx";
 
 /// Analyze input audio via neural SER model, map to expression knobs.
@@ -361,8 +422,8 @@ pub fn read_tone(wav_path: &Path) -> Result<Expression, String> {
         warmth,
     };
 
-    eprintln!(
-        "  {DIAL}Excitement={:.2}  Assertiveness={:.2}  Warmth={:.2}",
+    info!(
+        "Excitement={:.2}  Assertiveness={:.2}  Warmth={:.2}",
         expr.excitement, expr.assertiveness, expr.warmth
     );
 
@@ -405,9 +466,10 @@ pub fn cmd_converse(
     lang: &str,
     llm_model: &str,
     ollama_url: &str,
+    ctx: &VoiceContext,
 ) -> Result<(), String> {
-    eprintln!("  {MIC}Listening (speak naturally, pauses = chunk boundaries)");
-    eprintln!("  Press Ctrl+C to stop\n");
+    info!("Listening (speak naturally, pauses = chunk boundaries)");
+    info!("press Ctrl+C to stop");
 
     let mut child = Command::new("parecord")
         .args([
@@ -437,7 +499,7 @@ pub fn cmd_converse(
             Ok(0) => break,
             Ok(n) => n,
             Err(e) => {
-                eprintln!("  {CROSS}read: {e}");
+                warn!("read: {e}");
                 break;
             }
         };
@@ -452,12 +514,12 @@ pub fn cmd_converse(
         for utterance in result.chunks {
             turn += 1;
             let dur = utterance.len() as f32 / STREAM_SAMPLE_RATE as f32;
-            eprintln!("\n  ── turn {turn} ({dur:.1}s) ──");
+            info!(turn, duration_secs = dur, "utterance received");
 
-            if let Err(e) =
-                process_utterance(server, &utterance, persona, lang, llm_model, ollama_url)
-            {
-                eprintln!("  {CROSS}{e}");
+            if let Err(e) = process_utterance(
+                server, &utterance, persona, lang, llm_model, ollama_url, ctx,
+            ) {
+                warn!("{e}");
             }
         }
     }
@@ -466,10 +528,11 @@ pub fn cmd_converse(
     if let Some(utterance) = audio_stream::flush(&mut stream_state) {
         turn += 1;
         let dur = utterance.len() as f32 / STREAM_SAMPLE_RATE as f32;
-        eprintln!("\n  ── turn {turn} ({dur:.1}s, flush) ──");
-        if let Err(e) = process_utterance(server, &utterance, persona, lang, llm_model, ollama_url)
-        {
-            eprintln!("  {CROSS}{e}");
+        info!(turn, duration_secs = dur, "utterance flushed");
+        if let Err(e) = process_utterance(
+            server, &utterance, persona, lang, llm_model, ollama_url, ctx,
+        ) {
+            warn!("{e}");
         }
     }
 
@@ -485,12 +548,13 @@ fn process_utterance(
     lang: &str,
     llm_model: &str,
     ollama_url: &str,
+    ctx: &VoiceContext,
 ) -> Result<(), String> {
     // 1. SER — read tone from raw samples
     let expr = match tone_from_samples(samples_16k) {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("  {DIAL}SER skipped: {e}");
+            info!("SER skipped: {e}");
             Expression::default()
         }
     };
@@ -511,12 +575,15 @@ fn process_utterance(
         return Err("nothing transcribed".into());
     }
 
-    // 3. Think
-    let reply = think_blocking(&input, persona, llm_model, ollama_url)?;
+    // 3. Detect domain + think
+    let mut ctx = ctx.clone();
+    if ctx.domain.is_none() {
+        ctx.domain = detect_domain(&input, llm_model, ollama_url);
+    }
+    let reply = think_blocking(&input, persona, llm_model, ollama_url, &ctx)?;
 
     // 4. Synthesize + play
-    eprintln!("  {SPEAKER}Synthesizing");
-    std::io::stderr().flush().ok();
+    info!("Synthesizing");
 
     let client = foni_client::FoniClient::new(server);
     let mut req = foni_client::SynthRequest {
@@ -559,8 +626,8 @@ fn tone_from_samples(samples_16k: &[f32]) -> Result<Expression, String> {
         warmth: 0.4 + tone.valence * 0.8,
     };
 
-    eprintln!(
-        "  {DIAL}Excitement={:.2}  Assertiveness={:.2}  Warmth={:.2}",
+    info!(
+        "Excitement={:.2}  Assertiveness={:.2}  Warmth={:.2}",
         expr.excitement, expr.assertiveness, expr.warmth
     );
     Ok(expr)

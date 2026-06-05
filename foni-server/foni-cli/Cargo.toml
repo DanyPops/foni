@@ -32,6 +32,8 @@ tabled       = "0.21"
 chrono       = "0.4"
 owo-colors   = "4"
 console      = "0.15"
+tracing      = { workspace = true }
+tracing-subscriber = { workspace = true }
 ratatui      = "0.29"
 crossterm    = { version = "0.28", features = ["event-stream"] }
 

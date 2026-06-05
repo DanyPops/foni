@@ -77,10 +77,16 @@ enum Cmd {
         /// Ollama URL
         #[arg(long, env = "OLLAMA_URL", default_value = "http://localhost:11434")]
         ollama_url: String,
+        /// Who you're speaking to (e.g. "Julian")
+        #[arg(short, long)]
+        audience: Option<String>,
     },
 
-    /// Full voice loop: record → transcribe → think → speak
+    /// Full voice loop: file or mic → transcribe → think → speak
     Reply {
+        /// Audio file to respond to (skips mic recording)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
         /// Persona
         #[arg(short, long, default_value = "diomedes")]
         persona: String,
@@ -93,9 +99,12 @@ enum Cmd {
         /// Ollama URL
         #[arg(long, env = "OLLAMA_URL", default_value = "http://localhost:11434")]
         ollama_url: String,
-        /// Max recording seconds
+        /// Max recording seconds (mic mode)
         #[arg(long, default_value_t = 30)]
         max_secs: u32,
+        /// Who you're speaking to
+        #[arg(short, long)]
+        audience: Option<String>,
     },
 
     /// Continuous conversation — speak naturally, pauses become chunk boundaries
@@ -112,6 +121,9 @@ enum Cmd {
         /// Ollama URL
         #[arg(long, env = "OLLAMA_URL", default_value = "http://localhost:11434")]
         ollama_url: String,
+        /// Who you're speaking to
+        #[arg(short, long)]
+        audience: Option<String>,
     },
 
     /// Synthesize text → WAV
@@ -1047,6 +1059,15 @@ fn cmd_cloud(action: CloudAction) {
 }
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "fonictl=info,foni_synth=info,foni_analyse=info".into()),
+        )
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .init();
+
     let cli = Cli::parse();
     let server = cli.server.trim_end_matches('/');
 
@@ -1076,8 +1097,16 @@ fn main() {
             persona,
             model,
             ollama_url,
+
+            audience,
         } => {
-            if let Err(e) = cmd_voice::cmd_think(text.as_deref(), &persona, &model, &ollama_url) {
+            let ctx = cmd_voice::VoiceContext {
+                domain: None,
+                audience: audience.clone(),
+            };
+            if let Err(e) =
+                cmd_voice::cmd_think(text.as_deref(), &persona, &model, &ollama_url, &ctx)
+            {
                 eprintln!("✗ {e}");
             }
         }
@@ -1086,21 +1115,42 @@ fn main() {
             lang,
             llm,
             ollama_url,
+
+            audience,
         } => {
-            if let Err(e) = cmd_voice::cmd_converse(server, &persona, &lang, &llm, &ollama_url) {
+            let ctx = cmd_voice::VoiceContext {
+                domain: None,
+                audience: audience.clone(),
+            };
+            if let Err(e) =
+                cmd_voice::cmd_converse(server, &persona, &lang, &llm, &ollama_url, &ctx)
+            {
                 eprintln!("✗ {e}");
             }
         }
         Cmd::Reply {
+            file,
             persona,
             lang,
             llm,
             ollama_url,
             max_secs,
+            audience,
         } => {
-            if let Err(e) =
-                cmd_voice::cmd_reply(server, &persona, &lang, &llm, &ollama_url, max_secs)
-            {
+            let ctx = cmd_voice::VoiceContext {
+                domain: None,
+                audience: audience.clone(),
+            };
+            if let Err(e) = cmd_voice::cmd_reply(
+                server,
+                &persona,
+                &lang,
+                &llm,
+                &ollama_url,
+                max_secs,
+                &ctx,
+                file.as_deref(),
+            ) {
                 eprintln!("✗ {e}");
             }
         }

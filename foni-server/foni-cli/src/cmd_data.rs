@@ -28,17 +28,33 @@ impl Default for FetchOpts {
 pub fn cmd_fetch(url: &str, out: &Path, split: bool, opts: &FetchOpts) -> Result<(), String> {
     std::fs::create_dir_all(out).map_err(|e| format!("cannot create {}: {e}", out.display()))?;
 
-    // 1. Download via yt-dlp
     let raw = out.join("_raw.wav");
-    eprintln!("  ▶  Downloading {url}");
-    let status = Command::new("yt-dlp")
-        .args(["-x", "--audio-format", "wav", "-o"])
-        .arg(&raw)
-        .arg(url)
-        .status()
-        .map_err(|e| format!("yt-dlp not found: {e}"))?;
-    if !status.success() {
-        return Err("yt-dlp failed".into());
+    let src = Path::new(url);
+    if src.exists() {
+        // Local file — convert directly
+        eprintln!("  ▶  Converting local file {url}");
+        let status = Command::new("ffmpeg")
+            .args(["-y", "-i"])
+            .arg(src)
+            .arg(&raw)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map_err(|e| format!("ffmpeg: {e}"))?;
+        if !status.success() {
+            return Err("ffmpeg conversion failed".into());
+        }
+    } else {
+        // URL — download via yt-dlp
+        eprintln!("  ▶  Downloading {url}");
+        let status = Command::new("yt-dlp")
+            .args(["-x", "--audio-format", "wav", "-o"])
+            .arg(&raw)
+            .arg(url)
+            .status()
+            .map_err(|e| format!("yt-dlp not found: {e}"))?;
+        if !status.success() {
+            return Err("yt-dlp failed".into());
+        }
     }
 
     // 2. Convert to mono 24kHz
