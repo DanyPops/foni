@@ -14,6 +14,95 @@ pub struct Shade {
     pub params: HashMap<String, f32>,
 }
 
+// ── Chatterbox axis labels ──
+// Each axis gets its own label enum — what you hear, not the API name.
+
+/// Exaggeration axis: how animated/energetic the voice sounds.
+#[derive(Debug, Clone, Copy)]
+pub enum Energy {
+    Flat,      // 0.30
+    Calm,      // 0.50
+    Moderate,  // 0.70
+    Strong,    // 1.00
+    Intense,   // 1.20
+    Explosive, // 1.50
+    Extreme,   // 1.70
+}
+
+impl Energy {
+    pub fn value(self) -> f32 {
+        match self {
+            Self::Flat => 0.30,
+            Self::Calm => 0.50,
+            Self::Moderate => 0.70,
+            Self::Strong => 1.00,
+            Self::Intense => 1.20,
+            Self::Explosive => 1.50,
+            Self::Extreme => 1.70,
+        }
+    }
+}
+
+/// Cfg_weight axis: how tight/controlled the pacing is.
+#[derive(Debug, Clone, Copy)]
+pub enum Grip {
+    Commanding, // 0.10
+    Firm,       // 0.20
+    Confident,  // 0.30
+    Neutral,    // 0.40
+    Tentative,  // 0.50
+    Loose,      // 0.60
+}
+
+impl Grip {
+    pub fn value(self) -> f32 {
+        match self {
+            Self::Commanding => 0.10,
+            Self::Firm => 0.20,
+            Self::Confident => 0.30,
+            Self::Neutral => 0.40,
+            Self::Tentative => 0.50,
+            Self::Loose => 0.60,
+        }
+    }
+}
+
+/// Temperature axis: emotional tone from hostile to friendly.
+#[derive(Debug, Clone, Copy)]
+pub enum Tone {
+    Frozen,  // 0.30
+    Cold,    // 0.50
+    Cool,    // 0.65
+    Neutral, // 0.80
+    Warm,    // 1.00
+    Hot,     // 1.20
+}
+
+impl Tone {
+    pub fn value(self) -> f32 {
+        match self {
+            Self::Frozen => 0.30,
+            Self::Cold => 0.50,
+            Self::Cool => 0.65,
+            Self::Neutral => 0.80,
+            Self::Warm => 1.00,
+            Self::Hot => 1.20,
+        }
+    }
+}
+
+/// Sugar: build a Chatterbox shade from labels.
+fn cb(name: &str, energy: Energy, grip: Grip, tone: Tone) -> Shade {
+    Shade {
+        name: name.to_string(),
+        params: HashMap::from([
+            ("exaggeration".to_string(), energy.value()),
+            ("cfg_weight".to_string(), grip.value()),
+            ("temperature".to_string(), tone.value()),
+        ]),
+    }
+}
+
 /// A model's complete expression vocabulary.
 pub trait Colorset: Send + Sync {
     fn model_name(&self) -> &str;
@@ -47,13 +136,6 @@ pub trait Colorset: Send + Sync {
     }
 }
 
-fn shade(name: &str, params: &[(&str, f32)]) -> Shade {
-    Shade {
-        name: name.to_string(),
-        params: params.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
-    }
-}
-
 /// Chatterbox Multilingual — 3 axes: exaggeration, cfg_weight, temperature.
 pub struct ChatterboxColorset {
     shades: Vec<Shade>,
@@ -61,124 +143,26 @@ pub struct ChatterboxColorset {
 
 impl Default for ChatterboxColorset {
     fn default() -> Self {
+        use Energy::*;
+        use Grip::*;
+        use Tone::*;
         Self {
             shades: vec![
-                // Low energy
-                shade(
-                    "whisper",
-                    &[
-                        ("exaggeration", 0.30),
-                        ("cfg_weight", 0.50),
-                        ("temperature", 0.60),
-                    ],
-                ),
-                shade(
-                    "measured",
-                    &[
-                        ("exaggeration", 0.50),
-                        ("cfg_weight", 0.40),
-                        ("temperature", 0.80),
-                    ],
-                ),
-                shade(
-                    "solemn",
-                    &[
-                        ("exaggeration", 0.40),
-                        ("cfg_weight", 0.35),
-                        ("temperature", 0.45),
-                    ],
-                ),
-                // Mid energy
-                shade(
-                    "warm",
-                    &[
-                        ("exaggeration", 0.60),
-                        ("cfg_weight", 0.40),
-                        ("temperature", 1.10),
-                    ],
-                ),
-                shade(
-                    "firm",
-                    &[
-                        ("exaggeration", 0.70),
-                        ("cfg_weight", 0.25),
-                        ("temperature", 0.70),
-                    ],
-                ),
-                shade(
-                    "curious",
-                    &[
-                        ("exaggeration", 0.70),
-                        ("cfg_weight", 0.45),
-                        ("temperature", 0.90),
-                    ],
-                ),
-                shade(
-                    "sarcastic",
-                    &[
-                        ("exaggeration", 0.65),
-                        ("cfg_weight", 0.35),
-                        ("temperature", 0.50),
-                    ],
-                ),
-                // High energy
-                shade(
-                    "commanding",
-                    &[
-                        ("exaggeration", 1.20),
-                        ("cfg_weight", 0.15),
-                        ("temperature", 0.60),
-                    ],
-                ),
-                shade(
-                    "rallying",
-                    &[
-                        ("exaggeration", 1.30),
-                        ("cfg_weight", 0.20),
-                        ("temperature", 0.90),
-                    ],
-                ),
-                shade(
-                    "menacing",
-                    &[
-                        ("exaggeration", 1.10),
-                        ("cfg_weight", 0.15),
-                        ("temperature", 0.35),
-                    ],
-                ),
-                shade(
-                    "encouraging",
-                    &[
-                        ("exaggeration", 0.90),
-                        ("cfg_weight", 0.30),
-                        ("temperature", 1.20),
-                    ],
-                ),
-                // Peak energy
-                shade(
-                    "battle_cry",
-                    &[
-                        ("exaggeration", 1.50),
-                        ("cfg_weight", 0.10),
-                        ("temperature", 0.40),
-                    ],
-                ),
-                shade(
-                    "rage",
-                    &[
-                        ("exaggeration", 1.70),
-                        ("cfg_weight", 0.10),
-                        ("temperature", 0.30),
-                    ],
-                ),
-                shade(
-                    "triumphant",
-                    &[
-                        ("exaggeration", 1.40),
-                        ("cfg_weight", 0.15),
-                        ("temperature", 1.00),
-                    ],
-                ),
+                //                 Energy      Grip         Tone
+                cb("whisper", Flat, Loose, Cool),
+                cb("measured", Energy::Calm, Grip::Neutral, Tone::Neutral),
+                cb("solemn", Flat, Confident, Cold),
+                cb("warm", Energy::Moderate, Grip::Neutral, Tone::Warm),
+                cb("firm", Moderate, Firm, Cool),
+                cb("curious", Energy::Moderate, Grip::Tentative, Tone::Neutral),
+                cb("sarcastic", Moderate, Confident, Cold),
+                cb("commanding", Intense, Commanding, Cool),
+                cb("rallying", Energy::Intense, Grip::Firm, Tone::Neutral),
+                cb("menacing", Strong, Commanding, Frozen),
+                cb("encouraging", Strong, Confident, Hot),
+                cb("battle_cry", Explosive, Commanding, Frozen),
+                cb("rage", Extreme, Commanding, Frozen),
+                cb("triumphant", Intense, Commanding, Warm),
             ],
         }
     }
@@ -280,5 +264,51 @@ mod tests {
             .fold(f32::MIN, f32::max);
         assert!(min < 0.4);
         assert!(max > 1.5);
+    }
+
+    // ── DSL labels ──
+
+    #[test]
+    fn energy_labels_ordered() {
+        assert!(Energy::Flat.value() < Energy::Calm.value());
+        assert!(Energy::Calm.value() < Energy::Moderate.value());
+        assert!(Energy::Moderate.value() < Energy::Strong.value());
+        assert!(Energy::Strong.value() < Energy::Intense.value());
+        assert!(Energy::Intense.value() < Energy::Explosive.value());
+        assert!(Energy::Explosive.value() < Energy::Extreme.value());
+    }
+
+    #[test]
+    fn grip_labels_ordered() {
+        assert!(Grip::Commanding.value() < Grip::Firm.value());
+        assert!(Grip::Firm.value() < Grip::Confident.value());
+        assert!(Grip::Confident.value() < Grip::Neutral.value());
+        assert!(Grip::Neutral.value() < Grip::Tentative.value());
+        assert!(Grip::Tentative.value() < Grip::Loose.value());
+    }
+
+    #[test]
+    fn tone_labels_ordered() {
+        assert!(Tone::Frozen.value() < Tone::Cold.value());
+        assert!(Tone::Cold.value() < Tone::Cool.value());
+        assert!(Tone::Cool.value() < Tone::Neutral.value());
+        assert!(Tone::Neutral.value() < Tone::Warm.value());
+        assert!(Tone::Warm.value() < Tone::Hot.value());
+    }
+
+    #[test]
+    fn cb_sugar_matches_manual() {
+        let sugar = cb("test", Energy::Intense, Grip::Commanding, Tone::Cool);
+        assert!((sugar.params["exaggeration"] - 1.20).abs() < 0.01);
+        assert!((sugar.params["cfg_weight"] - 0.10).abs() < 0.01);
+        assert!((sugar.params["temperature"] - 0.65).abs() < 0.01);
+    }
+
+    #[test]
+    fn commanding_shade_matches_labels() {
+        let c = cs();
+        let s = c.resolve("commanding").unwrap();
+        assert!((s.params["exaggeration"] - Energy::Intense.value()).abs() < 0.01);
+        assert!((s.params["cfg_weight"] - Grip::Commanding.value()).abs() < 0.01);
     }
 }
