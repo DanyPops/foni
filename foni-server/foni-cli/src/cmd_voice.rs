@@ -1,10 +1,12 @@
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use console::{style, Emoji};
 use foni_analyse::decode_wav;
+use foni_synth::engine::audio_stream;
 
+const STREAM_SAMPLE_RATE: u32 = 16_000;
 const RECORD_SAMPLE_RATE: u32 = 24_000;
 
 static MIC: Emoji = Emoji("🎙 ", ">> ");
@@ -394,4 +396,193 @@ fn wav_duration(path: &Path) -> Option<f64> {
         .trim()
         .parse::<f64>()
         .ok()
+}
+
+/// Continuous conversation loop: mic → chunk → SER + transcribe → think → synth → play.
+pub fn cmd_converse(
+    server: &str,
+    persona: &str,
+    lang: &str,
+    llm_model: &str,
+    ollama_url: &str,
+) -> Result<(), String> {
+    eprintln!("  {MIC}Listening (speak naturally, pauses = chunk boundaries)");
+    eprintln!("  Press Ctrl+C to stop\n");
+
+    let mut child = Command::new("parecord")
+        .args([
+            "--raw",
+            "--format=s16le",
+            &format!("--rate={STREAM_SAMPLE_RATE}"),
+            "--channels=1",
+            "/dev/stdout",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("parecord: {e}"))?;
+
+    let stdout = child.stdout.take().ok_or("no stdout from parecord")?;
+
+    let mut stream_state = audio_stream::fresh_state();
+    let mut turn = 0u32;
+
+    // Read 100ms chunks at a time (3200 bytes = 1600 i16 samples)
+    let read_size = (STREAM_SAMPLE_RATE as usize / 10) * 2; // bytes
+    let mut raw_buf = vec![0u8; read_size];
+    let mut reader = std::io::BufReader::new(stdout);
+
+    loop {
+        let bytes_read = match reader.read(&mut raw_buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("  {CROSS}read: {e}");
+                break;
+            }
+        };
+
+        let samples: Vec<f32> = raw_buf[..bytes_read]
+            .chunks_exact(2)
+            .map(|pair| i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32768.0)
+            .collect();
+
+        let result = audio_stream::feed_audio(&mut stream_state, &samples);
+
+        for utterance in result.chunks {
+            turn += 1;
+            let dur = utterance.len() as f32 / STREAM_SAMPLE_RATE as f32;
+            eprintln!("\n  ── turn {turn} ({dur:.1}s) ──");
+
+            if let Err(e) =
+                process_utterance(server, &utterance, persona, lang, llm_model, ollama_url)
+            {
+                eprintln!("  {CROSS}{e}");
+            }
+        }
+    }
+
+    // Flush any remaining audio
+    if let Some(utterance) = audio_stream::flush(&mut stream_state) {
+        turn += 1;
+        let dur = utterance.len() as f32 / STREAM_SAMPLE_RATE as f32;
+        eprintln!("\n  ── turn {turn} ({dur:.1}s, flush) ──");
+        if let Err(e) = process_utterance(server, &utterance, persona, lang, llm_model, ollama_url)
+        {
+            eprintln!("  {CROSS}{e}");
+        }
+    }
+
+    child.kill().ok();
+    Ok(())
+}
+
+/// Process a single utterance through the full pipeline.
+fn process_utterance(
+    server: &str,
+    samples_16k: &[f32],
+    persona: &str,
+    lang: &str,
+    llm_model: &str,
+    ollama_url: &str,
+) -> Result<(), String> {
+    // 1. SER — read tone from raw samples
+    let expr = match tone_from_samples(samples_16k) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("  {DIAL}SER skipped: {e}");
+            Expression::default()
+        }
+    };
+
+    // 2. Transcribe — write temp WAV, run Whisper
+    let wav_path = std::env::temp_dir().join("foni_converse_chunk.wav");
+    write_wav_16k(samples_16k, &wav_path)?;
+    cmd_transcribe(Some(&wav_path), lang, "base")?;
+
+    let stem = wav_path.file_stem().ok_or("no stem")?;
+    let txt_path = std::env::temp_dir().join(format!("{}.txt", stem.to_string_lossy()));
+    let input = std::fs::read_to_string(&txt_path)
+        .map_err(|e| format!("read transcript: {e}"))?
+        .trim()
+        .to_string();
+
+    if input.is_empty() {
+        return Err("nothing transcribed".into());
+    }
+
+    // 3. Think
+    let reply = think_blocking(&input, persona, llm_model, ollama_url)?;
+
+    // 4. Synthesize + play
+    eprintln!("  {SPEAKER}Synthesizing");
+    std::io::stderr().flush().ok();
+
+    let client = foni_client::FoniClient::new(server);
+    let mut req = foni_client::SynthRequest {
+        text: reply,
+        voice: lang.into(),
+        speed: 150,
+        model: Some("sidorovich".into()),
+        ..Default::default()
+    };
+    req.exaggeration = Some(expr.excitement);
+    req.cfg_weight = Some(expr.assertiveness);
+    req.temperature = Some(expr.warmth);
+
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio: {e}"))?;
+    let wav_data = rt
+        .block_on(client.synthesize(&req))
+        .map_err(|e| format!("synth: {e}"))?;
+
+    let out_path = std::env::temp_dir().join("foni_converse_out.wav");
+    std::fs::write(&out_path, &wav_data.0).map_err(|e| format!("write: {e}"))?;
+
+    Command::new("paplay")
+        .arg(&out_path)
+        .status()
+        .map_err(|e| format!("paplay: {e}"))?;
+
+    Ok(())
+}
+
+fn tone_from_samples(samples_16k: &[f32]) -> Result<Expression, String> {
+    let model_path = PathBuf::from(EMOTION_MODEL);
+    let mut session = foni_analyse::tone::load_session(&model_path)
+        .ok_or_else(|| format!("SER model not found: {}", model_path.display()))?;
+
+    let tone = foni_analyse::tone::read_tone(&mut session, samples_16k, STREAM_SAMPLE_RATE)?;
+
+    let expr = Expression {
+        excitement: 0.3 + tone.arousal * 1.2,
+        assertiveness: 0.6 - tone.dominance * 0.4,
+        warmth: 0.4 + tone.valence * 0.8,
+    };
+
+    eprintln!(
+        "  {DIAL}Excitement={:.2}  Assertiveness={:.2}  Warmth={:.2}",
+        expr.excitement, expr.assertiveness, expr.warmth
+    );
+    Ok(expr)
+}
+
+fn write_wav_16k(samples: &[f32], path: &Path) -> Result<(), String> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: STREAM_SAMPLE_RATE,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer =
+        hound::WavWriter::create(path, spec).map_err(|e| format!("wav create: {e}"))?;
+    for &s in samples {
+        let i = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
+        writer
+            .write_sample(i)
+            .map_err(|e| format!("wav write: {e}"))?;
+    }
+    writer
+        .finalize()
+        .map_err(|e| format!("wav finalize: {e}"))?;
+    Ok(())
 }

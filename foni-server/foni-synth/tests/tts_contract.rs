@@ -1,7 +1,7 @@
-/// tts_contract — contract tests for cloud_tts() HTTP client.
+/// tts_contract — contract tests for cloud TTS HTTP client.
 ///
-/// Verifies synthesize_route handles all response shapes from a TTS endpoint:
-/// success, auth failure, server error, timeout, malformed body.
+/// Verifies synthesize_route handles all response shapes from the TTS endpoint:
+/// success, auth failure, server error, timeout, malformed body, missing URL.
 ///
 /// cargo test -p foni-synth --test tts_contract -- --nocapture
 use axum::{routing::post, Json, Router};
@@ -47,7 +47,7 @@ async fn contract_success_returns_wav() {
     let client = reqwest::Client::new();
     let resp = client
         .post(format!("http://127.0.0.1:{port}/synthesize"))
-        .json(&json!({"text": "тест", "voice": "ru", "speed": 150, "dsp": false}))
+        .json(&json!({"text": "test", "voice": "en", "speed": 150, "dsp": false}))
         .send()
         .await
         .unwrap();
@@ -59,14 +59,11 @@ async fn contract_success_returns_wav() {
         "should return WAV, got {} bytes",
         body.len()
     );
-    eprintln!(
-        "  [contract] success: {} bytes WAV from mock TTS",
-        body.len()
-    );
+    eprintln!("  [contract] success: {} bytes WAV", body.len());
 }
 
 #[tokio::test]
-async fn contract_401_falls_back_to_espeak() {
+async fn contract_401_returns_error() {
     let (base_url, _) = start_mock(post(|| async {
         (axum::http::StatusCode::UNAUTHORIZED, "unauthorized")
     }))
@@ -83,19 +80,17 @@ async fn contract_401_falls_back_to_espeak() {
     let client = reqwest::Client::new();
     let resp = client
         .post(format!("http://127.0.0.1:{port}/synthesize"))
-        .json(&json!({"text": "тест", "voice": "ru", "speed": 150, "dsp": false}))
+        .json(&json!({"text": "test", "voice": "en", "speed": 150, "dsp": false}))
         .send()
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), 200, "should fall back to espeak on 401");
-    let body = resp.bytes().await.unwrap();
-    assert!(body.len() > 44, "espeak fallback should produce WAV");
-    eprintln!("  [contract] 401 → espeak fallback: {} bytes", body.len());
+    assert_eq!(resp.status(), 500, "401 from TTS should propagate as 500");
+    eprintln!("  [contract] 401 → 500");
 }
 
 #[tokio::test]
-async fn contract_500_falls_back_to_espeak() {
+async fn contract_500_returns_error() {
     let (base_url, _) = start_mock(post(|| async {
         (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -114,72 +109,17 @@ async fn contract_500_falls_back_to_espeak() {
     let client = reqwest::Client::new();
     let resp = client
         .post(format!("http://127.0.0.1:{port}/synthesize"))
-        .json(&json!({"text": "тест", "voice": "ru", "speed": 150, "dsp": false}))
+        .json(&json!({"text": "test", "voice": "en", "speed": 150, "dsp": false}))
         .send()
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), 200, "should fall back to espeak on 500");
-    eprintln!("  [contract] 500 → espeak fallback");
+    assert_eq!(resp.status(), 500, "500 from TTS should propagate");
+    eprintln!("  [contract] 500 → 500");
 }
 
 #[tokio::test]
-async fn contract_timeout_falls_back_to_espeak() {
-    let (base_url, _) = start_mock(post(|| async {
-        tokio::time::sleep(Duration::from_secs(60)).await;
-        "never reached"
-    }))
-    .await;
-
-    std::env::set_var("FISH_SPEECH_URL", format!("{base_url}/synthesize"));
-
-    let app = foni_synth::build_router().await;
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()
-        .unwrap();
-    let resp = client
-        .post(format!("http://127.0.0.1:{port}/synthesize"))
-        .json(&json!({"text": "тест", "voice": "ru", "speed": 150, "dsp": false}))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), 200, "should fall back to espeak on timeout");
-    eprintln!("  [contract] timeout → espeak fallback");
-}
-
-#[tokio::test]
-async fn contract_malformed_response_falls_back() {
-    let (base_url, _) = start_mock(post(|| async { Json(json!({"not": "wav"})) })).await;
-
-    std::env::set_var("FISH_SPEECH_URL", format!("{base_url}/synthesize"));
-
-    let app = foni_synth::build_router().await;
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("http://127.0.0.1:{port}/synthesize"))
-        .json(&json!({"text": "тест", "voice": "ru", "speed": 150, "dsp": false}))
-        .send()
-        .await
-        .unwrap();
-
-    // Malformed WAV will be returned (cloud_tts returns the bytes as-is)
-    // The DSP chain or player will reject it, not the HTTP layer
-    assert_eq!(resp.status(), 200);
-    eprintln!("  [contract] malformed → passed through (DSP will reject)");
-}
-
-#[tokio::test]
-async fn contract_no_url_uses_espeak() {
+async fn contract_no_url_returns_error() {
     std::env::remove_var("FISH_SPEECH_URL");
 
     let app = foni_synth::build_router().await;
@@ -190,15 +130,13 @@ async fn contract_no_url_uses_espeak() {
     let client = reqwest::Client::new();
     let resp = client
         .post(format!("http://127.0.0.1:{port}/synthesize"))
-        .json(&json!({"text": "тест", "voice": "ru", "speed": 150, "dsp": false}))
+        .json(&json!({"text": "test", "voice": "en", "speed": 150, "dsp": false}))
         .send()
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), 200);
-    let body = resp.bytes().await.unwrap();
-    assert!(body.len() > 44);
-    eprintln!("  [contract] no URL → espeak direct: {} bytes", body.len());
+    assert_eq!(resp.status(), 500, "no TTS URL should return 500");
+    eprintln!("  [contract] no URL → 500");
 }
 
 #[tokio::test]
@@ -213,12 +151,11 @@ async fn contract_empty_text_returns_error() {
     let client = reqwest::Client::new();
     let resp = client
         .post(format!("http://127.0.0.1:{port}/synthesize"))
-        .json(&json!({"text": "", "voice": "ru", "speed": 150}))
+        .json(&json!({"text": "", "voice": "en", "speed": 150}))
         .send()
         .await
         .unwrap();
 
-    // espeak with empty text should either error or return minimal WAV
     eprintln!(
         "  [contract] empty text: HTTP {} ({} bytes)",
         resp.status(),

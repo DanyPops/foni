@@ -28,10 +28,6 @@ fn build_router_from_state(state: state::AppState) -> Router {
             "/params",
             get(synth::params_route::get_params).post(synth::params_route::set_params),
         )
-        .route(
-            "/ssml-params",
-            get(expression::ssml_params_route::get_ssml_params),
-        )
         .route("/metrics", get(metrics::metrics))
         .route("/synthesize", post(synth::synthesize_route::synthesize))
         .route("/analyse", post(quality::analyse_route::analyse))

@@ -613,15 +613,10 @@ pub fn cmd_listen(server: &str, text: &str, model: &str, dsp_variants: bool, pla
             ("bright", true, true),
         ]
     } else {
-        &[
-            ("1 espeak raw", false, false),
-            ("2 rvc", false, false),
-            ("3 rvc+dsp", false, true),
-            ("4 rvc+dsp+prosody", true, true),
-        ]
+        &[("1 cloud raw", false, false), ("2 cloud+dsp", false, true)]
     };
 
-    // For pipeline mode, espeak stage is special (no RVC).
+    // Render all stages.
     println!("\n⚘  Listen — rendering {} stages", stages.len());
     println!("   Phrase: «{text}»\n");
 
@@ -644,20 +639,7 @@ pub fn cmd_listen(server: &str, text: &str, model: &str, dsp_variants: bool, pla
     for (i, (label, _prosody, dsp)) in stages.iter().enumerate() {
         pb.set_message(label.to_string());
 
-        let result: Result<Vec<u8>, String> = if i == 0 && !dsp_variants {
-            // Stage 0: raw espeak only, bypass RVC entirely.
-            let tmp = std::env::temp_dir().join("fonictl_espeak_raw.wav");
-            let status = Command::new("espeak-ng")
-                .args(["-v", "ru", "-s", "150", "-w"])
-                .arg(&tmp)
-                .arg(text)
-                .status();
-            match status {
-                Ok(s) if s.success() => std::fs::read(&tmp).map_err(|e| e.to_string()),
-                Ok(_) => Err("espeak-ng failed".into()),
-                Err(e) => Err(e.to_string()),
-            }
-        } else {
+        let result: Result<Vec<u8>, String> = {
             let opts = if dsp_variants {
                 maquettes.get(i).map(|m| m.opts.clone()).unwrap_or_default()
             } else if *dsp {

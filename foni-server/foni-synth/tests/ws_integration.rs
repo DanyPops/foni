@@ -1,6 +1,6 @@
 /// ws_integration — WebSocket engine E2E against a real server in dry_run mode.
 ///
-/// No external dependencies: Ollama, espeak-ng, and paplay are all skipped.
+/// No external dependencies: Ollama and paplay are skipped.
 /// Tests prove the full pipeline logic: delta → chunk → strip → translate → speak.
 ///
 /// cargo test -p foni-synth --test ws_integration -- --nocapture
@@ -10,7 +10,7 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 async fn start_server() -> String {
-    // Force dry_run so no Ollama/espeak/paplay calls
+    // Force dry_run so no Ollama/paplay calls
     std::env::set_var("FONI_DRY_RUN", "1");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

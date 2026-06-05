@@ -193,7 +193,6 @@ async fn controller_get_returns_config() {
     );
     assert!(resp.get("damping").is_some(), "missing 'damping' field");
     assert!(resp.get("targets").is_some(), "missing 'targets' field");
-    assert!(resp.get("espeak").is_some(), "missing 'espeak' field");
     assert!(resp.get("breaks").is_some(), "missing 'breaks' field");
 }
 
@@ -281,8 +280,7 @@ async fn controller_reload_returns_policy_status() {
 }
 
 #[tokio::test]
-async fn synthesize_without_fish_speech_uses_espeak() {
-    // Ensure FISH_SPEECH_URL is not set (espeak fallback)
+async fn synthesize_without_tts_url_returns_error() {
     std::env::remove_var("FISH_SPEECH_URL");
     let base = start_server().await;
 
@@ -290,8 +288,8 @@ async fn synthesize_without_fish_speech_uses_espeak() {
     let resp = client
         .post(format!("{base}/synthesize"))
         .json(&json!({
-            "text": "Привет.",
-            "voice": "ru",
+            "text": "test",
+            "voice": "en",
             "speed": 150,
             "dsp": false,
         }))
@@ -300,17 +298,5 @@ async fn synthesize_without_fish_speech_uses_espeak() {
         .await
         .unwrap();
 
-    assert!(
-        resp.status().is_success(),
-        "POST /synthesize failed: {}",
-        resp.status()
-    );
-
-    let wav = resp.bytes().await.unwrap();
-    assert!(
-        wav.len() > 44,
-        "WAV must be non-trivial, got {} bytes",
-        wav.len()
-    );
-    println!("espeak fallback: {} bytes WAV", wav.len());
+    assert_eq!(resp.status(), 500, "no TTS URL should return 500");
 }

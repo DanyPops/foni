@@ -111,10 +111,10 @@ enum Cmd {
         /// Model name
         #[arg(short, long, default_value = "sidorovich")]
         model: String,
-        /// espeak voice
+        /// Language code
         #[arg(long, default_value = "ru")]
         voice: String,
-        /// espeak speed (WPM)
+        /// Speech speed (WPM)
         #[arg(long, default_value_t = 150)]
         speed: u32,
         /// Skip DSP chain
@@ -160,7 +160,7 @@ enum Cmd {
         from: Option<PathBuf>,
     },
 
-    /// Batch-generate comparison set (espeak / RVC / RVC+DSP)
+    /// Batch-generate comparison set
     Samples {
         /// Output directory
         #[arg(short, long, default_value = "samples")]
@@ -268,7 +268,7 @@ enum Cmd {
         /// Only process WAVs shorter than this (seconds) — skips monologues
         #[arg(long, default_value_t = 8.0)]
         max_dur: f32,
-        /// espeak voice / RVC model
+        /// Language / model
         #[arg(short, long, default_value = "sidorovich")]
         model: String,
         /// Skip transcription, use existing .txt files in out_dir

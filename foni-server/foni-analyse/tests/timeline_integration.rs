@@ -17,8 +17,6 @@ use foni_analyse::{
     decode_wav,
     timeline::{merge_short_silences, pauses, segment, voiced_segments},
 };
-use foni_synth::expression::ssml;
-
 use std::path::Path;
 use std::process::Command;
 
@@ -39,24 +37,10 @@ fn synthesise_espeak(phrase: &str) -> Vec<u8> {
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join("out.wav");
 
-    // Annotate with SSML break tags so espeak produces natural pauses
-    let ssml_text = ssml::annotate(phrase);
-
     let status = Command::new("espeak-ng")
-        .args([
-            "-v",
-            "ru",
-            "-s",
-            &ESPEAK_WPM.to_string(),
-            "-p",
-            "50",
-            "-a",
-            "200",
-            "-m", // enable SSML/markup mode
-            "-w",
-        ])
+        .args(["-v", "ru", "-s", &ESPEAK_WPM.to_string(), "-w"])
         .arg(&out)
-        .arg(&ssml_text)
+        .arg(phrase)
         .status()
         .expect("espeak-ng not found");
     assert!(status.success(), "espeak-ng failed");

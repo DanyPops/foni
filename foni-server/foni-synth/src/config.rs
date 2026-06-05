@@ -16,24 +16,6 @@ use crate::quality::dsp::controller::ControllerConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct EspeakConfig {
-    pub speed: u32,
-    pub voice: String,
-    pub rate_pct: i32,
-}
-
-impl Default for EspeakConfig {
-    fn default() -> Self {
-        Self {
-            speed: 135,
-            voice: "ru".into(),
-            rate_pct: 93,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
 pub struct BreaksConfig {
     pub comma: u32,
     pub semicolon: u32,
@@ -132,7 +114,6 @@ pub struct ServerConfig {
     #[serde(default)]
     pub params: RvcParams,
     pub controller: ControllerConfig,
-    pub espeak: EspeakConfig,
     pub breaks: BreaksConfig,
     pub dsp: DspDefaults,
     pub addr: String,
@@ -145,7 +126,6 @@ impl Default for ServerConfig {
             model: None,
             params: RvcParams::default(),
             controller: ControllerConfig::default(),
-            espeak: EspeakConfig::default(),
             breaks: BreaksConfig::default(),
             dsp: DspDefaults::default(),
             addr: "0.0.0.0:5050".into(),
@@ -158,7 +138,6 @@ pub struct ResolvedConfig {
     pub initial_model: Option<String>,
     pub params: RvcParams,
     pub controller: ControllerConfig,
-    pub espeak: EspeakConfig,
     pub breaks: BreaksConfig,
     pub dsp: DspDefaults,
     pub addr: String,
@@ -197,7 +176,6 @@ impl ServerConfig {
             initial_model,
             params: cfg.params,
             controller: cfg.controller,
-            espeak: cfg.espeak,
             breaks: cfg.breaks,
             dsp: cfg.dsp,
             addr,
@@ -238,14 +216,6 @@ fn default_models_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn espeak_defaults() {
-        let cfg = EspeakConfig::default();
-        assert_eq!(cfg.speed, 135);
-        assert_eq!(cfg.voice, "ru");
-        assert_eq!(cfg.rate_pct, 93);
-    }
 
     #[test]
     fn breaks_default_all_positive() {

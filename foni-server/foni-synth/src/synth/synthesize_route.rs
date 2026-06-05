@@ -1,11 +1,7 @@
 /// POST /synthesize — text → TTS → DSP → WAV, with LRU cache.
 ///
-/// TTS backend priority:
-///   1. Fish Speech API server (if FISH_SPEECH_URL is set and reachable)
-///   2. espeak-ng fallback (always available)
-///
-/// Fish Speech provides voice identity via zero-shot cloning or fine-tuned model.
-/// espeak provides robotic but instant synthesis when Fish Speech is unavailable.
+/// TTS backend: Chatterbox Multilingual on Modal (FISH_SPEECH_URL).
+/// Zero-shot voice cloning with expression controls (excitement, assertiveness, warmth).
 use axum::{
     body::Body,
     extract::State,
@@ -15,7 +11,6 @@ use axum::{
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::process::Command;
 
 use crate::{quality::dsp, state::AppState, wav};
 
@@ -192,51 +187,9 @@ async fn cloud_tts_request(
         .map_err(|e| format!("TTS body: {e}"))
 }
 
-fn espeak(text: &str, voice: &str, speed: u32) -> Result<Vec<u8>, String> {
-    let tmp = tempfile::NamedTempFile::new().map_err(|e| format!("tmpfile: {e}"))?;
-    let mut cmd = Command::new("espeak-ng");
-    cmd.args([
-        voice,
-        "-s",
-        &speed.to_string(),
-        "-w",
-        tmp.path()
-            .to_str()
-            .expect("infallible: tempfile path is valid UTF-8"),
-    ]);
-    if req_is_ssml(text) {
-        cmd.arg("-m");
-    }
-    cmd.arg(text);
-    let status = cmd.status().map_err(|e| format!("espeak-ng: {e}"))?;
-    if !status.success() {
-        return Err("espeak-ng exited non-zero".into());
-    }
-    std::fs::read(tmp.path()).map_err(|e| format!("read espeak output: {e}"))
-}
-
-fn req_is_ssml(text: &str) -> bool {
-    text.contains("<speak") || text.contains("<break")
-}
-
-/// Try Fish Speech first, fall back to espeak.
-async fn synthesize_text(
-    text: &str,
-    voice: &str,
-    speed: u32,
-    req: &SynthRequest,
-) -> Result<Vec<u8>, String> {
-    if tts_url().is_some() {
-        match cloud_tts(text, req).await {
-            Ok(wav) => return Ok(wav),
-            Err(e) => tracing::warn!("Fish Speech failed, falling back to espeak: {e}"),
-        }
-    }
-    let voice = voice.to_string();
-    let text = text.to_string();
-    tokio::task::spawn_blocking(move || espeak(&text, &voice, speed))
-        .await
-        .map_err(|e| e.to_string())?
+/// Synthesize via cloud TTS (Chatterbox on Modal).
+async fn synthesize_text(text: &str, req: &SynthRequest) -> Result<Vec<u8>, String> {
+    cloud_tts(text, req).await
 }
 
 pub async fn synthesize(
@@ -269,16 +222,9 @@ pub async fn synthesize(
 
     // TTS synthesis
     let t_tts = std::time::Instant::now();
-    let reference_id = req.model.clone();
-    let voice = req.voice.clone();
-    let speed = req.speed;
     let text = req.text.clone();
-    let backend = if tts_url().is_some() {
-        "cloud"
-    } else {
-        "espeak"
-    };
-    let raw_tts = synthesize_text(&text, &voice, speed, &req)
+    let backend = "cloud";
+    let raw_tts = synthesize_text(&text, &req)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let tts_bytes = if backend == "cloud" {

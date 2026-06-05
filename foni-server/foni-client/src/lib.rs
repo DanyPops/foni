@@ -51,7 +51,7 @@ impl FoniClient {
 
     // ── Audio synthesis ───────────────────────────────────────────────────────
 
-    /// POST /synthesize — text → SSML → espeak → RVC → DSP → WAV.
+    /// POST /synthesize — text → TTS → DSP → WAV.
     /// Returns raw WAV bytes (audio/wav).
     pub async fn synthesize(&self, req: &SynthRequest) -> Result<WavData> {
         let resp = self
@@ -193,20 +193,6 @@ impl FoniClient {
             .map_err(FoniError::request)?;
         check_status(&resp)?;
         resp.json::<RvcParams>().await.map_err(FoniError::decode)
-    }
-
-    /// GET /ssml-params — canonical SSML break durations (ms) per punctuation.
-    pub async fn ssml_params(&self) -> Result<HashMap<String, u32>> {
-        let resp = self
-            .http
-            .get(format!("{}/ssml-params", self.base))
-            .send()
-            .await
-            .map_err(FoniError::request)?;
-        check_status(&resp)?;
-        resp.json::<HashMap<String, u32>>()
-            .await
-            .map_err(FoniError::decode)
     }
 }
 

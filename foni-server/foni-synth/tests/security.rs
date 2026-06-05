@@ -95,7 +95,7 @@ async fn synth_ssml_injection() {
         .send()
         .await
         .unwrap();
-    // espeak should reject or ignore the audio tag, not fetch the URL
+    // TTS should reject or ignore the audio tag, not fetch the URL
     assert!(resp.status().is_success() || resp.status().is_server_error());
     eprintln!("  [security] SSML injection: HTTP {}", resp.status());
 }
