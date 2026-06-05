@@ -26,53 +26,111 @@ impl Default for Emotion {
     }
 }
 
+/// Where a persona rests on an axis when input is neutral.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Anchor {
+    Silent,   // 0.1
+    Low,      // 0.3
+    Mid,      // 0.5
+    High,     // 0.7
+    VeryHigh, // 0.9
+}
+
+impl Anchor {
+    pub fn value(self) -> f32 {
+        match self {
+            Self::Silent => 0.1,
+            Self::Low => 0.3,
+            Self::Mid => 0.5,
+            Self::High => 0.7,
+            Self::VeryHigh => 0.9,
+        }
+    }
+}
+
+/// How a persona responds to input on this axis.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Weight {
+    Inverts,   // -1.0 — opposite of input
+    Counters,  // -0.5 — mildly opposite
+    Ignores,   //  0.0 — stays at anchor
+    Dampens,   //  0.3 — barely follows
+    Mirrors,   //  1.0 — matches input
+    Amplifies, //  1.5 — exaggerates input
+}
+
+impl Weight {
+    pub fn value(self) -> f32 {
+        match self {
+            Self::Inverts => -1.0,
+            Self::Counters => -0.5,
+            Self::Ignores => 0.0,
+            Self::Dampens => 0.3,
+            Self::Mirrors => 1.0,
+            Self::Amplifies => 1.5,
+        }
+    }
+}
+
+/// Per-axis weight: how a persona reacts along one emotion dimension.
+///
+/// `output = anchor + (input - 0.5) * weight`, clamped to 0–1.
+#[derive(Debug, Clone, Copy)]
+pub struct AxisWeight {
+    pub anchor: f32,
+    pub weight: f32,
+}
+
+impl AxisWeight {
+    pub fn apply(&self, input: f32) -> f32 {
+        (self.anchor + (input - 0.5) * self.weight).clamp(0.0, 1.0)
+    }
+}
+
+/// Sugar: build an AxisWeight from labels.
+pub fn axis(anchor: Anchor, weight: Weight) -> AxisWeight {
+    AxisWeight {
+        anchor: anchor.value(),
+        weight: weight.value(),
+    }
+}
+
 /// How a persona transforms input emotion into their response emotion.
-/// Each field is a multiplier/offset pair: output = input * scale + bias.
 #[derive(Debug, Clone)]
 pub struct PersonaReaction {
     pub name: String,
-    pub arousal_scale: f32,
-    pub arousal_bias: f32,
-    pub dominance_scale: f32,
-    pub dominance_bias: f32,
-    pub valence_scale: f32,
-    pub valence_bias: f32,
+    pub arousal: AxisWeight,
+    pub dominance: AxisWeight,
+    pub valence: AxisWeight,
 }
 
 impl PersonaReaction {
     pub fn react(&self, input: &Emotion) -> Emotion {
         Emotion {
-            arousal: (input.arousal * self.arousal_scale + self.arousal_bias).clamp(0.0, 1.0),
-            dominance: (input.dominance * self.dominance_scale + self.dominance_bias)
-                .clamp(0.0, 1.0),
-            valence: (input.valence * self.valence_scale + self.valence_bias).clamp(0.0, 1.0),
+            arousal: self.arousal.apply(input.arousal),
+            dominance: self.dominance.apply(input.dominance),
+            valence: self.valence.apply(input.valence),
         }
     }
 }
 
-/// Diomedes: always dominant, matches arousal, biases cold.
+/// Diomedes: amplifies energy, always dominant, tends cold.
 pub fn diomedes() -> PersonaReaction {
     PersonaReaction {
         name: "diomedes".into(),
-        arousal_scale: 1.2,   // amplifies input energy
-        arousal_bias: 0.3,    // never truly calm
-        dominance_scale: 0.3, // always dominant regardless
-        dominance_bias: 0.7,
-        valence_scale: 0.5, // dampens warmth
-        valence_bias: 0.1,  // tends cold/serious
+        arousal: axis(Anchor::High, Weight::Amplifies), // never calm, amplifies input
+        dominance: axis(Anchor::VeryHigh, Weight::Ignores), // always commanding
+        valence: axis(Anchor::Low, Weight::Dampens),    // cold, barely warms
     }
 }
 
-/// Sidorovich: flat arousal, mid dominance, sarcastic.
+/// Sidorovich: flat, businesslike, inverts warmth.
 pub fn sidorovich() -> PersonaReaction {
     PersonaReaction {
         name: "sidorovich".into(),
-        arousal_scale: 0.3,
-        arousal_bias: 0.3,
-        dominance_scale: 0.2,
-        dominance_bias: 0.5,
-        valence_scale: 0.4,
-        valence_bias: 0.2,
+        arousal: axis(Anchor::Low, Weight::Dampens), // flat, barely reacts
+        dominance: axis(Anchor::Mid, Weight::Dampens), // casually in control
+        valence: axis(Anchor::Low, Weight::Counters), // you're happy → he's drier
     }
 }
 
@@ -82,12 +140,9 @@ pub fn persona(name: &str) -> PersonaReaction {
         "sidorovich" => sidorovich(),
         _ => PersonaReaction {
             name: name.into(),
-            arousal_scale: 1.0,
-            arousal_bias: 0.0,
-            dominance_scale: 1.0,
-            dominance_bias: 0.0,
-            valence_scale: 1.0,
-            valence_bias: 0.0,
+            arousal: axis(Anchor::Mid, Weight::Mirrors),
+            dominance: axis(Anchor::Mid, Weight::Mirrors),
+            valence: axis(Anchor::Mid, Weight::Mirrors),
         },
     }
 }
@@ -217,6 +272,84 @@ pub fn emotion_to_params(e: &Emotion) -> (f32, f32, f32) {
 mod tests {
     use super::*;
     use crate::engine::stroke::split_strokes;
+
+    // ── DSL labels ──
+
+    #[test]
+    fn anchor_values_ordered() {
+        assert!(Anchor::Silent.value() < Anchor::Low.value());
+        assert!(Anchor::Low.value() < Anchor::Mid.value());
+        assert!(Anchor::Mid.value() < Anchor::High.value());
+        assert!(Anchor::High.value() < Anchor::VeryHigh.value());
+    }
+
+    #[test]
+    fn weight_values_ordered() {
+        assert!(Weight::Inverts.value() < Weight::Counters.value());
+        assert!(Weight::Counters.value() < Weight::Ignores.value());
+        assert!(Weight::Ignores.value() < Weight::Dampens.value());
+        assert!(Weight::Dampens.value() < Weight::Mirrors.value());
+        assert!(Weight::Mirrors.value() < Weight::Amplifies.value());
+    }
+
+    #[test]
+    fn axis_sugar_matches_manual() {
+        let sugar = axis(Anchor::High, Weight::Amplifies);
+        let manual = AxisWeight {
+            anchor: 0.7,
+            weight: 1.5,
+        };
+        assert!((sugar.anchor - manual.anchor).abs() < 0.01);
+        assert!((sugar.weight - manual.weight).abs() < 0.01);
+    }
+
+    // ── AxisWeight ──
+
+    #[test]
+    fn weight_positive_amplifies() {
+        let w = AxisWeight {
+            anchor: 0.5,
+            weight: 2.0,
+        };
+        assert!(w.apply(0.8) > 0.8, "should amplify above midpoint");
+        assert!(w.apply(0.2) < 0.2, "should amplify below midpoint");
+    }
+
+    #[test]
+    fn weight_zero_ignores_input() {
+        let w = AxisWeight {
+            anchor: 0.7,
+            weight: 0.0,
+        };
+        assert!((w.apply(0.0) - 0.7).abs() < 0.01);
+        assert!((w.apply(1.0) - 0.7).abs() < 0.01);
+    }
+
+    #[test]
+    fn weight_negative_inverts() {
+        let w = AxisWeight {
+            anchor: 0.5,
+            weight: -1.0,
+        };
+        assert!(w.apply(0.8) < 0.5, "high input → below anchor");
+        assert!(w.apply(0.2) > 0.5, "low input → above anchor");
+    }
+
+    #[test]
+    fn weight_clamps_to_unit() {
+        let w = AxisWeight {
+            anchor: 0.9,
+            weight: 3.0,
+        };
+        assert!(w.apply(1.0) <= 1.0);
+        let w2 = AxisWeight {
+            anchor: 0.1,
+            weight: 3.0,
+        };
+        assert!(w2.apply(0.0) >= 0.0);
+    }
+
+    // ── Persona reactions ──
 
     #[test]
     fn diomedes_always_dominant() {
