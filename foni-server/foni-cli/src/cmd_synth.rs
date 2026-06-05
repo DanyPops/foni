@@ -59,21 +59,41 @@ pub fn cmd_synth(
             .unwrap(),
     );
     let preview: String = text.chars().take(40).collect();
+    let t0 = std::time::Instant::now();
     pb.set_message(format!("Synthesizing: «{preview}»"));
     pb.enable_steady_tick(std::time::Duration::from_millis(80));
+
+    // Update spinner with elapsed time in a background thread
+    let pb2 = pb.clone();
+    let preview2 = preview.clone();
+    let ticker = std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let elapsed = t0.elapsed().as_secs();
+        pb2.set_message(format!("Synthesizing: «{preview2}» ({elapsed}s)"));
+        if elapsed > 300 {
+            break;
+        }
+    });
 
     match synth_request(server, text, model, voice, speed, dsp, opts) {
         Ok(bytes) => {
             pb.finish_and_clear();
+            let elapsed = t0.elapsed();
             let path = save_and_maybe_play(&bytes, out, play);
-            println!("✅  {}  ({} kB)", path.display(), bytes.len() / 1024);
+            println!(
+                "✅  {}  ({} kB, {:.1}s)",
+                path.display(),
+                bytes.len() / 1024,
+                elapsed.as_secs_f64()
+            );
         }
         Err(e) => {
             pb.finish_and_clear();
-            eprintln!("❌  {e}");
+            eprintln!("❌  {e} ({:.1}s)", t0.elapsed().as_secs_f64());
             std::process::exit(1);
         }
     }
+    drop(ticker);
 }
 
 pub fn cmd_studio(server: &str, text: &str, model: &str, from: Option<&std::path::Path>) {
