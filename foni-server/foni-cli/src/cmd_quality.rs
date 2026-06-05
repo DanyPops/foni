@@ -2,19 +2,17 @@ use super::cmd_common::{process_request, synth_request};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
 
-pub fn cmd_analyse(file: &PathBuf, vs: Option<&PathBuf>, show_timeline: bool) {
+pub fn cmd_analyse(
+    file: &PathBuf,
+    vs: Option<&PathBuf>,
+    show_timeline: bool,
+) -> Result<(), String> {
     use foni_analyse::{
         analyse, compute_gap, decode_wav, format_gap_table, spectral_timeline, TargetTensor,
     };
 
-    let bytes = std::fs::read(file).unwrap_or_else(|e| {
-        eprintln!("error: {e}");
-        std::process::exit(1);
-    });
-    let wav = decode_wav(&bytes).unwrap_or_else(|e| {
-        eprintln!("WAV decode: {e}");
-        std::process::exit(1);
-    });
+    let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let wav = decode_wav(&bytes).map_err(|e| format!("WAV decode: {e}"))?;
     let analysis = analyse(&wav.samples, wav.sample_rate);
 
     if let Some(ref_path) = vs {
@@ -86,6 +84,7 @@ pub fn cmd_analyse(file: &PathBuf, vs: Option<&PathBuf>, show_timeline: bool) {
             analysis.temporal.mean_pause_duration * 1000.0
         );
     }
+    Ok(())
 }
 
 pub fn cmd_compare(
@@ -95,19 +94,16 @@ pub fn cmd_compare(
     max_dur: f32,
     model: &str,
     skip_transcribe: bool,
-) {
+) -> Result<(), String> {
     use foni_analyse::{analyse_fast, decode_wav, transcribe};
     use rayon::prelude::*;
     use std::sync::Mutex;
 
-    std::fs::create_dir_all(out_dir).expect("cannot create out_dir");
+    std::fs::create_dir_all(out_dir).map_err(|e| format!("cannot create out_dir: {e}"))?;
 
     // 1. Collect studio WAVs filtered by duration.
     let mut files: Vec<PathBuf> = std::fs::read_dir(studio)
-        .unwrap_or_else(|e| {
-            eprintln!("cannot read studio dir: {e}");
-            std::process::exit(1);
-        })
+        .map_err(|e| format!("cannot read studio dir: {e}"))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("wav"))
         .filter(|p| {
@@ -121,8 +117,7 @@ pub fn cmd_compare(
     files.sort();
 
     if files.is_empty() {
-        eprintln!("No WAVs ≤ {max_dur}s in {}", studio.display());
-        std::process::exit(1);
+        return Err(format!("No WAVs ≤ {max_dur}s in {}", studio.display()));
     }
     println!("\n∷ Compare: {} studio files ≤ {max_dur}s", files.len());
 
@@ -216,7 +211,7 @@ pub fn cmd_compare(
     eprintln!("  Pairs: {}  Skipped: {skipped}", pairs.len());
 
     if pairs.is_empty() {
-        std::process::exit(1);
+        return Err("no pairs to compare".into());
     }
 
     // 3. Analyse both sets in parallel.
@@ -262,8 +257,7 @@ pub fn cmd_compare(
     let sy = synth_rows.into_inner().unwrap();
     let n = sr.len().min(sy.len()) as f64;
     if n == 0.0 {
-        eprintln!("No analysed pairs.");
-        return;
+        return Err("No analysed pairs.".into());
     }
 
     let mean = |rows: &[Row], f: fn(&Row) -> f64| rows.iter().map(|r| f(r)).sum::<f64>() / n;
@@ -346,6 +340,7 @@ pub fn cmd_compare(
     eprintln!("  Synthetic WAVs: {}/", out_dir.display());
 
     eprintln!("  Synthetic WAVs: {}/", out_dir.display());
+    Ok(())
 }
 
 pub fn cmd_sweep(
@@ -869,15 +864,9 @@ pub fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str
     println!("  const TARGET: [f32; {}] = {:?};", metrics.len(), targets);
 }
 
-pub fn cmd_energy(file: &std::path::Path, frame_ms: usize) {
-    let bytes = std::fs::read(file).unwrap_or_else(|e| {
-        eprintln!("  ✗ {}: {e}", file.display());
-        std::process::exit(1);
-    });
-    let wav = foni_analyse::decode_wav(&bytes).unwrap_or_else(|e| {
-        eprintln!("  ✗ decode: {e}");
-        std::process::exit(1);
-    });
+pub fn cmd_energy(file: &std::path::Path, frame_ms: usize) -> Result<(), String> {
+    let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let wav = foni_analyse::decode_wav(&bytes).map_err(|e| format!("decode: {e}"))?;
 
     let sr = wav.sample_rate as usize;
     let frame_size = sr * frame_ms / 1000;
@@ -906,4 +895,5 @@ pub fn cmd_energy(file: &std::path::Path, frame_ms: usize) {
         let bar: String = "█".repeat(bar_len.min(30));
         println!("{t:5.1}s  {rms_db:6.1}dB  {bar}");
     }
+    Ok(())
 }

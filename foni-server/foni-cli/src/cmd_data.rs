@@ -195,7 +195,7 @@ pub fn cmd_augment(dir: &PathBuf, out: &PathBuf, speeds_csv: &str) {
     );
 }
 
-pub fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
+pub fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) -> Result<(), String> {
     use foni_analyse::{
         analyse, analyse_fast, compute_gap, decode_wav, fast_f0_stats, format_gap_table,
         TargetTensor,
@@ -205,18 +205,14 @@ pub fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
     use std::sync::Mutex;
 
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap_or_else(|e| {
-            eprintln!("cannot read dir: {e}");
-            std::process::exit(1);
-        })
+        .map_err(|e| format!("cannot read dir: {e}"))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("wav"))
         .collect();
     files.sort();
 
     if files.is_empty() {
-        eprintln!("No WAV files in {}", dir.display());
-        std::process::exit(1);
+        return Err(format!("No WAV files in {}", dir.display()));
     }
 
     let t0 = std::time::Instant::now();
@@ -271,8 +267,7 @@ pub fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
     let rows = acc.into_inner().unwrap();
     let n = rows.len();
     if n == 0 {
-        eprintln!("All files failed.");
-        return;
+        return Err("All files failed.".into());
     }
 
     let mean = |f: fn(&Row) -> f64| rows.iter().map(|r| f(r)).sum::<f64>() / n as f64;
@@ -356,4 +351,5 @@ pub fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) {
         println!("\n(median file vs reference WAV)");
         println!("{}", format_gap_table(&gap));
     }
+    Ok(())
 }

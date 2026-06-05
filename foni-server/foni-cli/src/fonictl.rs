@@ -989,7 +989,9 @@ fn main() {
             play_wav(&file);
         }
         Cmd::Analyse { file, vs, timeline } => {
-            cmd_quality::cmd_analyse(&file, vs.as_ref(), timeline);
+            if let Err(e) = cmd_quality::cmd_analyse(&file, vs.as_ref(), timeline) {
+                eprintln!("✗ {e}");
+            }
         }
         Cmd::Compare {
             studio,
@@ -999,7 +1001,11 @@ fn main() {
             skip_transcribe,
         } => {
             let out = out_dir.unwrap_or_else(|| cache_dir().join("compare"));
-            cmd_quality::cmd_compare(server, &studio, &out, max_dur, &model, skip_transcribe);
+            if let Err(e) =
+                cmd_quality::cmd_compare(server, &studio, &out, max_dur, &model, skip_transcribe)
+            {
+                eprintln!("✗ {e}");
+            }
         }
         Cmd::Tune {
             text,
@@ -1024,7 +1030,9 @@ fn main() {
             }
         }
         Cmd::Corpus { dir, vs } => {
-            cmd_data::cmd_corpus(&dir, vs.as_ref());
+            if let Err(e) = cmd_data::cmd_corpus(&dir, vs.as_ref()) {
+                eprintln!("✗ {e}");
+            }
         }
         Cmd::Train {
             model,
@@ -1047,7 +1055,9 @@ fn main() {
             cmd_train::cmd_train_cancel(&call_id);
         }
         Cmd::Energy { file, frame_ms } => {
-            cmd_quality::cmd_energy(&file, frame_ms);
+            if let Err(e) = cmd_quality::cmd_energy(&file, frame_ms) {
+                eprintln!("✗ {e}");
+            }
         }
         Cmd::TtsBench { url, phrase } => {
             cmd_train::cmd_tts_bench(&url, &phrase);
@@ -1076,10 +1086,14 @@ fn main() {
             cmd_data::cmd_augment(&dir, &out, &speeds);
         }
         Cmd::Snapshot { model, vs } => {
-            cmd_train::cmd_snapshot(server, &model, &vs);
+            if let Err(e) = cmd_train::cmd_snapshot(server, &model, &vs) {
+                eprintln!("✗ {e}");
+            }
         }
         Cmd::CompareModels { model, vs } => {
-            cmd_train::cmd_compare_models(server, &model, &vs);
+            if let Err(e) = cmd_train::cmd_compare_models(server, &model, &vs) {
+                eprintln!("✗ {e}");
+            }
         }
         Cmd::Calibrate { text, vs, model } => {
             cmd_quality::cmd_calibrate(server, &text, &vs, &model);

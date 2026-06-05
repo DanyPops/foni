@@ -155,16 +155,13 @@ pub fn cmd_train_cancel(call_id: &str) {
     });
 }
 
-pub fn cmd_snapshot(server: &str, model: &str, ref_path: &PathBuf) {
+pub fn cmd_snapshot(server: &str, model: &str, ref_path: &PathBuf) -> Result<(), String> {
     use foni_analyse::{analyse, compute_gap, decode_wav, TargetTensor};
     use owo_colors::OwoColorize;
 
     eprintln!("\n  ▶  Snapshot — saving baseline scores for {model}");
 
-    let ref_bytes = std::fs::read(ref_path).unwrap_or_else(|e| {
-        eprintln!("  ✗ {}: {e}", ref_path.display());
-        std::process::exit(1);
-    });
+    let ref_bytes = std::fs::read(ref_path).map_err(|e| format!("{}: {e}", ref_path.display()))?;
     let ref_wav = decode_wav(&ref_bytes).expect("decode reference WAV");
     let ref_analysis = analyse(&ref_wav.samples, ref_wav.sample_rate);
     let tensor = TargetTensor::from_analysis(&ref_analysis, ref_path.to_str().unwrap_or("ref"));
@@ -199,8 +196,7 @@ pub fn cmd_snapshot(server: &str, model: &str, ref_path: &PathBuf) {
     }
 
     if scores.is_empty() {
-        eprintln!("  ✗ no scores");
-        return;
+        return Err("no scores".into());
     }
 
     let avg: f32 = scores.iter().sum::<f32>() / scores.len() as f32;
@@ -220,9 +216,10 @@ pub fn cmd_snapshot(server: &str, model: &str, ref_path: &PathBuf) {
         path.display(),
         avg.bold()
     );
+    Ok(())
 }
 
-pub fn cmd_compare_models(server: &str, model: &str, ref_path: &PathBuf) {
+pub fn cmd_compare_models(server: &str, model: &str, ref_path: &PathBuf) -> Result<(), String> {
     use foni_analyse::{analyse, compute_gap, decode_wav, TargetTensor};
     use owo_colors::OwoColorize;
 
@@ -230,21 +227,17 @@ pub fn cmd_compare_models(server: &str, model: &str, ref_path: &PathBuf) {
     let baseline: serde_json::Value = match std::fs::read_to_string(&baseline_path) {
         Ok(s) => serde_json::from_str(&s).expect("parse baseline JSON"),
         Err(_) => {
-            eprintln!("  ✗ No baseline found at {}", baseline_path.display());
-            eprintln!(
-                "    Run: fonictl snapshot {model} --vs {}",
+            return Err(format!(
+                "No baseline at {}. Run: fonictl snapshot {model} --vs {}",
+                baseline_path.display(),
                 ref_path.display()
-            );
-            return;
+            ));
         }
     };
 
     let old_avg = baseline["mean_gap_pct"].as_f64().unwrap_or(100.0) as f32;
 
-    let ref_bytes = std::fs::read(ref_path).unwrap_or_else(|e| {
-        eprintln!("  ✗ {}: {e}", ref_path.display());
-        std::process::exit(1);
-    });
+    let ref_bytes = std::fs::read(ref_path).map_err(|e| format!("{}: {e}", ref_path.display()))?;
     let ref_wav = decode_wav(&ref_bytes).expect("decode ref WAV");
     let ref_analysis = analyse(&ref_wav.samples, ref_wav.sample_rate);
     let tensor = TargetTensor::from_analysis(&ref_analysis, ref_path.to_str().unwrap_or("ref"));
@@ -275,8 +268,7 @@ pub fn cmd_compare_models(server: &str, model: &str, ref_path: &PathBuf) {
     }
 
     if scores.is_empty() {
-        eprintln!("  ✗ no scores");
-        return;
+        return Err("no scores".into());
     }
 
     let new_avg: f32 = scores.iter().sum::<f32>() / scores.len() as f32;
@@ -298,6 +290,7 @@ pub fn cmd_compare_models(server: &str, model: &str, ref_path: &PathBuf) {
             -delta
         );
     }
+    Ok(())
 }
 
 pub fn cmd_tts_compare(phrase: &str) {
