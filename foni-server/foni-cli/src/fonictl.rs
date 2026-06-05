@@ -137,15 +137,15 @@ enum Cmd {
         presence_db: Option<f32>,
         #[arg(long)]
         de_ess_db: Option<f32>,
-        /// Emotion intensity (0.25–2.0, default 0.5 = neutral, 1.0+ = dramatic)
+        /// Excitement: calm (0.3) → dramatic (1.5)
         #[arg(long)]
-        exaggeration: Option<f32>,
-        /// Pace weight (0.0–1.0, default 0.5, lower = slower/looser)
+        excitement: Option<f32>,
+        /// Assertiveness: tentative (0.6) → commanding (0.2)
         #[arg(long)]
-        cfg_weight: Option<f32>,
-        /// Prosody randomness (0.05–5.0, default 0.8)
+        assertiveness: Option<f32>,
+        /// Warmth: tense (0.4) → friendly (1.2)
         #[arg(long)]
-        temperature: Option<f32>,
+        warmth: Option<f32>,
     },
 
     /// Maquette studio — produce N named variants, render all, listen, pick
@@ -1094,9 +1094,9 @@ fn main() {
             vibrato_depth,
             presence_db,
             de_ess_db,
-            exaggeration,
-            cfg_weight,
-            temperature,
+            excitement,
+            assertiveness,
+            warmth,
         } => {
             let text = cmd_voice::resolve_text(text);
             let text = match &text {
@@ -1123,9 +1123,9 @@ fn main() {
                 vibrato_depth,
                 presence_db,
                 de_ess_db,
-                exaggeration,
-                cfg_weight,
-                temperature,
+                excitement,
+                assertiveness,
+                warmth,
             );
         }
         Cmd::Studio { text, model, from } => {

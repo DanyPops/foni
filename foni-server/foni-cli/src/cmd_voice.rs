@@ -232,9 +232,9 @@ pub fn cmd_reply(
         model: Some("sidorovich".into()),
         ..Default::default()
     };
-    req.exaggeration = Some(expr.exaggeration);
-    req.cfg_weight = Some(expr.cfg_weight);
-    req.temperature = Some(expr.temperature);
+    req.exaggeration = Some(expr.excitement);
+    req.cfg_weight = Some(expr.assertiveness);
+    req.temperature = Some(expr.warmth);
     let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio: {e}"))?;
     let wav_data = rt
         .block_on(client.synthesize(&req))
@@ -319,17 +319,17 @@ fn persona_prompt(name: &str) -> String {
 /// Expression knobs derived from input tone.
 #[derive(Debug, Clone)]
 pub struct Expression {
-    pub exaggeration: f32,
-    pub cfg_weight: f32,
-    pub temperature: f32,
+    pub excitement: f32,
+    pub assertiveness: f32,
+    pub warmth: f32,
 }
 
 impl Default for Expression {
     fn default() -> Self {
         Self {
-            exaggeration: 0.5,
-            cfg_weight: 0.5,
-            temperature: 0.8,
+            excitement: 0.5,
+            assertiveness: 0.5,
+            warmth: 0.8,
         }
     }
 }
@@ -349,23 +349,19 @@ pub fn read_tone(wav_path: &Path) -> Result<Expression, String> {
 
     let tone = foni_analyse::tone::read_tone(&mut session, &wav.samples, wav.sample_rate)?;
 
-    let exaggeration = 0.3 + tone.arousal * 1.2; // 0.3 (calm) → 1.5 (intense)
-    let cfg_weight = 0.6 - tone.dominance * 0.4; // 0.6 (submissive) → 0.2 (dominant)
-    let temperature = 0.4 + tone.valence * 0.8; // 0.4 (negative) → 1.2 (positive)
+    let excitement = 0.3 + tone.arousal * 1.2; // 0.3 (calm) → 1.5 (animated)
+    let assertiveness = 0.6 - tone.dominance * 0.4; // 0.6 (tentative) → 0.2 (commanding)
+    let warmth = 0.4 + tone.valence * 0.8; // 0.4 (tense) → 1.2 (friendly)
 
     let expr = Expression {
-        exaggeration,
-        cfg_weight,
-        temperature,
+        excitement,
+        assertiveness,
+        warmth,
     };
 
     eprintln!(
-        "  {DIAL}SER: arousal={:.2} dominance={:.2} valence={:.2}",
-        tone.arousal, tone.dominance, tone.valence
-    );
-    eprintln!(
-        "  {DIAL}Expression: exaggeration={:.2} cfg={:.2} temp={:.2}",
-        expr.exaggeration, expr.cfg_weight, expr.temperature
+        "  {DIAL}Excitement={:.2}  Assertiveness={:.2}  Warmth={:.2}",
+        expr.excitement, expr.assertiveness, expr.warmth
     );
 
     Ok(expr)

@@ -26,9 +26,9 @@ pub fn cmd_synth(
     vibd: Option<f32>,
     pres: Option<f32>,
     deess: Option<f32>,
-    exaggeration: Option<f32>,
-    cfg_weight: Option<f32>,
-    temperature: Option<f32>,
+    excitement: Option<f32>,
+    assertiveness: Option<f32>,
+    warmth: Option<f32>,
 ) {
     let mut opts = serde_json::json!({});
     if let Some(v) = rms {
@@ -80,13 +80,13 @@ pub fn cmd_synth(
     });
 
     let mut body_extra = serde_json::Map::new();
-    if let Some(v) = exaggeration {
+    if let Some(v) = excitement {
         body_extra.insert("exaggeration".into(), v.into());
     }
-    if let Some(v) = cfg_weight {
+    if let Some(v) = assertiveness {
         body_extra.insert("cfg_weight".into(), v.into());
     }
-    if let Some(v) = temperature {
+    if let Some(v) = warmth {
         body_extra.insert("temperature".into(), v.into());
     }
 
