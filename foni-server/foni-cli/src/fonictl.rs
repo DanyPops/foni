@@ -2,6 +2,7 @@ pub mod cloud;
 mod cmd_common;
 mod cmd_data;
 mod cmd_quality;
+mod cmd_sweep_shades;
 mod cmd_synth;
 mod cmd_train;
 mod cmd_tune;
@@ -484,6 +485,16 @@ enum Cmd {
         /// Reference WAV
         #[arg(long)]
         vs: PathBuf,
+    },
+
+    /// Sweep expression parameter space to discover perceptually distinct shades
+    SweepShades {
+        /// Steps per axis (3 = 27 combos, 4 = 64)
+        #[arg(long, default_value_t = 3)]
+        steps: usize,
+        /// Output directory for WAV samples
+        #[arg(short, long, default_value = "output/shade-sweep")]
+        out: PathBuf,
     },
 
     /// Sweep a knob through multiple values, show comparison table
@@ -1352,6 +1363,11 @@ fn main() {
         }
         Cmd::Calibrate { text, vs, model } => {
             cmd_quality::cmd_calibrate(server, &text, &vs, &model);
+        }
+        Cmd::SweepShades { steps, out } => {
+            if let Err(e) = cmd_sweep_shades::cmd_sweep_shades(server, steps, &out) {
+                eprintln!("✗ {e}");
+            }
         }
         Cmd::Sweep {
             knob,

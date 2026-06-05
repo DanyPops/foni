@@ -6,6 +6,7 @@ pub mod facade;
 pub mod lexicon;
 pub mod player;
 pub mod stream;
+pub mod stroke;
 pub mod train_events;
 pub mod translator;
 pub mod ws;
