@@ -1,4 +1,5 @@
 pub mod cloud;
+mod cmd_bench;
 mod cmd_common;
 mod cmd_data;
 mod cmd_quality;
@@ -499,6 +500,16 @@ enum Cmd {
         /// Play after rendering
         #[arg(short, long)]
         play: bool,
+    },
+
+    /// Real API round-trip benchmark — sequential vs parallel, jitter analysis
+    Bench {
+        /// Number of chunks to synthesize
+        #[arg(long, default_value_t = 4)]
+        chunks: usize,
+        /// Fire all chunks in parallel
+        #[arg(long)]
+        parallel: bool,
     },
 
     SweepShades {
@@ -1376,6 +1387,11 @@ fn main() {
         }
         Cmd::Calibrate { text, vs, model } => {
             cmd_quality::cmd_calibrate(server, &text, &vs, &model);
+        }
+        Cmd::Bench { chunks, parallel } => {
+            if let Err(e) = cmd_bench::cmd_bench_roundtrip(server, chunks, parallel) {
+                tracing::error!("{e}");
+            }
         }
         Cmd::Render {
             manifest,

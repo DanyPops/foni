@@ -39,6 +39,10 @@ impl FoniClient {
         }
     }
 
+    pub fn base_url(&self) -> &str {
+        &self.base
+    }
+
     /// Returns true when the server responds to GET /params within 2 s.
     pub async fn is_available(&self) -> bool {
         self.http
