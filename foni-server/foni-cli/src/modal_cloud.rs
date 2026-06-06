@@ -1,5 +1,4 @@
 use modal_rs::{AppLogsOptions, FunctionFromNameOptions, ModalClient, VolumeFromNameOptions};
-use tracing::info;
 
 const APP_NAME: &str = "foni-fish-finetune";
 const FUNCTION_NAME: &str = "train";

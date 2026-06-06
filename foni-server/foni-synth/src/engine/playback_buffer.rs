@@ -54,6 +54,12 @@ pub struct PlaybackBuffer {
     received_count: usize,
 }
 
+impl Default for PlaybackBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlaybackBuffer {
     pub fn new() -> Self {
         Self {
@@ -76,7 +82,7 @@ impl PlaybackBuffer {
     }
 
     /// Try to yield the next in-order chunk for playback.
-    pub fn next(&mut self) -> Yield {
+    pub fn drain_next(&mut self) -> Yield {
         if let Some(total) = self.total {
             if self.next_play >= total {
                 return Yield::Done;
@@ -255,8 +261,8 @@ mod tests {
         buf.submit(chunk(0, 500));
         buf.submit(chunk(1, 500));
 
-        assert_eq!(buf.next(), Yield::Chunk(0));
-        assert_eq!(buf.next(), Yield::Chunk(1));
+        assert_eq!(buf.drain_next(), Yield::Chunk(0));
+        assert_eq!(buf.drain_next(), Yield::Chunk(1));
     }
 
     #[test]
@@ -264,7 +270,7 @@ mod tests {
         let mut buf = PlaybackBuffer::new();
         buf.submit(chunk(1, 500)); // chunk 0 missing
 
-        assert_eq!(buf.next(), Yield::Buffering { waiting_for: 0 });
+        assert_eq!(buf.drain_next(), Yield::Buffering { waiting_for: 0 });
     }
 
     #[test]
@@ -272,12 +278,12 @@ mod tests {
         let mut buf = PlaybackBuffer::new();
         buf.submit(chunk(1, 500));
 
-        assert_eq!(buf.next(), Yield::Buffering { waiting_for: 0 });
+        assert_eq!(buf.drain_next(), Yield::Buffering { waiting_for: 0 });
 
         buf.submit(chunk(0, 500)); // fill the gap
 
-        assert_eq!(buf.next(), Yield::Chunk(0));
-        assert_eq!(buf.next(), Yield::Chunk(1));
+        assert_eq!(buf.drain_next(), Yield::Chunk(0));
+        assert_eq!(buf.drain_next(), Yield::Chunk(1));
     }
 
     #[test]
@@ -287,9 +293,9 @@ mod tests {
         buf.submit(chunk(1, 500));
         buf.close(2);
 
-        assert_eq!(buf.next(), Yield::Chunk(0));
-        assert_eq!(buf.next(), Yield::Chunk(1));
-        assert_eq!(buf.next(), Yield::Done);
+        assert_eq!(buf.drain_next(), Yield::Chunk(0));
+        assert_eq!(buf.drain_next(), Yield::Chunk(1));
+        assert_eq!(buf.drain_next(), Yield::Done);
     }
 
     #[test]
@@ -298,8 +304,8 @@ mod tests {
         buf.submit(chunk(0, 500));
         buf.close(3); // expecting 3, only have 1
 
-        assert_eq!(buf.next(), Yield::Chunk(0));
-        assert_eq!(buf.next(), Yield::Buffering { waiting_for: 1 });
+        assert_eq!(buf.drain_next(), Yield::Chunk(0));
+        assert_eq!(buf.drain_next(), Yield::Buffering { waiting_for: 1 });
     }
 
     // ── Take / Peek ──
@@ -308,7 +314,7 @@ mod tests {
     fn take_removes_chunk() {
         let mut buf = PlaybackBuffer::new();
         buf.submit(chunk(0, 500));
-        buf.next(); // advance cursor
+        buf.drain_next(); // advance cursor
 
         let taken = buf.take(0);
         assert!(taken.is_some());
@@ -341,7 +347,7 @@ mod tests {
         let mut buf = PlaybackBuffer::new();
         buf.submit(chunk(0, 500));
         buf.submit(chunk(1, 500));
-        buf.next(); // play chunk 0
+        buf.drain_next(); // play chunk 0
 
         let secs = buf.buffered_secs();
         assert!((secs - 0.5).abs() < 0.05, "only chunk 1 buffered");
@@ -391,7 +397,7 @@ mod tests {
         let mut buf = PlaybackBuffer::new();
         buf.submit(chunk(0, 500));
         buf.close(1);
-        buf.next();
+        buf.drain_next();
         assert!(matches!(buf.status(), Status::Done { total: 1 }));
         assert!(buf.is_complete());
     }
@@ -410,7 +416,7 @@ mod tests {
     fn empty_close_immediate_done() {
         let mut buf = PlaybackBuffer::new();
         buf.close(0);
-        assert_eq!(buf.next(), Yield::Done);
+        assert_eq!(buf.drain_next(), Yield::Done);
         assert!(buf.is_complete());
     }
 
@@ -460,7 +466,7 @@ mod tests {
         buf.submit(chunk(0, 500));
         buf.submit(chunk(1, 500));
         buf.close(3);
-        buf.next();
+        buf.drain_next();
 
         let snap = buf.snapshot();
         assert_eq!(snap.slots, vec![true, false]);
@@ -472,7 +478,7 @@ mod tests {
         let mut buf = PlaybackBuffer::new();
         buf.submit(chunk(0, 500));
         buf.close(1);
-        buf.next();
+        buf.drain_next();
 
         let snap = buf.snapshot();
         assert!(snap.complete);
@@ -517,11 +523,11 @@ mod tests {
 
         assert_eq!(render_bar(&buf), "▐███▌");
 
-        buf.next();
+        buf.drain_next();
         assert_eq!(render_bar(&buf), "▐██▌");
 
-        buf.next();
-        buf.next();
+        buf.drain_next();
+        buf.drain_next();
         assert_eq!(render_bar(&buf), "▐▌");
     }
 }

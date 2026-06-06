@@ -1,6 +1,6 @@
 use foni_analyse::{analyse, compute_gap, decode_wav, format_gap_table, TargetTensor};
 use std::path::PathBuf;
-use tracing::{debug, error, info, warn};
+use tracing::info;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

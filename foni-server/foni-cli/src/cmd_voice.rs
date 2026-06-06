@@ -4,7 +4,7 @@ use std::process::Command;
 
 use foni_analyse::decode_wav;
 use foni_synth::engine::audio_stream;
-use foni_synth::engine::expression_palette::{self, ChatterboxColorset, Colorset};
+use foni_synth::engine::expression_palette::{ChatterboxColorset, Colorset};
 use tracing::{debug, info, warn};
 
 const STREAM_SAMPLE_RATE: u32 = 16_000;
@@ -138,8 +138,7 @@ pub fn cmd_transcribe(file: Option<&Path>, lang: &str, model: &str) -> Result<()
     }
 
     let stem = path.file_stem().ok_or("no file stem")?;
-    let txt_path =
-        PathBuf::from(std::env::temp_dir()).join(format!("{}.txt", stem.to_string_lossy()));
+    let txt_path = std::env::temp_dir().join(format!("{}.txt", stem.to_string_lossy()));
     let text = std::fs::read_to_string(&txt_path).map_err(|e| format!("read transcript: {e}"))?;
     let text = text.trim();
 
@@ -183,6 +182,7 @@ pub fn cmd_think(
 }
 
 /// Full voice loop: record → transcribe → think → speak.
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_reply(
     server: &str,
     persona: &str,

@@ -28,16 +28,15 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
     let (mut tx, mut rx) = socket.split();
     let mut stream_state = fresh_state();
     let mut emotion_state = neutral_state();
-    let mut config = FoniConfig::default();
-    config.dry_run = std::env::var("FONI_DRY_RUN")
-        .map(|v| v == "1")
-        .unwrap_or(false);
-    if let Ok(url) = std::env::var("FONI_OLLAMA_URL") {
-        config.ollama_url = url;
-    }
-    if let Ok(model) = std::env::var("FONI_OLLAMA_MODEL") {
-        config.ollama_model = model;
-    }
+    let defaults = FoniConfig::default();
+    let mut config = FoniConfig {
+        dry_run: std::env::var("FONI_DRY_RUN")
+            .map(|v| v == "1")
+            .unwrap_or(false),
+        ollama_url: std::env::var("FONI_OLLAMA_URL").unwrap_or(defaults.ollama_url.clone()),
+        ollama_model: std::env::var("FONI_OLLAMA_MODEL").unwrap_or(defaults.ollama_model.clone()),
+        ..defaults
+    };
     if let Ok(mode) = std::env::var("FONI_STRESS") {
         use std::str::FromStr;
         config.stress_mode = super::stress::StressMode::from_str(&mode).unwrap_or_default();
@@ -304,7 +303,7 @@ async fn process_chunk(
             samples: vec![],
             sample_rate: 24_000,
         });
-        buffer.next();
+        buffer.drain_next();
         emit_buffer_state(buffer, tx).await;
         let reply = serde_json::json!({"type": "speak", "text": translated});
         let _ = tx.send(Message::Text(reply.to_string())).await;
@@ -321,7 +320,7 @@ async fn process_chunk(
             samples: vec![], // placeholder — actual audio in play_queue
             sample_rate: 24_000,
         });
-        buffer.next();
+        buffer.drain_next();
         emit_buffer_state(buffer, tx).await;
         let reply = serde_json::json!({"type": "playing", "text": translated});
         let _ = tx.send(Message::Text(reply.to_string())).await;
@@ -349,7 +348,7 @@ async fn process_chunk(
                 samples: vec![],
                 sample_rate: 24_000,
             });
-            buffer.next();
+            buffer.drain_next();
             emit_buffer_state(buffer, tx).await;
             tracing::info!(
                 total_ms = t_start.elapsed().as_millis() as u64,

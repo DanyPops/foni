@@ -114,6 +114,7 @@ pub fn compare(
 }
 
 /// Like `compare` but also runs ViSQOL when file paths are available.
+#[allow(clippy::too_many_arguments)]
 pub fn compare_with_paths(
     phrase: &str,
     synthesis: &AnalysisResult,
@@ -140,6 +141,7 @@ pub fn compare_with_paths(
 }
 
 /// Full comparison including optional ECAPA session for speaker similarity.
+#[allow(clippy::too_many_arguments)]
 pub fn compare_full(
     phrase: &str,
     synthesis: &AnalysisResult,

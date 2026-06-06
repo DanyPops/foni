@@ -29,7 +29,7 @@ struct SweepSample {
     speech_rate: f32,
     crest_db: f32,
     duration_secs: f32,
-    wav_path: PathBuf,
+    _wav_path: PathBuf,
 }
 
 fn build_grid(steps: usize) -> Vec<GridPoint> {
@@ -86,7 +86,7 @@ pub fn cmd_sweep_shades(
             "e{:.1}_c{:.1}_t{:.1}",
             pt.exaggeration, pt.cfg_weight, pt.temperature
         );
-        let wav_path = out_dir.join(format!("{label}.wav"));
+        let _wav_path = out_dir.join(format!("{label}.wav"));
 
         info!(
             combo = i + 1,
@@ -108,7 +108,7 @@ pub fn cmd_sweep_shades(
             .block_on(client.synthesize(&req))
             .map_err(|e| format!("synth {label}: {e}"))?;
 
-        std::fs::write(&wav_path, &wav_data.0).map_err(|e| format!("write: {e}"))?;
+        std::fs::write(&_wav_path, &wav_data.0).map_err(|e| format!("write: {e}"))?;
 
         let wav = decode_wav(&wav_data.0).map_err(|e| format!("decode {label}: {e}"))?;
         let analysis = analyse_fast(&wav.samples, wav.sample_rate);
@@ -122,7 +122,7 @@ pub fn cmd_sweep_shades(
             speech_rate: analysis.temporal.speech_rate,
             crest_db: analysis.loudness.crest_factor,
             duration_secs: analysis.temporal.duration_secs,
-            wav_path,
+            _wav_path,
         });
     }
 
@@ -322,7 +322,7 @@ mod tests {
             speech_rate: 3.0,
             crest_db: 10.0,
             duration_secs: 2.0,
-            wav_path: PathBuf::new(),
+            _wav_path: PathBuf::new(),
         };
         let samples = vec![s.clone(), s.clone(), s.clone()];
         let clusters = cluster_samples(&samples);
@@ -340,7 +340,7 @@ mod tests {
             speech_rate: 3.0,
             crest_db: 10.0,
             duration_secs: 2.0,
-            wav_path: PathBuf::new(),
+            _wav_path: PathBuf::new(),
         };
         let samples = vec![make(10.0, -30.0), make(80.0, -10.0)];
         let clusters = cluster_samples(&samples);
@@ -358,7 +358,7 @@ mod tests {
             speech_rate: 0.0,
             crest_db: 0.0,
             duration_secs: 0.0,
-            wav_path: PathBuf::new(),
+            _wav_path: PathBuf::new(),
         });
         assert!(calm.starts_with("calm_warm_loose"));
 
@@ -371,7 +371,7 @@ mod tests {
             speech_rate: 0.0,
             crest_db: 0.0,
             duration_secs: 0.0,
-            wav_path: PathBuf::new(),
+            _wav_path: PathBuf::new(),
         });
         assert!(intense.starts_with("intense_cold_commanding"));
     }

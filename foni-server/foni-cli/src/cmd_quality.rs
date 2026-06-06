@@ -1,7 +1,7 @@
 use super::cmd_common::{process_request, synth_request};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
-use tracing::{debug, error, info, warn};
+use tracing::info;
 
 pub fn cmd_analyse(
     file: &PathBuf,
@@ -261,9 +261,10 @@ pub fn cmd_compare(
         return Err("No analysed pairs.".into());
     }
 
-    let mean = |rows: &[Row], f: fn(&Row) -> f64| rows.iter().map(|r| f(r)).sum::<f64>() / n;
+    let mean = |rows: &[Row], f: fn(&Row) -> f64| rows.iter().map(&f).sum::<f64>() / n;
 
-    let metrics: &[(&str, fn(&Row) -> f64, &str)] = &[
+    type MetricSpec = (&'static str, fn(&Row) -> f64, &'static str);
+    let metrics: &[MetricSpec] = &[
         ("Pitch Hz", |r| r.f0, "bass-baritone 80–130 Hz"),
         ("Pitch variation Hz", |r| r.f0_std, "pitch variation"),
         (
@@ -741,28 +742,28 @@ pub fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str
     ];
 
     struct Metric {
-        name: &'static str,
+        _name: &'static str,
         extract: fn(&foni_analyse::AnalysisResult) -> f32,
     }
     let metrics = [
         Metric {
-            name: "brightness_hz",
+            _name: "brightness_hz",
             extract: |a| a.spectral.brightness_hz,
         },
         Metric {
-            name: "loudness_db",
+            _name: "loudness_db",
             extract: |a| a.loudness.rms_db,
         },
         Metric {
-            name: "bass_balance_db",
+            _name: "bass_balance_db",
             extract: |a| a.spectral.bass_balance_db,
         },
         Metric {
-            name: "vocal_darkness_db_oct",
+            _name: "vocal_darkness_db_oct",
             extract: |a| a.spectral.vocal_darkness_db_oct,
         },
         Metric {
-            name: "breathiness_db",
+            _name: "breathiness_db",
             extract: |a| a.voice.breathiness_db,
         },
     ];
@@ -882,7 +883,7 @@ pub fn cmd_energy(file: &std::path::Path, frame_ms: usize) -> Result<(), String>
         frame_ms
     );
 
-    println!("{:>5}  {:>7}  {}", "Time", "RMS(dB)", "");
+    println!("{:>5}  {:>7}  ", "Time", "RMS(dB)");
     println!("{}", "─".repeat(60));
 
     for i in 0..n_frames {

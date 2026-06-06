@@ -210,7 +210,7 @@ pub struct AiSuggestion {
 // ── App ───────────────────────────────────────────────────────────────────────
 
 pub struct MixerApp {
-    pub client: FoniClient,
+    pub _client: FoniClient,
     pub phrase: String,
     pub model: String,
     pub tracks: Vec<Track>,
@@ -227,7 +227,7 @@ pub struct MixerApp {
     /// True while analyse is loading.
     pub analysing: bool,
     pub reference: Option<std::path::PathBuf>,
-    pub playing: bool,
+    pub _playing: bool,
     pub quit: bool,
 }
 
@@ -244,7 +244,7 @@ impl MixerApp {
             "rmsTargetLufs": -8.0
         });
         MixerApp {
-            client,
+            _client: client,
             phrase,
             model,
             tracks,
@@ -258,7 +258,7 @@ impl MixerApp {
             rendering: false,
             analysing: false,
             reference: None,
-            playing: false,
+            _playing: false,
             quit: false,
         }
     }

@@ -6,7 +6,7 @@
 //! per chunk, so we can verify ordering by analyzing the output.
 
 use axum::{routing::post, Json, Router};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +24,7 @@ fn sine_wav(freq: f32, duration_secs: f32) -> Vec<u8> {
 
 /// Pluggable delay strategy for mock TTS.
 #[derive(Clone)]
+#[allow(dead_code)] // Random used in tests, variants kept for completeness
 enum Delay {
     None,
     Fixed(Duration),
@@ -95,7 +96,7 @@ async fn sequential_chunks_arrive_in_order() {
     let (tts_url, call_count) = start_mock_tts().await;
     let client = foni_client::FoniClient::new(&tts_url);
 
-    let chunks = vec!["First sentence.", "Second sentence!", "Third sentence?"];
+    let chunks = ["First sentence.", "Second sentence!", "Third sentence?"];
 
     let mut wav_buffers: Vec<Vec<u8>> = Vec::new();
 
@@ -118,7 +119,7 @@ async fn sequential_chunks_arrive_in_order() {
 #[tokio::test]
 async fn parallel_chunks_all_complete() {
     let (tts_url, call_count) = start_mock_tts().await;
-    let client = foni_client::FoniClient::new(&tts_url);
+    let _client = foni_client::FoniClient::new(&tts_url);
 
     let chunks = vec!["First.", "Second.", "Third.", "Fourth.", "Fifth."];
 
@@ -149,9 +150,9 @@ async fn parallel_chunks_all_complete() {
 #[tokio::test]
 async fn ordered_buffer_assembly() {
     let (tts_url, _) = start_mock_tts().await;
-    let client = foni_client::FoniClient::new(&tts_url);
+    let _client = foni_client::FoniClient::new(&tts_url);
 
-    let chunks = vec!["Alpha.", "Beta.", "Gamma."];
+    let chunks = ["Alpha.", "Beta.", "Gamma."];
 
     // Synthesize in parallel, but collect in index order
     let mut handles = Vec::new();
@@ -197,7 +198,7 @@ async fn ordered_buffer_assembly() {
 async fn buffer_playback_can_start_before_all_complete() {
     let (tts_url, _) = start_mock_tts().await;
 
-    let chunks = vec!["One.", "Two.", "Three.", "Four."];
+    let chunks = ["One.", "Two.", "Three.", "Four."];
 
     // Simulate: fire chunk 0, start "playing" it while firing 1,2,3
     let client = foni_client::FoniClient::new(&tts_url);
@@ -246,7 +247,7 @@ async fn zero_delay_all_fast() {
 
 #[tokio::test]
 async fn per_chunk_delay_spike_detected_by_tracker() {
-    use foni_synth::engine::jitter::{Action, JitterTracker, Trip};
+    use foni_synth::engine::jitter::{JitterTracker, Trip};
 
     let delays = vec![
         Duration::from_millis(100), // chunk 0: fast

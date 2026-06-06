@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use foni_synth::engine::expression_palette::{ChatterboxColorset, Colorset, Shade};
+use foni_synth::engine::expression_palette::{ChatterboxColorset, Colorset};
 use serde::Deserialize;
 use tracing::info;
 

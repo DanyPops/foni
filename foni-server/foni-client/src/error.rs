@@ -17,10 +17,13 @@ pub enum FoniError {
 }
 
 impl FoniError {
+    // Takes by value to work as map_err(FoniError::request) function pointer.
+    #[allow(clippy::needless_pass_by_value)]
     pub(crate) fn request(e: reqwest::Error) -> Self {
         Self::Request(e.to_string())
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     pub(crate) fn decode(e: reqwest::Error) -> Self {
         Self::Decode(e.to_string())
     }

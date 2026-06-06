@@ -5,7 +5,6 @@
 //! 3. Overall arc shape (opening → climax → resolution)
 //! 4. Per-stroke shade assignment
 
-use super::expression_palette::Shade;
 use super::stroke::{Delimiter, Stroke};
 
 /// Raw emotion reading from SER or defaults.

@@ -233,7 +233,12 @@ impl RuaccentAnnotator {
 
 impl StressAnnotator for RuaccentAnnotator {
     fn annotate(&self, text: &str) -> String {
-        match ruaccent_call(&self.url, text) {
+        // block_in_place yields the tokio thread to the scheduler while we
+        // wait on the async HTTP call, preventing executor starvation.
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(ruaccent_call_async(&self.url, text))
+        });
+        match result {
             Ok(annotated) => annotated,
             Err(e) => {
                 tracing::debug!(error = %e, "ruaccent unreachable, falling back to dictionary");
@@ -243,9 +248,11 @@ impl StressAnnotator for RuaccentAnnotator {
     }
 }
 
-fn ruaccent_call(url: &str, text: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_millis(200))
+/// Async HTTP call to the ruaccent sidecar.
+/// Uses the non-blocking reqwest client — safe to call from async tasks.
+pub(crate) async fn ruaccent_call_async(url: &str, text: &str) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(500))
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -253,13 +260,14 @@ fn ruaccent_call(url: &str, text: &str) -> Result<String, String> {
         .post(url)
         .json(&serde_json::json!({ "text": text }))
         .send()
+        .await
         .map_err(|e| e.to_string())?;
 
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
 
-    let body: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
     body["text"]
         .as_str()
         .map(str::to_owned)

@@ -43,10 +43,8 @@ fn handle_normal(app: &mut MixerApp, key: KeyEvent) -> bool {
 
 fn handle_tracks(app: &mut MixerApp, key: KeyEvent) {
     match key.code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            if app.selected + 1 < app.tracks.len() {
-                app.selected += 1;
-            }
+        KeyCode::Char('j') | KeyCode::Down if app.selected + 1 < app.tracks.len() => {
+            app.selected += 1;
         }
         KeyCode::Char('k') | KeyCode::Up => {
             app.selected = app.selected.saturating_sub(1);
@@ -153,10 +151,8 @@ fn handle_tracks(app: &mut MixerApp, key: KeyEvent) {
 
 fn handle_params(app: &mut MixerApp, key: KeyEvent) {
     match key.code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            if app.param_sel + 1 < PARAMS.len() {
-                app.param_sel += 1;
-            }
+        KeyCode::Char('j') | KeyCode::Down if app.param_sel + 1 < PARAMS.len() => {
+            app.param_sel += 1;
         }
         KeyCode::Char('k') | KeyCode::Up => {
             app.param_sel = app.param_sel.saturating_sub(1);
@@ -259,10 +255,12 @@ fn handle_text_input(app: &mut MixerApp, key: KeyEvent) {
             let (idx, mut buf) = (*track_idx, buf.clone());
             match key.code {
                 KeyCode::Enter => {
-                    app.tracks.get_mut(idx).map(|t| t.note = Some(buf.clone()));
+                    if let Some(t) = app.tracks.get_mut(idx) {
+                        t.note = Some(buf.clone());
+                    }
                     app.save_session();
                     app.input_mode = InputMode::Normal;
-                    app.status_msg = Some(format!("note saved"));
+                    app.status_msg = Some("note saved".to_string());
                 }
                 KeyCode::Esc => {
                     app.input_mode = InputMode::Normal;

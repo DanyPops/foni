@@ -2,7 +2,7 @@
 ///
 /// Spins up:
 ///   - Mock Ollama (returns "TRANSLATED: {input}")
-///   - Mock Fish Speech (returns a sine WAV)
+///   - Mock Chatterbox/Modal TTS (returns a sine WAV on POST /)
 ///   - Real foni-synth server
 ///   - WS client
 ///
@@ -10,7 +10,7 @@
 /// Zero external deps. No GPU, no network, no speakers.
 ///
 /// cargo test -p foni-synth --test e2e_simulation -- --nocapture
-use axum::{extract::Multipart, routing::post, Json, Router};
+use axum::{routing::post, Json, Router};
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::f32::consts::PI;
@@ -47,18 +47,14 @@ async fn start_mock_ollama() -> String {
     format!("http://127.0.0.1:{}", addr.port())
 }
 
-async fn start_mock_fish_speech() -> String {
+/// Mock Chatterbox/Modal TTS — accepts any JSON POST, returns a sine WAV.
+async fn start_mock_tts() -> String {
     let app = Router::new().route(
-        "/v1/tts",
-        post(|mut multipart: Multipart| async move {
-            let mut text = String::new();
-            while let Ok(Some(field)) = multipart.next_field().await {
-                if field.name() == Some("text") {
-                    text = field.text().await.unwrap_or_default();
-                }
-            }
-            eprintln!("  [mock fish] synthesizing: {text}");
-            let wav = sine_wav(220.0, 0.3, 22050);
+        "/",
+        post(|Json(body): Json<serde_json::Value>| async move {
+            let text = body["text"].as_str().unwrap_or("");
+            tracing::debug!(text, "[mock tts] synthesizing");
+            let wav = sine_wav(220.0, 0.3, 24_000);
             ([(axum::http::header::CONTENT_TYPE, "audio/wav")], wav)
         }),
     );
@@ -108,10 +104,10 @@ async fn recv(
 async fn full_pipeline_delta_to_playing() {
     // 1. Start mock services
     let ollama_url = start_mock_ollama().await;
-    let fish_url = start_mock_fish_speech().await;
+    let tts_url = start_mock_tts().await;
 
     // 2. Configure foni-synth to use mocks
-    std::env::set_var("FISH_SPEECH_URL", &fish_url);
+    std::env::set_var("FONI_TTS_URL", &tts_url);
     std::env::set_var("FONI_OLLAMA_URL", &ollama_url);
 
     // 3. Start foni-synth
@@ -155,9 +151,9 @@ async fn full_pipeline_delta_to_playing() {
 }
 
 #[tokio::test]
-async fn full_pipeline_http_synthesize_with_mock_fish() {
-    let fish_url = start_mock_fish_speech().await;
-    std::env::set_var("FISH_SPEECH_URL", &fish_url);
+async fn full_pipeline_http_synthesize_with_mock_tts() {
+    let tts_url = start_mock_tts().await;
+    std::env::set_var("FONI_TTS_URL", &tts_url);
 
     let (_ws_url, http_url) = start_foni_synth().await;
 
@@ -198,8 +194,8 @@ async fn full_pipeline_http_synthesize_with_mock_fish() {
 #[tokio::test]
 async fn full_pipeline_emotion_then_synthesis() {
     let ollama_url = start_mock_ollama().await;
-    let fish_url = start_mock_fish_speech().await;
-    std::env::set_var("FISH_SPEECH_URL", &fish_url);
+    let tts_url = start_mock_tts().await;
+    std::env::set_var("FONI_TTS_URL", &tts_url);
     std::env::set_var("FONI_OLLAMA_URL", &ollama_url);
 
     let (ws_url, _) = start_foni_synth().await;
@@ -247,8 +243,8 @@ async fn full_pipeline_emotion_then_synthesis() {
 
 #[tokio::test]
 async fn cache_hit_on_second_request() {
-    let fish_url = start_mock_fish_speech().await;
-    std::env::set_var("FISH_SPEECH_URL", &fish_url);
+    let tts_url = start_mock_tts().await;
+    std::env::set_var("FONI_TTS_URL", &tts_url);
 
     let (_ws_url, http_url) = start_foni_synth().await;
     let client = reqwest::Client::new();
@@ -295,8 +291,8 @@ async fn cache_hit_on_second_request() {
 #[tokio::test]
 async fn full_pipeline_mat_injection() {
     let ollama_url = start_mock_ollama().await;
-    let fish_url = start_mock_fish_speech().await;
-    std::env::set_var("FISH_SPEECH_URL", &fish_url);
+    let tts_url = start_mock_tts().await;
+    std::env::set_var("FONI_TTS_URL", &tts_url);
     std::env::set_var("FONI_OLLAMA_URL", &ollama_url);
     // Disable dry_run so mat injection runs
     std::env::set_var("FONI_DRY_RUN", "0");
@@ -342,8 +338,8 @@ async fn full_pipeline_mat_injection() {
 #[tokio::test]
 async fn full_pipeline_emotion_affects_injection() {
     let ollama_url = start_mock_ollama().await;
-    let fish_url = start_mock_fish_speech().await;
-    std::env::set_var("FISH_SPEECH_URL", &fish_url);
+    let tts_url = start_mock_tts().await;
+    std::env::set_var("FONI_TTS_URL", &tts_url);
     std::env::set_var("FONI_OLLAMA_URL", &ollama_url);
     std::env::set_var("FONI_DRY_RUN", "0");
 

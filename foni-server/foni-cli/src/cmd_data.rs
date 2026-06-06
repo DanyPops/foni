@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tracing::{debug, error, info, warn};
+use tracing::info;
 
 const CHATTERBOX_SAMPLE_RATE: u32 = 24_000;
 const DEFAULT_SILENCE_DB: i32 = -30;
@@ -433,7 +433,7 @@ pub fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) -> Result<(), String> {
     let errors = AtomicU64::new(0);
 
     files.par_iter().for_each(|path| {
-        match std::fs::read(path).and_then(|b| Ok(b)) {
+        match std::fs::read(path) {
             Ok(bytes) => match decode_wav(&bytes) {
                 Ok(wav) => {
                     // Fast path: loudness + spectral + temporal (cheap) + McLeod F0.
@@ -468,7 +468,7 @@ pub fn cmd_corpus(dir: &PathBuf, vs: Option<&PathBuf>) -> Result<(), String> {
         return Err("All files failed.".into());
     }
 
-    let mean = |f: fn(&Row) -> f64| rows.iter().map(|r| f(r)).sum::<f64>() / n as f64;
+    let mean = |f: fn(&Row) -> f64| rows.iter().map(&f).sum::<f64>() / n as f64;
     let rms = mean(|r| r.rms);
     let crest = mean(|r| r.crest);
     let centroid = mean(|r| r.centroid);

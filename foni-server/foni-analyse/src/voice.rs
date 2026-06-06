@@ -256,13 +256,15 @@ fn goertzel(samples: &[f32], freq_hz: f32, sample_rate: u32) -> f32 {
     use std::f32::consts::PI;
     let omega = 2.0 * PI * freq_hz / sample_rate as f32;
     let coeff = 2.0 * omega.cos();
-    let (mut s0, mut s1, mut s2) = (0.0f32, 0.0f32, 0.0f32);
-    for &x in samples {
-        s2 = s1;
-        s1 = s0;
-        s0 = coeff * s1 - s2 + x;
+    let (mut current, mut prev) = (0.0f32, 0.0f32);
+    for &sample in samples {
+        let two_ago = prev;
+        prev = current;
+        current = coeff * prev - two_ago + sample;
     }
-    (s0 * s0 + s1 * s1 - coeff * s0 * s1).max(0.0).sqrt()
+    (current * current + prev * prev - coeff * current * prev)
+        .max(0.0)
+        .sqrt()
 }
 
 fn compute_breathiness(samples: &[f32], sample_rate: u32, frame_size: usize) -> f32 {

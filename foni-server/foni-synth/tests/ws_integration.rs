@@ -301,6 +301,7 @@ async fn recv_all(
 ) -> Vec<Value> {
     let mut out = Vec::new();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(ms);
+    #[allow(clippy::while_let_loop)]
     loop {
         match tokio::time::timeout_at(deadline, ws.next()).await {
             Ok(Some(Ok(Message::Text(t)))) => {
@@ -325,6 +326,7 @@ async fn collect_buffer_states(
 ) -> Vec<Value> {
     let mut states = Vec::new();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(ms);
+    #[allow(clippy::while_let_loop)]
     loop {
         match tokio::time::timeout_at(deadline, ws.next()).await {
             Ok(Some(Ok(Message::Text(t)))) => {
@@ -428,7 +430,11 @@ async fn tts_disabled_mid_stream_halts_synthesis() {
     let mut ws = connect(&url).await;
 
     // First sentence should produce a speak event.
-    send_msg(&mut ws, json!({"type": "delta", "text": "First sentence. "})).await;
+    send_msg(
+        &mut ws,
+        json!({"type": "delta", "text": "First sentence. "}),
+    )
+    .await;
     let first = recv(&mut ws, 1500).await;
     assert!(first.is_some(), "should get speak for first sentence");
     assert_eq!(first.unwrap()["type"], "speak");
@@ -438,11 +444,18 @@ async fn tts_disabled_mid_stream_halts_synthesis() {
 
     // Further deltas and flush — collect everything for 1200ms.
     // A correctly implemented disable must produce zero speak events.
-    send_msg(&mut ws, json!({"type": "delta", "text": "Second sentence. Third sentence. "})).await;
+    send_msg(
+        &mut ws,
+        json!({"type": "delta", "text": "Second sentence. Third sentence. "}),
+    )
+    .await;
     send_msg(&mut ws, json!({"type": "message_end"})).await;
 
     let after_disable = recv_all(&mut ws, 1200).await;
-    let speaks: Vec<_> = after_disable.iter().filter(|m| m["type"] == "speak").collect();
+    let speaks: Vec<_> = after_disable
+        .iter()
+        .filter(|m| m["type"] == "speak")
+        .collect();
     assert!(
         speaks.is_empty(),
         "no speak events after disable, got: {speaks:?}"
@@ -459,9 +472,16 @@ async fn tts_reenabled_resumes_synthesis() {
 
     // Text sent while disabled — collect for 1200ms.
     // A correctly implemented disable must produce zero speak events during this window.
-    send_msg(&mut ws, json!({"type": "delta", "text": "Queued sentence. "})).await;
+    send_msg(
+        &mut ws,
+        json!({"type": "delta", "text": "Queued sentence. "}),
+    )
+    .await;
     let during_disable = recv_all(&mut ws, 1200).await;
-    let speaks_during = during_disable.iter().filter(|m| m["type"] == "speak").count();
+    let speaks_during = during_disable
+        .iter()
+        .filter(|m| m["type"] == "speak")
+        .count();
     assert_eq!(speaks_during, 0, "no speaks while disabled");
 
     // Re-enable — accumulated text should now be spoken.

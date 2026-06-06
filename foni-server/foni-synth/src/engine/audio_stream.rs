@@ -194,7 +194,7 @@ mod tests {
         let mut state = fresh_state();
         feed_audio(&mut state, &tone(1000, 0.5));
         // No silence yet, nothing emitted
-        assert!(state.buffer.len() > 0);
+        assert!(!state.buffer.is_empty());
         let flushed = flush(&mut state);
         assert!(flushed.is_some());
     }

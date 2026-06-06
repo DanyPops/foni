@@ -7,7 +7,7 @@
 //! If predicted RTT > budget, the listener would hear silence.
 //! Filler covers the gap.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const SAMPLE_RATE: u32 = 24_000;
 
@@ -48,6 +48,12 @@ pub enum Action {
     Play,
     /// Chunk will be late by this much — insert filler first.
     Filler { gap_ms: f64 },
+}
+
+impl Default for JitterTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl JitterTracker {

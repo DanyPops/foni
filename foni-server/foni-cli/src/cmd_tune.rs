@@ -1,13 +1,12 @@
 use super::cmd_common::{
     load_maquettes, play_wav, print_tune_results, process_request, synth_request, Maquette,
 };
-use std::path::PathBuf;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info};
 
 pub fn cmd_tune(
     server: &str,
     text: &str,
-    presets_path: &PathBuf,
+    presets_path: &std::path::Path,
     reference: Option<&std::path::Path>,
     model: &str,
 ) {
@@ -137,7 +136,7 @@ pub fn cmd_tune(
 pub fn cmd_tune_auto(
     server: &str,
     phrase: &str,
-    presets_path: &PathBuf,
+    presets_path: &std::path::Path,
     model: &str,
     n_iter: usize,
     vs: Option<&std::path::Path>,
@@ -276,7 +275,8 @@ pub fn cmd_tune_auto(
     info!("Running {n_iter} iterations of coordinate descent…");
     println!();
 
-    let steps: &[(&str, &dyn Fn(&mut Knobs, f32), f32, f32, f32)] = &[
+    type TuneStep<'a> = (&'a str, &'a dyn Fn(&mut Knobs, f32), f32, f32, f32);
+    let steps: &[TuneStep<'_>] = &[
         ("tiltLowDb", &|k, d| k.tilt_low_db += d, 1.0, 0.0, 20.0),
         ("tiltHighDb", &|k, d| k.tilt_high_db += d, 1.0, -20.0, 0.0),
         ("rmsTargetLufs", &|k, d| k.rms_lufs += d, 0.5, -22.0, -8.0),
@@ -384,7 +384,13 @@ pub fn cmd_tune_auto(
     tracing::info!("    Final gap score:  {:.1}%", top3[0].1);
 }
 
-pub fn cmd_test_policy(script: &PathBuf, brightness: f32, loudness: f32, bass: f32, darkness: f32) {
+pub fn cmd_test_policy(
+    script: &std::path::Path,
+    brightness: f32,
+    loudness: f32,
+    bass: f32,
+    darkness: f32,
+) {
     use tabled::{settings::Style, Table, Tabled};
 
     let engine = match foni_synth::quality::dsp::policy::PolicyEngine::load(script) {

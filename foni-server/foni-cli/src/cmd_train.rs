@@ -1,7 +1,6 @@
 use super::cmd_common::{data_dir, synth_request};
 use super::modal_cloud;
-use std::path::PathBuf;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info};
 
 const SNAPSHOT_PHRASES: &[&str] = &[
     "Подойди-ка, надо тебе ситуацию прояснить.",
@@ -11,11 +10,12 @@ const SNAPSHOT_PHRASES: &[&str] = &[
     "Удачи, браток. На Зоне удача нужна.",
 ];
 
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_train(
     _server: &str,
     model: &str,
-    _dataset: &PathBuf,
-    _ref_path: &PathBuf,
+    _dataset: &std::path::Path,
+    _ref_path: &std::path::Path,
     steps: u32,
     dry_run: bool,
     _ntfy_topic: &str,
@@ -155,7 +155,7 @@ pub fn cmd_train_cancel(call_id: &str) {
     });
 }
 
-pub fn cmd_snapshot(server: &str, model: &str, ref_path: &PathBuf) -> Result<(), String> {
+pub fn cmd_snapshot(server: &str, model: &str, ref_path: &std::path::Path) -> Result<(), String> {
     use foni_analyse::{analyse, compute_gap, decode_wav, TargetTensor};
     use owo_colors::OwoColorize;
 
@@ -219,7 +219,11 @@ pub fn cmd_snapshot(server: &str, model: &str, ref_path: &PathBuf) -> Result<(),
     Ok(())
 }
 
-pub fn cmd_compare_models(server: &str, model: &str, ref_path: &PathBuf) -> Result<(), String> {
+pub fn cmd_compare_models(
+    server: &str,
+    model: &str,
+    ref_path: &std::path::Path,
+) -> Result<(), String> {
     use foni_analyse::{analyse, compute_gap, decode_wav, TargetTensor};
     use owo_colors::OwoColorize;
 

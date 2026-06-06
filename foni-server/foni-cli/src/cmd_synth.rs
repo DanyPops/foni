@@ -5,10 +5,8 @@ use super::cmd_common::{
 use dialoguer::{theme::ColorfulTheme, Input, Select};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
-use std::process::Command;
-use tracing::{debug, error, info, warn};
+use tracing::info;
 
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 pub fn cmd_synth(
     server: &str,
@@ -652,7 +650,7 @@ pub fn cmd_listen(server: &str, text: &str, model: &str, dsp_variants: bool, pla
             } else {
                 serde_json::json!({})
             };
-            synth_request(server, text, model, "ru", 150, *dsp, opts).map_err(|e| e)
+            synth_request(server, text, model, "ru", 150, *dsp, opts)
         };
 
         match result {

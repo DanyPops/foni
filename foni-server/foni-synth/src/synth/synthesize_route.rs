@@ -1,6 +1,6 @@
 /// POST /synthesize — text → TTS → DSP → WAV, with LRU cache.
 ///
-/// TTS backend: Chatterbox Multilingual on Modal (FISH_SPEECH_URL).
+/// TTS backend: Chatterbox Multilingual on Modal (FONI_TTS_URL).
 /// Zero-shot voice cloning with expression controls (excitement, assertiveness, warmth).
 use axum::{
     body::Body,
@@ -104,7 +104,9 @@ fn cache_key(req: &SynthRequest) -> [u8; 32] {
 }
 
 fn tts_url() -> Option<String> {
-    std::env::var("FISH_SPEECH_URL").ok()
+    std::env::var("FONI_TTS_URL")
+        .or_else(|_| std::env::var("FISH_SPEECH_URL")) // legacy alias
+        .ok()
 }
 
 fn tts_token() -> Option<String> {
@@ -113,7 +115,7 @@ fn tts_token() -> Option<String> {
 
 async fn cloud_tts(text: &str, req: &SynthRequest) -> Result<Vec<u8>, String> {
     let t = std::time::Instant::now();
-    let url = tts_url().ok_or("FISH_SPEECH_URL not set")?;
+    let url = tts_url().ok_or("FONI_TTS_URL not set")?;
     let mut body = serde_json::json!({"text": text, "language": req.voice});
 
     if let Some(v) = req.exaggeration {

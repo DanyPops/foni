@@ -10,7 +10,7 @@ use foni_client::{FoniClient, WireOpts};
 use ratatui::DefaultTerminal;
 
 use state::{load_session, session_path, InputMode, MixerApp, Track};
-use tracing::{debug, error, info, warn};
+use tracing::info;
 
 /// Boot the TUI mixer.  Returns when the user presses q / Ctrl-C.
 pub fn run(
@@ -156,10 +156,8 @@ fn run_loop(
         // ── Input event ───────────────────────────────────────────────────────
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    if events::handle_key(app, key) {
-                        break;
-                    }
+                if key.kind == KeyEventKind::Press && events::handle_key(app, key) {
+                    break;
                 }
             }
         }

@@ -123,8 +123,8 @@ fn vocal_weight(ltas: &[f64], bin_hz: f32, n_bins: usize) -> f32 {
     }
     let mut cum = 0.0f64;
     let half = ltas_total * 0.5;
-    for k in lo..hi {
-        cum += ltas[k];
+    for (k, &ltas_k) in ltas[lo..hi].iter().enumerate().map(|(i, v)| (i + lo, v)) {
+        cum += ltas_k;
         if cum >= half {
             return k as f32 * bin_hz;
         }

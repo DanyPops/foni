@@ -16,7 +16,6 @@ pub use types::{
 };
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use std::collections::HashMap;
 use std::time::Duration;
 
 pub type Result<T> = std::result::Result<T, FoniError>;

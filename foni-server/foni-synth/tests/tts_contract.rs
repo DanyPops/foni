@@ -4,9 +4,8 @@
 /// success, auth failure, server error, timeout, malformed body, missing URL.
 ///
 /// cargo test -p foni-synth --test tts_contract -- --nocapture
-use axum::{routing::post, Json, Router};
+use axum::{routing::post, Router};
 use serde_json::json;
-use std::time::Duration;
 use tokio::net::TcpListener;
 
 async fn start_mock(handler: axum::routing::MethodRouter) -> (String, u16) {

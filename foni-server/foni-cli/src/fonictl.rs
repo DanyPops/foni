@@ -572,11 +572,7 @@ enum Cmd {
 
 // ─── Subcommand handlers ──────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
 // ─── Entry point ──────────────────────────────────────────────────────────────
-
-/// Aggregate acoustic fingerprint across every WAV in a directory.
-/// Runs in a single process — no subprocess overhead per file.
 
 fn main() {
     tracing_subscriber::fmt()

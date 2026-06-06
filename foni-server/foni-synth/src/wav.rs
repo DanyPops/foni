@@ -185,18 +185,18 @@ pub fn noise_gate(samples: &mut [f32], sample_rate: u32) {
 
     // Expand speech regions by attack/release
     let original = is_speech.clone();
-    for i in 0..n_frames {
-        if original[i] {
-            for j in i.saturating_sub(attack_frames)..=(i + release_frames).min(n_frames - 1) {
-                is_speech[j] = true;
-            }
+    for (i, &is_active) in original.iter().enumerate() {
+        if is_active {
+            let lo = i.saturating_sub(attack_frames);
+            let hi = (i + release_frames + 1).min(n_frames);
+            is_speech[lo..hi].fill(true);
         }
     }
 
     // Zero non-speech frames
-    for (i, &speech) in is_speech.iter().enumerate() {
+    for (frame_idx, &speech) in is_speech.iter().enumerate() {
         if !speech {
-            let start = i * frame_size;
+            let start = frame_idx * frame_size;
             let end = (start + frame_size).min(samples.len());
             for s in &mut samples[start..end] {
                 *s = 0.0;
@@ -206,7 +206,7 @@ pub fn noise_gate(samples: &mut [f32], sample_rate: u32) {
 }
 
 /// Smooth fade-out over the last 50ms to avoid pops.
-fn fade_out(samples: &mut Vec<f32>, sample_rate: u32) {
+fn fade_out(samples: &mut [f32], sample_rate: u32) {
     let fade_samples = (sample_rate as usize * 50) / 1000; // 50ms
     let len = samples.len();
     if len < fade_samples {
