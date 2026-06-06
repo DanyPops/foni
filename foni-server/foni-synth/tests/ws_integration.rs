@@ -292,7 +292,31 @@ async fn neutral_text_returns_neutral() {
     assert_eq!(msg["intensity"], 0.0);
 }
 
-// ── Buffer state ────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Collect every non-buffer_state message within `ms` milliseconds.
+async fn recv_all(
+    ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
+    ms: u64,
+) -> Vec<Value> {
+    let mut out = Vec::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(ms);
+    loop {
+        match tokio::time::timeout_at(deadline, ws.next()).await {
+            Ok(Some(Ok(Message::Text(t)))) => {
+                if let Ok(msg) = serde_json::from_str::<Value>(&t) {
+                    if msg["type"] != "buffer_state" {
+                        out.push(msg);
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
+// ── Buffer state ─────────────────────────────────────────────────────────────
 
 /// Collect all messages until timeout, return buffer_state messages.
 async fn collect_buffer_states(
@@ -394,4 +418,60 @@ async fn buffer_state_has_correct_shape() {
     assert!(s.get("buffered").is_some(), "missing buffered");
     assert!(s.get("pending").is_some(), "missing pending");
     assert!(s.get("complete").is_some(), "missing complete");
+}
+
+// ── TTS enable/disable ────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn tts_disabled_mid_stream_halts_synthesis() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    // First sentence should produce a speak event.
+    send_msg(&mut ws, json!({"type": "delta", "text": "First sentence. "})).await;
+    let first = recv(&mut ws, 1500).await;
+    assert!(first.is_some(), "should get speak for first sentence");
+    assert_eq!(first.unwrap()["type"], "speak");
+
+    // Disable TTS mid-stream.
+    send_msg(&mut ws, json!({"type": "set_config", "enabled": false})).await;
+
+    // Further deltas and flush — collect everything for 1200ms.
+    // A correctly implemented disable must produce zero speak events.
+    send_msg(&mut ws, json!({"type": "delta", "text": "Second sentence. Third sentence. "})).await;
+    send_msg(&mut ws, json!({"type": "message_end"})).await;
+
+    let after_disable = recv_all(&mut ws, 1200).await;
+    let speaks: Vec<_> = after_disable.iter().filter(|m| m["type"] == "speak").collect();
+    assert!(
+        speaks.is_empty(),
+        "no speak events after disable, got: {speaks:?}"
+    );
+}
+
+#[tokio::test]
+async fn tts_reenabled_resumes_synthesis() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    // Disable before any text arrives.
+    send_msg(&mut ws, json!({"type": "set_config", "enabled": false})).await;
+
+    // Text sent while disabled — collect for 1200ms.
+    // A correctly implemented disable must produce zero speak events during this window.
+    send_msg(&mut ws, json!({"type": "delta", "text": "Queued sentence. "})).await;
+    let during_disable = recv_all(&mut ws, 1200).await;
+    let speaks_during = during_disable.iter().filter(|m| m["type"] == "speak").count();
+    assert_eq!(speaks_during, 0, "no speaks while disabled");
+
+    // Re-enable — accumulated text should now be spoken.
+    send_msg(&mut ws, json!({"type": "set_config", "enabled": true})).await;
+    send_msg(&mut ws, json!({"type": "message_end"})).await;
+
+    let after_enable = recv_all(&mut ws, 1500).await;
+    let speaks_after = after_enable.iter().filter(|m| m["type"] == "speak").count();
+    assert!(
+        speaks_after > 0,
+        "should produce at least one speak after re-enable"
+    );
 }

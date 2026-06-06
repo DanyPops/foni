@@ -86,6 +86,12 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                 }
             }
             "message_end" => {
+                if !config.enabled {
+                    stream_state = fresh_state();
+                    chunk_counter = 0;
+                    buffer = PlaybackBuffer::new();
+                    continue;
+                }
                 let leftover = stream_state.buffer.trim().to_string();
                 stream_state = fresh_state();
                 if leftover.len() > 2 {
@@ -126,6 +132,36 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         "signals": reading.signals,
                     });
                     let _ = tx.send(Message::Text(reply.to_string())).await;
+                }
+            }
+            "set_config" => {
+                if let Some(enabled) = msg["enabled"].as_bool() {
+                    let was_disabled = !config.enabled;
+                    config.enabled = enabled;
+                    if enabled && was_disabled {
+                        // Drain any text that accumulated while disabled.
+                        let result = drain_chunks(&stream_state.buffer);
+                        stream_state.buffer = result.remainder;
+                        for chunk in result.chunks {
+                            let idx = chunk_counter;
+                            chunk_counter += 1;
+                            process_chunk(
+                                &chunk,
+                                &emotion_state,
+                                &config,
+                                &cache,
+                                &play_queue,
+                                &app_state,
+                                &mut mat_diversifier,
+                                &mut interject_diversifier,
+                                &mut tx,
+                                &mut buffer,
+                                idx,
+                                annotator.as_ref(),
+                            )
+                            .await;
+                        }
+                    }
                 }
             }
             "reset" => {
@@ -178,6 +214,10 @@ async fn handle_delta(
     annotator: &dyn StressAnnotator,
 ) {
     feed_delta(stream_state, delta);
+    // When disabled, accumulate in buffer but do not synthesize.
+    if !config.enabled {
+        return;
+    }
     let result = drain_chunks(&stream_state.buffer);
     stream_state.buffer = result.remainder;
     for chunk in result.chunks {
