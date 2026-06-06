@@ -880,6 +880,7 @@ dependencies = [
  "ebur128",
  "figment",
  "foni-analyse",
+ "foni-client",
  "futures",
  "hound",
  "lru",

@@ -34,6 +34,7 @@ futures      = "0.3"
 reqwest      = { workspace = true }
 
 [dev-dependencies]
+foni-client  = { path = "../foni-client" }
 reqwest      = { workspace = true }
 futures      = "0.3"
 tokio-tungstenite = { version = "0.26", features = ["connect"] }
