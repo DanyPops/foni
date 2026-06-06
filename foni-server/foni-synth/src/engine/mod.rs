@@ -4,6 +4,7 @@ pub mod emotion_arc;
 pub mod engine_config;
 pub mod expression_palette;
 pub mod facade;
+pub mod jitter;
 pub mod lexicon;
 pub mod player;
 pub mod stream;
