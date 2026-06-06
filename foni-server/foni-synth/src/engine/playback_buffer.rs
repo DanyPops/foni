@@ -4,6 +4,7 @@
 //! The buffer yields them in sequence for gapless playback.
 //! Like a YouTube video buffer: play what you have, wait for what you don't.
 
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Audio data for one chunk.
@@ -150,30 +151,57 @@ impl PlaybackBuffer {
     pub fn is_complete(&self) -> bool {
         matches!(self.status(), Status::Done { .. })
     }
+
+    /// Snapshot for WS/TUI consumption.
+    pub fn snapshot(&self) -> BufferSnapshot {
+        let remaining = match self.total {
+            Some(t) => t.saturating_sub(self.next_play),
+            None => self.buffered_ahead() + 3,
+        };
+        let mut slots = Vec::with_capacity(remaining);
+        for slot in 0..remaining {
+            let abs = self.next_play + slot;
+            slots.push(self.chunks.contains_key(&abs));
+        }
+        BufferSnapshot {
+            slots,
+            buffered: self.buffered_ahead(),
+            pending: remaining.saturating_sub(self.buffered_ahead()),
+            complete: self.is_complete(),
+        }
+    }
 }
 
-/// Render the buffer as a FIFO pipe draining left to right.
-/// `█` ready, `·` pending. Drains from the left as chunks play.
-pub fn render_bar(buf: &PlaybackBuffer) -> String {
-    let remaining = match buf.total {
-        Some(t) => t.saturating_sub(buf.next_play),
-        None => buf.buffered_ahead() + 3,
-    };
-    if remaining == 0 {
-        return String::from("▐▌");
-    }
+/// Serializable snapshot of buffer state for WS/TUI.
+#[derive(Debug, Clone, Serialize)]
+pub struct BufferSnapshot {
+    /// Per-slot: true = ready, false = pending.
+    pub slots: Vec<bool>,
+    /// Contiguous ready chunks.
+    pub buffered: usize,
+    /// Chunks not yet arrived.
+    pub pending: usize,
+    /// All done.
+    pub complete: bool,
+}
 
-    let mut bar = String::from("▐");
-    for slot in 0..remaining {
-        let abs = buf.next_play + slot;
-        bar.push(if buf.chunks.contains_key(&abs) {
-            '█'
-        } else {
-            '·'
-        });
+impl BufferSnapshot {
+    pub fn render_bar(&self) -> String {
+        if self.slots.is_empty() {
+            return String::from("\u{2590}\u{258c}");
+        }
+        let mut bar = String::from("\u{2590}");
+        for &ready in &self.slots {
+            bar.push(if ready { '\u{2588}' } else { '\u{00b7}' });
+        }
+        bar.push('\u{258c}');
+        bar
     }
-    bar.push('▌');
-    bar
+}
+
+/// Convenience: render bar directly from buffer.
+pub fn render_bar(buf: &PlaybackBuffer) -> String {
+    buf.snapshot().render_bar()
 }
 
 #[cfg(test)]
@@ -408,6 +436,75 @@ mod tests {
 
         let bar = render_bar(&buf);
         assert_eq!(bar, "▐██·█·▌");
+    }
+
+    // ── Snapshot ──
+
+    #[test]
+    fn snapshot_slots_match_state() {
+        let mut buf = PlaybackBuffer::new();
+        buf.submit(chunk(0, 500));
+        buf.submit(chunk(2, 500));
+        buf.close(4);
+
+        let snap = buf.snapshot();
+        assert_eq!(snap.slots, vec![true, false, true, false]);
+        assert_eq!(snap.buffered, 1);
+        assert_eq!(snap.pending, 3);
+        assert!(!snap.complete);
+    }
+
+    #[test]
+    fn snapshot_after_drain() {
+        let mut buf = PlaybackBuffer::new();
+        buf.submit(chunk(0, 500));
+        buf.submit(chunk(1, 500));
+        buf.close(3);
+        buf.next();
+
+        let snap = buf.snapshot();
+        assert_eq!(snap.slots, vec![true, false]);
+        assert_eq!(snap.buffered, 1);
+    }
+
+    #[test]
+    fn snapshot_complete() {
+        let mut buf = PlaybackBuffer::new();
+        buf.submit(chunk(0, 500));
+        buf.close(1);
+        buf.next();
+
+        let snap = buf.snapshot();
+        assert!(snap.complete);
+        assert!(snap.slots.is_empty());
+    }
+
+    #[test]
+    fn snapshot_render_bar_matches() {
+        let mut buf = PlaybackBuffer::new();
+        buf.submit(chunk(0, 500));
+        buf.submit(chunk(1, 500));
+        buf.submit(chunk(3, 500));
+        buf.close(5);
+
+        let bar = buf.snapshot().render_bar();
+        assert_eq!(
+            bar,
+            "\u{2590}\u{2588}\u{2588}\u{00b7}\u{2588}\u{00b7}\u{258c}"
+        );
+    }
+
+    #[test]
+    fn snapshot_serializes_to_json() {
+        let mut buf = PlaybackBuffer::new();
+        buf.submit(chunk(0, 500));
+        buf.close(2);
+
+        let snap = buf.snapshot();
+        let json = serde_json::to_string(&snap).unwrap();
+        assert!(json.contains("\"slots\":[true,false]"));
+        assert!(json.contains("\"buffered\":1"));
+        assert!(json.contains("\"pending\":1"));
     }
 
     #[test]
