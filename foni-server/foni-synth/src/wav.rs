@@ -158,6 +158,65 @@ pub fn trim_tail(samples: &mut Vec<f32>, sample_rate: u32) {
     if trim_to < samples.len() {
         samples.truncate(trim_to);
     }
+
+    fade_out(samples, sample_rate);
+}
+
+/// Noise gate: zero out frames below threshold.
+/// Kills whisper artifacts between speech segments.
+pub fn noise_gate(samples: &mut [f32], sample_rate: u32) {
+    let gate_db: f32 = -35.0;
+    let threshold = 10.0_f32.powf(gate_db / 20.0);
+    let frame_size = (sample_rate as usize * 30) / 1000; // 30ms frames
+    let attack_frames = 2; // open gate 2 frames before speech
+    let release_frames = 3; // hold gate open 3 frames after speech
+
+    let n_frames = samples.len() / frame_size;
+    let mut is_speech: Vec<bool> = (0..n_frames)
+        .map(|i| {
+            let start = i * frame_size;
+            let end = (start + frame_size).min(samples.len());
+            let rms = (samples[start..end].iter().map(|s| s * s).sum::<f32>()
+                / (end - start) as f32)
+                .sqrt();
+            rms >= threshold
+        })
+        .collect();
+
+    // Expand speech regions by attack/release
+    let original = is_speech.clone();
+    for i in 0..n_frames {
+        if original[i] {
+            for j in i.saturating_sub(attack_frames)..=(i + release_frames).min(n_frames - 1) {
+                is_speech[j] = true;
+            }
+        }
+    }
+
+    // Zero non-speech frames
+    for (i, &speech) in is_speech.iter().enumerate() {
+        if !speech {
+            let start = i * frame_size;
+            let end = (start + frame_size).min(samples.len());
+            for s in &mut samples[start..end] {
+                *s = 0.0;
+            }
+        }
+    }
+}
+
+/// Smooth fade-out over the last 50ms to avoid pops.
+fn fade_out(samples: &mut Vec<f32>, sample_rate: u32) {
+    let fade_samples = (sample_rate as usize * 50) / 1000; // 50ms
+    let len = samples.len();
+    if len < fade_samples {
+        return;
+    }
+    let start = len - fade_samples;
+    for (i, s) in samples[start..].iter_mut().enumerate() {
+        let gain = 1.0 - (i as f32 / fade_samples as f32);
+        *s *= gain;
+    }
 }
 
 #[cfg(test)]
@@ -197,5 +256,84 @@ mod tail_tests {
         let mut samples = vec![0.1, 0.2, 0.3];
         trim_tail(&mut samples, 24000);
         assert_eq!(samples.len(), 3, "too short to trim");
+    }
+
+    #[test]
+    fn trim_applies_fade_out() {
+        let sr = 24000u32;
+        let mut samples: Vec<f32> = (0..sr)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sr as f32).sin() * 0.5)
+            .collect();
+        trim_tail(&mut samples, sr);
+        let last = samples.last().copied().unwrap_or(1.0);
+        assert!(
+            last.abs() < 0.01,
+            "last sample should be near zero after fade, got {last}"
+        );
+    }
+
+    #[test]
+    fn noise_gate_kills_whispers() {
+        let sr = 24000u32;
+        let mut samples: Vec<f32> = (0..(sr * 2))
+            .map(|i| {
+                let t = i as f32 / sr as f32;
+                if t < 1.0 {
+                    // Real speech
+                    (2.0 * std::f32::consts::PI * 200.0 * t).sin() * 0.5
+                } else {
+                    // Whisper artifact: -40dB
+                    (2.0 * std::f32::consts::PI * 300.0 * t).sin() * 0.005
+                }
+            })
+            .collect();
+
+        noise_gate(&mut samples, sr);
+
+        // Speech region should be preserved
+        let speech_rms = (samples[..sr as usize / 2]
+            .iter()
+            .map(|s| s * s)
+            .sum::<f32>()
+            / (sr as f32 / 2.0))
+            .sqrt();
+        assert!(speech_rms > 0.1, "speech should survive gate");
+
+        // Whisper region should be zeroed
+        let whisper_rms = (samples[sr as usize + sr as usize / 2..]
+            .iter()
+            .map(|s| s * s)
+            .sum::<f32>()
+            / (sr as f32 / 2.0))
+            .sqrt();
+        assert!(
+            whisper_rms < 0.001,
+            "whisper should be gated, got rms={whisper_rms}"
+        );
+    }
+
+    #[test]
+    fn noise_gate_preserves_all_speech() {
+        let sr = 24000u32;
+        let mut samples: Vec<f32> = (0..sr)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sr as f32).sin() * 0.5)
+            .collect();
+        let before_rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+
+        noise_gate(&mut samples, sr);
+
+        let after_rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+        assert!(
+            (before_rms - after_rms).abs() < 0.01,
+            "full speech should pass through unchanged"
+        );
+    }
+
+    #[test]
+    fn noise_gate_silence_stays_silent() {
+        let sr = 24000u32;
+        let mut samples = vec![0.0f32; sr as usize];
+        noise_gate(&mut samples, sr);
+        assert!(samples.iter().all(|&s| s == 0.0));
     }
 }

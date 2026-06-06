@@ -229,6 +229,7 @@ pub async fn synthesize(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let tts_bytes = if backend == "cloud" {
         wav::roundtrip(&raw_tts, |samples, sr| {
+            wav::noise_gate(samples, sr);
             wav::trim_tail(samples, sr);
         })
         .unwrap_or(raw_tts)
