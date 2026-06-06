@@ -511,6 +511,9 @@ enum Cmd {
     /// Query Modal TTS scaling status (backlog, runners)
     TtsStats,
 
+    /// Show Modal inference cost ledger
+    Cost,
+
     /// Update Modal TTS scaling (max containers, buffer)
     TtsScale {
         /// Max concurrent GPU containers
@@ -878,6 +881,9 @@ fn main() {
             if let Err(e) = cmd_bench::cmd_tts_stats() {
                 tracing::error!("{e}");
             }
+        }
+        Cmd::Cost => {
+            cost::print_summary();
         }
         Cmd::TtsScale { max, buffer } => {
             if let Err(e) = cmd_bench::cmd_tts_scale(max, buffer) {

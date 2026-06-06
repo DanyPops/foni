@@ -108,6 +108,7 @@ pub fn synth_request_ext(
         body[k] = v.clone();
     }
 
+    let t0 = std::time::Instant::now();
     let resp = reqwest::blocking::Client::new()
         .post(format!("{server}/synthesize"))
         .json(&body)
@@ -123,7 +124,42 @@ pub fn synth_request_ext(
         ));
     }
 
-    resp.bytes().map(|b| b.to_vec()).map_err(|e| e.to_string())
+    let wav = resp
+        .bytes()
+        .map(|b| b.to_vec())
+        .map_err(|e| e.to_string())?;
+    let rtt_ms = t0.elapsed().as_millis() as u64;
+
+    // Record inference cost. Cache hits return in <150ms.
+    let cache_hit = rtt_ms < 150;
+    let audio_duration_sec = wav_duration_sec(&wav);
+    crate::cost::record_inference(crate::cost::InferenceReceipt::new(
+        text,
+        audio_duration_sec,
+        rtt_ms,
+        cache_hit,
+    ));
+
+    Ok(wav)
+}
+
+/// Estimate audio duration from a WAV byte slice.
+/// Returns 0.0 for unrecognised formats.
+fn wav_duration_sec(wav: &[u8]) -> f64 {
+    // Minimal WAV header parse: sample_rate at offset 24 (4 bytes LE),
+    // num_channels at 22 (2 bytes LE), bits_per_sample at 34 (2 bytes LE),
+    // data chunk size at 40 (4 bytes LE).
+    if wav.len() < 44 {
+        return 0.0;
+    }
+    let channels = u16::from_le_bytes([wav[22], wav[23]]) as f64;
+    let sample_rate = u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]) as f64;
+    let bits = u16::from_le_bytes([wav[34], wav[35]]) as f64;
+    let data_bytes = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]) as f64;
+    if channels == 0.0 || sample_rate == 0.0 || bits == 0.0 {
+        return 0.0;
+    }
+    data_bytes / (sample_rate * channels * (bits / 8.0))
 }
 
 pub fn process_request(
