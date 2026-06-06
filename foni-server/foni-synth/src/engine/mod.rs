@@ -6,6 +6,7 @@ pub mod expression_palette;
 pub mod facade;
 pub mod jitter;
 pub mod lexicon;
+pub mod playback_buffer;
 pub mod player;
 pub mod stream;
 pub mod stroke;
