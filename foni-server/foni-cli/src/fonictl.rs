@@ -177,6 +177,9 @@ enum Cmd {
         /// Warmth: tense (0.4) → friendly (1.2)
         #[arg(long)]
         warmth: Option<f32>,
+        /// Stress annotation backend: dict | ruaccent | none
+        #[arg(long)]
+        stress: Option<String>,
     },
 
     /// Maquette studio — produce N named variants, render all, listen, pick
@@ -1221,6 +1224,7 @@ fn main() {
             excitement,
             assertiveness,
             warmth,
+            stress,
         } => {
             let text = cmd_voice::resolve_text(text);
             let text = match &text {
@@ -1250,6 +1254,7 @@ fn main() {
                 excitement,
                 assertiveness,
                 warmth,
+                stress.as_deref(),
             );
         }
         Cmd::Studio { text, model, from } => {

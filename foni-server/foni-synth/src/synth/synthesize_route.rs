@@ -44,6 +44,9 @@ pub struct SynthRequest {
     pub cfg_weight: Option<f32>,
     /// Prosody randomness (0.05–5.0, default 0.8)
     pub temperature: Option<f32>,
+    /// Stress annotation backend: "dict", "ruaccent", or "none" (default "none").
+    #[serde(default)]
+    pub stress_mode: Option<String>,
 }
 
 fn default_voice() -> String {
@@ -93,6 +96,9 @@ fn cache_key(req: &SynthRequest) -> [u8; 32] {
         .flatten()
     {
         h.update(val.to_le_bytes());
+    }
+    if let Some(ref sm) = req.stress_mode {
+        h.update(sm.as_bytes());
     }
     h.finalize().into()
 }
@@ -222,7 +228,19 @@ pub async fn synthesize(
 
     // TTS synthesis
     let t_tts = std::time::Instant::now();
-    let text = req.text.clone();
+    let text = {
+        use crate::engine::stress::{make_annotator, StressMode};
+        use std::str::FromStr;
+        let mode = req
+            .stress_mode
+            .as_deref()
+            .map(|s| StressMode::from_str(s).unwrap_or_default())
+            .unwrap_or(StressMode::None);
+        let ruaccent_url = std::env::var("FONI_RUACCENT_URL")
+            .unwrap_or_else(|_| "http://localhost:8765/annotate".into());
+        let annotator = make_annotator(&mode, &ruaccent_url);
+        annotator.annotate(&req.text)
+    };
     let backend = "cloud";
     let raw_tts = synthesize_text(&text, &req)
         .await

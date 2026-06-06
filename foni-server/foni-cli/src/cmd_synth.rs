@@ -30,6 +30,7 @@ pub fn cmd_synth(
     excitement: Option<f32>,
     assertiveness: Option<f32>,
     warmth: Option<f32>,
+    stress: Option<&str>,
 ) {
     let mut opts = serde_json::json!({});
     if let Some(v) = rms {
@@ -86,6 +87,9 @@ pub fn cmd_synth(
     }
     if let Some(v) = assertiveness {
         body_extra.insert("cfg_weight".into(), v.into());
+    }
+    if let Some(s) = stress {
+        body_extra.insert("stress_mode".into(), s.into());
     }
     if let Some(v) = warmth {
         body_extra.insert("temperature".into(), v.into());
