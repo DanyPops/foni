@@ -41,9 +41,19 @@ async fn recv(
     ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
     ms: u64,
 ) -> Option<Value> {
-    match tokio::time::timeout(std::time::Duration::from_millis(ms), ws.next()).await {
-        Ok(Some(Ok(Message::Text(t)))) => serde_json::from_str(&t).ok(),
-        _ => None,
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(ms);
+    loop {
+        match tokio::time::timeout_at(deadline, ws.next()).await {
+            Ok(Some(Ok(Message::Text(t)))) => {
+                if let Ok(msg) = serde_json::from_str::<Value>(&t) {
+                    if msg["type"] == "buffer_state" {
+                        continue;
+                    }
+                    return Some(msg);
+                }
+            }
+            _ => return None,
+        }
     }
 }
 
@@ -280,4 +290,106 @@ async fn neutral_text_returns_neutral() {
     let msg = recv(&mut ws, 1000).await.expect("expected emotion");
     assert_eq!(msg["emotion"], "neutral");
     assert_eq!(msg["intensity"], 0.0);
+}
+
+// ── Buffer state ────────────────────────────────────────────────────────────
+
+/// Collect all messages until timeout, return buffer_state messages.
+async fn collect_buffer_states(
+    ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
+    ms: u64,
+) -> Vec<Value> {
+    let mut states = Vec::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(ms);
+    loop {
+        match tokio::time::timeout_at(deadline, ws.next()).await {
+            Ok(Some(Ok(Message::Text(t)))) => {
+                if let Ok(msg) = serde_json::from_str::<Value>(&t) {
+                    if msg["type"] == "buffer_state" {
+                        states.push(msg["data"].clone());
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+    states
+}
+
+#[tokio::test]
+async fn buffer_state_emitted_on_sentence() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    send_msg(&mut ws, json!({"type": "delta", "text": "Hello world. "})).await;
+
+    let states = collect_buffer_states(&mut ws, 500).await;
+    assert!(
+        !states.is_empty(),
+        "should emit at least one buffer_state after sentence"
+    );
+
+    let last = states.last().unwrap();
+    assert!(last["slots"].is_array());
+}
+
+#[tokio::test]
+async fn buffer_state_emitted_on_message_end() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    send_msg(&mut ws, json!({"type": "delta", "text": "Partial text"})).await;
+    send_msg(&mut ws, json!({"type": "message_end"})).await;
+
+    let states = collect_buffer_states(&mut ws, 500).await;
+    assert!(!states.is_empty(), "message_end should emit buffer_state");
+
+    let last = states.last().unwrap();
+    assert!(
+        last["complete"].as_bool().unwrap_or(false),
+        "last state should be complete after message_end"
+    );
+}
+
+#[tokio::test]
+async fn buffer_drains_across_multiple_sentences() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    send_msg(
+        &mut ws,
+        json!({"type": "delta", "text": "First sentence. Second sentence. Third sentence. "}),
+    )
+    .await;
+    send_msg(&mut ws, json!({"type": "message_end"})).await;
+
+    let states = collect_buffer_states(&mut ws, 1000).await;
+
+    // Should have multiple buffer_state updates (one per chunk + one on close)
+    assert!(
+        states.len() >= 3,
+        "expected >= 3 buffer updates for 3 sentences, got {}",
+        states.len()
+    );
+
+    // At least one state should be complete (the close event)
+    let any_complete = states.iter().any(|s| s["complete"].as_bool().unwrap_or(false));
+    assert!(any_complete, "at least one buffer_state should be complete");
+}
+
+#[tokio::test]
+async fn buffer_state_has_correct_shape() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    send_msg(&mut ws, json!({"type": "delta", "text": "Test. "})).await;
+
+    let states = collect_buffer_states(&mut ws, 500).await;
+    assert!(!states.is_empty());
+
+    let s = &states[0];
+    assert!(s.get("slots").is_some(), "missing slots");
+    assert!(s.get("buffered").is_some(), "missing buffered");
+    assert!(s.get("pending").is_some(), "missing pending");
+    assert!(s.get("complete").is_some(), "missing complete");
 }

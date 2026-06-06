@@ -13,6 +13,7 @@ use super::emotion::{
 };
 use super::engine_config::FoniConfig;
 use super::facade::{cache_key, new_shared_cache, PlayQueue, SharedCache};
+use super::playback_buffer::PlaybackBuffer;
 use super::stream::{drain_chunks, feed_delta, fresh_state, strip_markdown, StreamState};
 use super::train_events;
 use super::translator::{self, WordDiversifier};
@@ -38,6 +39,8 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
     }
     let cache = new_shared_cache();
     let (play_queue, _play_handle) = PlayQueue::new();
+    let mut buffer = PlaybackBuffer::new();
+    let mut chunk_counter: usize = 0;
     let mut mat_diversifier = WordDiversifier::new();
     let mut interject_diversifier = WordDiversifier::new();
 
@@ -68,6 +71,8 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         &mut mat_diversifier,
                         &mut interject_diversifier,
                         &mut tx,
+                        &mut buffer,
+                        &mut chunk_counter,
                     )
                     .await;
                 }
@@ -76,6 +81,8 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                 let leftover = stream_state.buffer.trim().to_string();
                 stream_state = fresh_state();
                 if leftover.len() > 2 {
+                    let idx = chunk_counter;
+                    chunk_counter += 1;
                     process_chunk(
                         &leftover,
                         &emotion_state,
@@ -86,9 +93,15 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         &mut mat_diversifier,
                         &mut interject_diversifier,
                         &mut tx,
+                        &mut buffer,
+                        idx,
                     )
                     .await;
                 }
+                buffer.close(chunk_counter);
+                emit_buffer_state(&buffer, &mut tx).await;
+                chunk_counter = 0;
+                buffer = PlaybackBuffer::new();
             }
             "user_message" => {
                 if let Some(text) = msg["text"].as_str() {
@@ -130,6 +143,16 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn emit_buffer_state(buffer: &PlaybackBuffer, tx: &mut (impl SinkExt<Message> + Unpin)) {
+    let snap = buffer.snapshot();
+    let msg = serde_json::json!({
+        "type": "buffer_state",
+        "data": snap,
+    });
+    let _ = tx.send(Message::Text(msg.to_string())).await;
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn handle_delta(
     delta: &str,
     stream_state: &mut StreamState,
@@ -141,11 +164,15 @@ async fn handle_delta(
     mat_div: &mut WordDiversifier,
     interject_div: &mut WordDiversifier,
     tx: &mut (impl SinkExt<Message> + Unpin),
+    buffer: &mut PlaybackBuffer,
+    chunk_counter: &mut usize,
 ) {
     feed_delta(stream_state, delta);
     let result = drain_chunks(&stream_state.buffer);
     stream_state.buffer = result.remainder;
     for chunk in result.chunks {
+        let idx = *chunk_counter;
+        *chunk_counter += 1;
         process_chunk(
             &chunk,
             emotion_state,
@@ -156,6 +183,8 @@ async fn handle_delta(
             mat_div,
             interject_div,
             tx,
+            buffer,
+            idx,
         )
         .await;
     }
@@ -172,6 +201,8 @@ async fn process_chunk(
     mat_div: &mut WordDiversifier,
     interject_div: &mut WordDiversifier,
     tx: &mut (impl SinkExt<Message> + Unpin),
+    buffer: &mut PlaybackBuffer,
+    chunk_idx: usize,
 ) {
     let t_start = std::time::Instant::now();
     let clean = strip_markdown(chunk);
@@ -215,6 +246,14 @@ async fn process_chunk(
 
     // In dry_run mode: skip synthesis and playback, just report what would be spoken
     if config.dry_run {
+        use super::playback_buffer::AudioChunk;
+        buffer.submit(AudioChunk {
+            index: chunk_idx,
+            samples: vec![],
+            sample_rate: 24_000,
+        });
+        buffer.next();
+        emit_buffer_state(buffer, tx).await;
         let reply = serde_json::json!({"type": "speak", "text": translated});
         let _ = tx.send(Message::Text(reply.to_string())).await;
         return;
@@ -223,7 +262,15 @@ async fn process_chunk(
     let key = cache_key(&translated, &config.rvc_model);
 
     if let Some(cached) = cache.get(&key).await {
-        play_queue.enqueue(cached).await;
+        play_queue.enqueue(cached.clone()).await;
+        use super::playback_buffer::AudioChunk;
+        buffer.submit(AudioChunk {
+            index: chunk_idx,
+            samples: vec![], // placeholder — actual audio in play_queue
+            sample_rate: 24_000,
+        });
+        buffer.next();
+        emit_buffer_state(buffer, tx).await;
         let reply = serde_json::json!({"type": "playing", "text": translated});
         let _ = tx.send(Message::Text(reply.to_string())).await;
         return;
@@ -244,6 +291,14 @@ async fn process_chunk(
             );
             cache.put(key, wav.clone()).await;
             play_queue.enqueue(wav).await;
+            use super::playback_buffer::AudioChunk;
+            buffer.submit(AudioChunk {
+                index: chunk_idx,
+                samples: vec![],
+                sample_rate: 24_000,
+            });
+            buffer.next();
+            emit_buffer_state(buffer, tx).await;
             tracing::info!(
                 total_ms = t_start.elapsed().as_millis() as u64,
                 "ws: chunk complete"
