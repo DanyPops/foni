@@ -29,7 +29,7 @@ async fn main() {
             }
         }
         result.unwrap_or_else(|| {
-            eprintln!("cannot bind {addr}: {last_err}");
+            tracing::error!("cannot bind {addr}: {last_err}");
             std::process::exit(1)
         })
     };

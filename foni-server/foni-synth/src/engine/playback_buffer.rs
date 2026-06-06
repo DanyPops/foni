@@ -152,60 +152,28 @@ impl PlaybackBuffer {
     }
 }
 
-/// Render the buffer state as a single-line progress bar.
-/// `▓` played, `░` playing, `█` buffered, `·` pending
+/// Render the buffer as a FIFO pipe draining left to right.
+/// `█` ready, `·` pending. Drains from the left as chunks play.
 pub fn render_bar(buf: &PlaybackBuffer) -> String {
-    let total = match buf.total {
-        Some(t) => t,
-        None => buf.next_play + buf.buffered_ahead() + 3, // guess ahead
+    let remaining = match buf.total {
+        Some(t) => t.saturating_sub(buf.next_play),
+        None => buf.buffered_ahead() + 3,
     };
-    if total == 0 {
-        return String::from("┌┐\n└┘");
+    if remaining == 0 {
+        return String::from("▐▌");
     }
 
-    let mut top = String::from("┌");
-    let mut mid = String::from("│");
-    let mut bot = String::from("└");
-
-    for i in 0..total {
-        let cell = if i < buf.next_play {
-            '▓'
-        } else if i == buf.next_play && buf.chunks.contains_key(&i) {
-            '░'
-        } else if buf.chunks.contains_key(&i) {
+    let mut bar = String::from("▐");
+    for slot in 0..remaining {
+        let abs = buf.next_play + slot;
+        bar.push(if buf.chunks.contains_key(&abs) {
             '█'
-        } else if buf.total.is_some() {
-            '·'
         } else {
-            ' '
-        };
-
-        if i > 0 {
-            top.push('┬');
-            mid.push('│');
-            bot.push('┴');
-        }
-        top.push_str("───");
-        mid.push_str(&format!(" {cell} "));
-        bot.push_str("───");
+            '·'
+        });
     }
-    top.push('┐');
-    mid.push('│');
-    bot.push('┘');
-
-    let status = match buf.status() {
-        Status::Filling { received, played } => {
-            format!("filling {received} received, {played} played")
-        }
-        Status::Draining {
-            received,
-            total,
-            played,
-        } => format!("{played}/{total} played ({received} received)"),
-        Status::Done { total } => format!("done ({total} chunks)"),
-    };
-
-    format!("{top}\n{mid}  {status}\n{bot}")
+    bar.push('▌');
+    bar
 }
 
 #[cfg(test)]
@@ -431,41 +399,32 @@ mod tests {
     // ── Render ──
 
     #[test]
-    fn render_empty() {
-        let buf = PlaybackBuffer::new();
-        let bar = render_bar(&buf);
-        eprintln!("{bar}");
-        assert!(bar.contains('┌'));
-    }
-
-    #[test]
-    fn render_partial_progress() {
+    fn render_shows_ready_and_pending() {
         let mut buf = PlaybackBuffer::new();
         buf.submit(chunk(0, 500));
         buf.submit(chunk(1, 500));
         buf.submit(chunk(3, 500));
         buf.close(5);
-        buf.next(); // play 0
 
         let bar = render_bar(&buf);
-        eprintln!("{bar}");
-        assert!(bar.contains('▓'), "should show played");
-        assert!(bar.contains('░'), "should show playing");
-        assert!(bar.contains('█'), "should show buffered");
-        assert!(bar.contains('·'), "should show pending");
+        assert_eq!(bar, "▐██·█·▌");
     }
 
     #[test]
-    fn render_all_done() {
+    fn render_drains_left() {
         let mut buf = PlaybackBuffer::new();
         buf.submit(chunk(0, 500));
         buf.submit(chunk(1, 500));
-        buf.close(2);
-        buf.next();
-        buf.next();
+        buf.submit(chunk(2, 500));
+        buf.close(3);
 
-        let bar = render_bar(&buf);
-        eprintln!("{bar}");
-        assert!(bar.contains("done"));
+        assert_eq!(render_bar(&buf), "▐███▌");
+
+        buf.next();
+        assert_eq!(render_bar(&buf), "▐██▌");
+
+        buf.next();
+        buf.next();
+        assert_eq!(render_bar(&buf), "▐▌");
     }
 }
