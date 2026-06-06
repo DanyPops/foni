@@ -512,6 +512,19 @@ enum Cmd {
         parallel: bool,
     },
 
+    /// Query Modal TTS scaling status (backlog, runners)
+    TtsStats,
+
+    /// Update Modal TTS scaling (max containers, buffer)
+    TtsScale {
+        /// Max concurrent GPU containers
+        #[arg(long)]
+        max: Option<u32>,
+        /// Warm buffer containers
+        #[arg(long)]
+        buffer: Option<u32>,
+    },
+
     SweepShades {
         /// Steps per axis (3 = 27 combos, 4 = 64)
         #[arg(long, default_value_t = 3)]
@@ -1390,6 +1403,16 @@ fn main() {
         }
         Cmd::Bench { chunks, parallel } => {
             if let Err(e) = cmd_bench::cmd_bench_roundtrip(server, chunks, parallel) {
+                tracing::error!("{e}");
+            }
+        }
+        Cmd::TtsStats => {
+            if let Err(e) = cmd_bench::cmd_tts_stats() {
+                tracing::error!("{e}");
+            }
+        }
+        Cmd::TtsScale { max, buffer } => {
+            if let Err(e) = cmd_bench::cmd_tts_scale(max, buffer) {
                 tracing::error!("{e}");
             }
         }

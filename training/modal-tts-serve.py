@@ -31,6 +31,8 @@ REF_WAV = "/data/dataset-raw/trader1a.wav"
     image=image,
     gpu="T4",
     volumes={"/data": volume},
+    max_containers=5,
+    buffer_containers=1,
     scaledown_window=300,
     secrets=[tts_secret],
 )
@@ -89,3 +91,5 @@ class ChatterboxTTS:
     @modal.fastapi_endpoint(method="GET")
     async def health(self):
         return {"status": "ok", "model": "chatterbox-multilingual", "device": self.device}
+
+

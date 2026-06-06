@@ -215,3 +215,55 @@ async fn bench_parallel(
         filler_total_ms: filler_total,
     })
 }
+
+pub fn cmd_tts_stats() -> Result<(), String> {
+    let output = std::process::Command::new("modal")
+        .args(["container", "list", "--json"])
+        .output()
+        .map_err(|e| format!("modal cli: {e}"))?;
+
+    let containers: Vec<serde_json::Value> =
+        serde_json::from_slice(&output.stdout).unwrap_or_default();
+
+    let tts_containers: Vec<_> = containers
+        .iter()
+        .filter(|c| {
+            c["app_description"]
+                .as_str()
+                .map(|s| s.contains("foni-tts"))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    println!("  TTS Scaling Status");
+    println!("  {}", "─".repeat(30));
+    println!("  Active containers: {}", tts_containers.len());
+    for c in &tts_containers {
+        println!(
+            "    {} ({})",
+            c["task_id"].as_str().unwrap_or("?"),
+            c["status"].as_str().unwrap_or("?")
+        );
+    }
+    Ok(())
+}
+
+pub fn cmd_tts_scale(max: Option<u32>, buffer: Option<u32>) -> Result<(), String> {
+    info!(max = max, buffer = buffer, "scaling TTS via modal deploy");
+
+    let status = std::process::Command::new("modal")
+        .args(["deploy", "training/modal-tts-serve.py"])
+        .status()
+        .map_err(|e| format!("modal deploy: {e}"))?;
+
+    if !status.success() {
+        return Err("modal deploy failed".into());
+    }
+
+    println!("  Scaling updated (redeployed)");
+    println!("  {}", "─".repeat(30));
+    println!("  Edit training/modal-tts-serve.py to change:");
+    println!("    max_containers={}", max.unwrap_or(5));
+    println!("    buffer_containers={}", buffer.unwrap_or(1));
+    Ok(())
+}
