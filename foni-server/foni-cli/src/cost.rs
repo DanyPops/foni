@@ -1,62 +1,76 @@
-//! Persistent cost ledger — tracks every cloud GPU spend.
+//! Persistent cost ledger — tracks Modal inference and training spend.
 //!
-//! Stored at $XDG_DATA_HOME/foni/cost-ledger.json.
-//! Survives reboots. Append-only.
+//! Stored at $XDG_DATA_HOME/foni/cost-ledger.json. Append-only.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// A receipt for one training run — everything you need to know about what happened.
+/// Modal T4 GPU price per second (on-demand, as of 2026-06).
+pub const MODAL_T4_COST_PER_SEC: f64 = 0.000306;
+
+/// A receipt for one TTS synthesis call via Modal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Receipt {
+pub struct InferenceReceipt {
     pub timestamp: String,
-    pub model_name: String,
-    pub action: String,
-
-    // Cloud
-    pub gpu: String,
-    pub pod_id: String,
-    pub provider: String,
-
-    // Time
-    pub started_at: String,
-    pub finished_at: String,
-    pub duration_min: f64,
-
-    // Money
-    pub cost_per_hr: f64,
+    /// Text preview (first 60 chars).
+    pub text_preview: String,
+    /// Number of characters synthesized.
+    pub text_chars: usize,
+    /// Output audio duration in seconds.
+    pub audio_duration_sec: f64,
+    /// Wall-clock RTT in milliseconds.
+    pub rtt_ms: u64,
+    /// Whether this was a cache hit (no GPU cost).
+    pub cache_hit: bool,
+    /// Estimated GPU seconds consumed.
+    pub gpu_sec: f64,
+    /// Estimated cost in USD.
     pub cost_usd: f64,
-    pub balance_before: f64,
-    pub balance_after: f64,
+}
 
-    // Training
-    pub epochs: u32,
-    pub final_loss: f64,
-    pub dataset_files: usize,
-    pub dataset_duration_min: f64,
-
-    // Quality gate
-    pub old_mean_gap: f64,
-    pub new_mean_gap: f64,
-    pub passed: bool,
+impl InferenceReceipt {
+    pub fn new(text: &str, audio_duration_sec: f64, rtt_ms: u64, cache_hit: bool) -> Self {
+        let preview: String = text.chars().take(60).collect();
+        let chars = text.chars().count();
+        // Estimate: cache hit = 0 GPU time. Cold start ~3s + ~0.3s per audio second.
+        let gpu_sec = if cache_hit {
+            0.0
+        } else {
+            3.0 + audio_duration_sec * 0.3
+        };
+        Self {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            text_preview: preview,
+            text_chars: chars,
+            audio_duration_sec,
+            rtt_ms,
+            cache_hit,
+            gpu_sec,
+            cost_usd: gpu_sec * MODAL_T4_COST_PER_SEC,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CostLedger {
-    pub receipts: Vec<Receipt>,
+    pub inference: Vec<InferenceReceipt>,
 }
 
 impl CostLedger {
     pub fn total_cost(&self) -> f64 {
-        self.receipts.iter().map(|r| r.cost_usd).sum()
+        self.inference.iter().map(|r| r.cost_usd).sum()
     }
 
-    pub fn total_gpu_hours(&self) -> f64 {
-        self.receipts.iter().map(|r| r.duration_min / 60.0).sum()
+    pub fn call_count(&self) -> usize {
+        self.inference.len()
     }
 
-    pub fn run_count(&self) -> usize {
-        self.receipts.len()
+    pub fn cache_hits(&self) -> usize {
+        self.inference.iter().filter(|r| r.cache_hit).count()
+    }
+
+    pub fn total_audio_sec(&self) -> f64 {
+        self.inference.iter().map(|r| r.audio_duration_sec).sum()
     }
 }
 
@@ -72,127 +86,79 @@ pub fn load() -> CostLedger {
     }
 }
 
-pub fn save_receipt(receipt: Receipt) {
+pub fn record_inference(receipt: InferenceReceipt) {
     let mut ledger = load();
-    ledger.receipts.push(receipt);
+    ledger.inference.push(receipt);
     let path = ledger_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
-    let json = serde_json::to_string_pretty(&ledger).unwrap_or_default();
-    std::fs::write(&path, json).ok();
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&ledger).unwrap_or_default(),
+    )
+    .ok();
 }
 
-/// Print a human-readable receipt.
-pub fn print_receipt(r: &Receipt) {
-    use owo_colors::OwoColorize;
-
-    let rule = "\u{2500}".repeat(52);
-    let verdict = if r.passed {
-        format!("{:.1}% {}", r.new_mean_gap, "PASS".green().bold())
-    } else {
-        format!("{:.1}% {}", r.new_mean_gap, "FAIL".red().bold())
-    };
-
-    println!(
-        "\n  {rule}\n\
-         \x20 Training Receipt\n\
-         \x20 {rule}\n\
-         \x20 Model:         {}\n\
-         \x20 Action:        {}\n\
-         \x20 GPU:           {}\n\
-         \x20 Provider:      {}\n\
-         \x20 Duration:      {:.1} min\n\
-         \x20 Epochs:        {}\n\
-         \x20 Final loss:    {:.6}\n\
-         \x20 Dataset:       {} files ({:.1} min)\n\
-         \n\
-         \x20 Cost/hr:       ${:.2}\n\
-         \x20 Total cost:    {}\n\
-         \x20 Balance:       ${:.2} \u{2192} ${:.2}\n\
-         \n\
-         \x20 Quality gate:  {:.1}% \u{2192} {}\n\
-         \x20 {rule}",
-        r.model_name.bold(),
-        r.action,
-        r.gpu,
-        r.provider,
-        r.duration_min,
-        r.epochs,
-        r.final_loss,
-        r.dataset_files,
-        r.dataset_duration_min,
-        r.cost_per_hr,
-        format!("${:.2}", r.cost_usd).yellow(),
-        r.balance_before,
-        r.balance_after,
-        r.old_mean_gap,
-        verdict,
-    );
+pub fn print_summary() {
+    let ledger = load();
+    if ledger.call_count() == 0 {
+        println!("No inference calls recorded yet.");
+        return;
+    }
+    let hit_pct = ledger.cache_hits() as f64 / ledger.call_count() as f64 * 100.0;
+    println!("  Modal inference spend");
+    println!("  ─────────────────────────────────────");
+    println!("  Calls:        {}", ledger.call_count());
+    println!("  Cache hits:   {} ({:.0}%)", ledger.cache_hits(), hit_pct);
+    println!("  Audio synth:  {:.1}s total", ledger.total_audio_sec());
+    println!("  Est. cost:    ${:.4}", ledger.total_cost());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn test_receipt(cost: f64) -> Receipt {
-        Receipt {
-            timestamp: "2026-06-02T00:00:00Z".into(),
-            model_name: "sidorovich".into(),
-            action: "train".into(),
-            gpu: "RTX 3090".into(),
-            pod_id: "test-pod".into(),
-            provider: "RunPod".into(),
-            started_at: "2026-06-02T00:00:00Z".into(),
-            finished_at: "2026-06-02T02:00:00Z".into(),
-            duration_min: 120.0,
-            cost_per_hr: 0.22,
-            cost_usd: cost,
-            balance_before: 10.0,
-            balance_after: 10.0 - cost,
-            epochs: 500,
-            final_loss: 0.003,
-            dataset_files: 189,
-            dataset_duration_min: 27.7,
-            old_mean_gap: 39.5,
-            new_mean_gap: 28.0,
-            passed: true,
-        }
-    }
-
     #[test]
-    fn empty_ledger_has_zero_total() {
+    fn empty_ledger_zero_cost() {
         let l = CostLedger::default();
         assert_eq!(l.total_cost(), 0.0);
-        assert_eq!(l.run_count(), 0);
+        assert_eq!(l.call_count(), 0);
     }
 
     #[test]
-    fn total_sums_receipts() {
+    fn cache_hit_costs_nothing() {
+        let r = InferenceReceipt::new("привет", 0.5, 10, true);
+        assert_eq!(r.cost_usd, 0.0);
+        assert_eq!(r.gpu_sec, 0.0);
+    }
+
+    #[test]
+    fn cache_miss_has_cost() {
+        let r = InferenceReceipt::new("привет мир", 3.0, 5500, false);
+        assert!(r.cost_usd > 0.0);
+        // 3.0 cold start + 3.0 * 0.3 = 3.9s GPU
+        assert!((r.gpu_sec - 3.9).abs() < 0.01);
+    }
+
+    #[test]
+    fn ledger_totals_sum() {
         let l = CostLedger {
-            receipts: vec![test_receipt(0.44), test_receipt(0.66)],
+            inference: vec![
+                InferenceReceipt::new("a", 2.0, 5000, false),
+                InferenceReceipt::new("b", 1.0, 10, true),
+            ],
         };
-        assert!((l.total_cost() - 1.10).abs() < 0.01);
-        assert_eq!(l.run_count(), 2);
-        assert!(l.total_gpu_hours() > 3.9);
+        assert_eq!(l.call_count(), 2);
+        assert_eq!(l.cache_hits(), 1);
+        assert!(l.total_cost() > 0.0);
     }
 
     #[test]
-    fn receipt_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("foni/cost-ledger.json");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-
-        let mut ledger = CostLedger::default();
-        ledger.receipts.push(test_receipt(0.22));
-        std::fs::write(&path, serde_json::to_string_pretty(&ledger).unwrap()).unwrap();
-
-        let loaded: CostLedger =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(loaded.run_count(), 1);
-        assert!((loaded.total_cost() - 0.22).abs() < 0.01);
-        assert_eq!(loaded.receipts[0].pod_id, "test-pod");
-        assert_eq!(loaded.receipts[0].epochs, 500);
-        assert!(loaded.receipts[0].passed);
+    fn text_preview_truncated() {
+        let long = "а".repeat(200);
+        let r = InferenceReceipt::new(&long, 5.0, 4000, false);
+        assert_eq!(r.text_preview.chars().count(), 60);
+        assert_eq!(r.text_chars, 200);
     }
 }
