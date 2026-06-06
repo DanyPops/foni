@@ -32,9 +32,19 @@ async fn recv_timeout(
     ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
     ms: u64,
 ) -> Option<serde_json::Value> {
-    match tokio::time::timeout(std::time::Duration::from_millis(ms), ws.next()).await {
-        Ok(Some(Ok(Message::Text(t)))) => serde_json::from_str(&t).ok(),
-        _ => None,
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(ms);
+    loop {
+        match tokio::time::timeout_at(deadline, ws.next()).await {
+            Ok(Some(Ok(Message::Text(t)))) => {
+                if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&t) {
+                    if msg["type"] == "buffer_state" {
+                        continue;
+                    }
+                    return Some(msg);
+                }
+            }
+            _ => return None,
+        }
     }
 }
 

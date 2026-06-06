@@ -15,6 +15,7 @@ use super::engine_config::FoniConfig;
 use super::facade::{cache_key, new_shared_cache, PlayQueue, SharedCache};
 use super::playback_buffer::PlaybackBuffer;
 use super::stream::{drain_chunks, feed_delta, fresh_state, strip_markdown, StreamState};
+use super::stress::{make_annotator, StressAnnotator};
 use super::train_events;
 use super::translator::{self, WordDiversifier};
 use crate::state::AppState;
@@ -37,6 +38,12 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
     if let Ok(model) = std::env::var("FONI_OLLAMA_MODEL") {
         config.ollama_model = model;
     }
+    if let Ok(mode) = std::env::var("FONI_STRESS") {
+        use std::str::FromStr;
+        config.stress_mode = super::stress::StressMode::from_str(&mode).unwrap_or_default();
+    }
+    let annotator: Box<dyn StressAnnotator> =
+        make_annotator(&config.stress_mode, &config.ruaccent_url);
     let cache = new_shared_cache();
     let (play_queue, _play_handle) = PlayQueue::new();
     let mut buffer = PlaybackBuffer::new();
@@ -73,6 +80,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         &mut tx,
                         &mut buffer,
                         &mut chunk_counter,
+                        annotator.as_ref(),
                     )
                     .await;
                 }
@@ -95,6 +103,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         &mut tx,
                         &mut buffer,
                         idx,
+                        annotator.as_ref(),
                     )
                     .await;
                 }
@@ -166,6 +175,7 @@ async fn handle_delta(
     tx: &mut (impl SinkExt<Message> + Unpin),
     buffer: &mut PlaybackBuffer,
     chunk_counter: &mut usize,
+    annotator: &dyn StressAnnotator,
 ) {
     feed_delta(stream_state, delta);
     let result = drain_chunks(&stream_state.buffer);
@@ -185,6 +195,7 @@ async fn handle_delta(
             tx,
             buffer,
             idx,
+            annotator,
         )
         .await;
     }
@@ -203,6 +214,7 @@ async fn process_chunk(
     tx: &mut (impl SinkExt<Message> + Unpin),
     buffer: &mut PlaybackBuffer,
     chunk_idx: usize,
+    annotator: &dyn StressAnnotator,
 ) {
     let t_start = std::time::Instant::now();
     let clean = strip_markdown(chunk);
@@ -242,7 +254,7 @@ async fn process_chunk(
         }
     }
 
-    let translated = text;
+    let translated = annotator.annotate(&text);
 
     // In dry_run mode: skip synthesis and playback, just report what would be spoken
     if config.dry_run {

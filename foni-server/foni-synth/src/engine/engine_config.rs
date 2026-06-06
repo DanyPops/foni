@@ -1,3 +1,4 @@
+use crate::engine::stress::StressMode;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +29,14 @@ pub struct FoniConfig {
 
     /// Skip external calls (Ollama, synthesis, playback). For testing.
     pub dry_run: bool,
+
+    /// Stress annotation backend.
+    #[serde(default)]
+    pub stress_mode: StressMode,
+
+    /// URL of the ruaccent sidecar (used when stress_mode = Ruaccent).
+    #[serde(default = "default_ruaccent_url")]
+    pub ruaccent_url: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,8 +73,14 @@ impl Default for FoniConfig {
             ollama_url: "http://localhost:11434".into(),
             ollama_model: "qwen3:1.7b".into(),
             dry_run: false,
+            stress_mode: StressMode::Dict,
+            ruaccent_url: default_ruaccent_url(),
         }
     }
+}
+
+fn default_ruaccent_url() -> String {
+    "http://localhost:8765/annotate".into()
 }
 
 pub const PREWARM_RU: &[&str] = &[

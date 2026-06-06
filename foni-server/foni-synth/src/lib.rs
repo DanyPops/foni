@@ -13,6 +13,13 @@ use axum::{
 };
 
 pub async fn build_router_with(cfg: config::ResolvedConfig) -> Router {
+    // Pre-warm the stress dictionary off the async thread so WS handlers
+    // don't block on first use.
+    tokio::task::spawn_blocking(|| {
+        once_cell::sync::Lazy::force(&engine::stress::STRESS_MAP);
+    })
+    .await
+    .ok();
     build_router_from_state(state::AppState::from_config(cfg))
 }
 

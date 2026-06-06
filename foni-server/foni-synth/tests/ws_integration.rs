@@ -373,7 +373,9 @@ async fn buffer_drains_across_multiple_sentences() {
     );
 
     // At least one state should be complete (the close event)
-    let any_complete = states.iter().any(|s| s["complete"].as_bool().unwrap_or(false));
+    let any_complete = states
+        .iter()
+        .any(|s| s["complete"].as_bool().unwrap_or(false));
     assert!(any_complete, "at least one buffer_state should be complete");
 }
 

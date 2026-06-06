@@ -885,6 +885,7 @@ dependencies = [
  "hound",
  "lru",
  "ndarray 0.15.6",
+ "once_cell",
  "ort",
  "rand 0.8.6",
  "rayon",
