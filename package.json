@@ -6,8 +6,7 @@
     "pi": {
         "extensions": [
             "./index.ts",
-            "./extensions/modal-watcher.ts",
-            "./extensions/buffer-widget.ts"
+            "./extensions/modal-watcher.ts"
         ]
     },
     "scripts": {

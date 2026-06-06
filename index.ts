@@ -53,11 +53,42 @@ const DEFAULT_CONFIG: FoniConfig = {
 
 // ─── Extension entry point ────────────────────────────────────────────────────
 
+interface BufferSnapshot {
+  slots: boolean[];
+  buffered: number;
+  pending: number;
+  complete: boolean;
+}
+
 export default async function (pi: ExtensionAPI) {
   const config: FoniConfig = { ...DEFAULT_CONFIG };
   let ws: WebSocket | null = null;
   let muted = false;
   let emotionEmoji = "";
+  let lastCtx: { ui: any } | null = null;
+
+  function updateBufferWidget(ctx: { ui: any }, snap: BufferSnapshot): void {
+    if (snap.slots.length === 0 && snap.complete) {
+      ctx.ui.setWidget("foni-buffer", undefined);
+      return;
+    }
+    if (snap.slots.length === 0) return;
+
+    ctx.ui.setWidget("foni-buffer", (_tui: any, theme: any) => {
+      let bar = theme.fg("dim", "\u2590");
+      for (const ready of snap.slots) {
+        bar += ready ? theme.fg("accent", "\u2588") : theme.fg("dim", "\u00b7");
+      }
+      bar += theme.fg("dim", "\u258c");
+      const label = snap.pending > 0
+        ? theme.fg("muted", ` ${snap.buffered} ready, ${snap.pending} pending`)
+        : theme.fg("success", ` ${snap.buffered} ready`);
+      return {
+        render: () => [bar + label],
+        invalidate: () => {},
+      };
+    }, { placement: "belowEditor" });
+  }
 
   // ── WebSocket ─────────────────────────────────────────────────────────────
 
@@ -77,6 +108,8 @@ export default async function (pi: ExtensionAPI) {
           const msg = JSON.parse(data.toString());
           if (msg.type === "emotion") {
             emotionEmoji = msg.intensity >= 0.3 ? (msg.emoji ?? "") : "";
+          } else if (msg.type === "buffer_state" && lastCtx) {
+            updateBufferWidget(lastCtx, msg.data);
           }
         } catch { /* malformed */ }
       });
@@ -160,6 +193,7 @@ export default async function (pi: ExtensionAPI) {
   // ── Lifecycle events ──────────────────────────────────────────────────────
 
   pi.on("session_start", (_event, ctx) => {
+    lastCtx = ctx;
     connectWs();
     loadMixerSession().then(() => updateStatus(ctx));
     updateStatus(ctx);
