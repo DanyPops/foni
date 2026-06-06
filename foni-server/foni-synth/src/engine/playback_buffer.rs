@@ -152,6 +152,62 @@ impl PlaybackBuffer {
     }
 }
 
+/// Render the buffer state as a single-line progress bar.
+/// `▓` played, `░` playing, `█` buffered, `·` pending
+pub fn render_bar(buf: &PlaybackBuffer) -> String {
+    let total = match buf.total {
+        Some(t) => t,
+        None => buf.next_play + buf.buffered_ahead() + 3, // guess ahead
+    };
+    if total == 0 {
+        return String::from("┌┐\n└┘");
+    }
+
+    let mut top = String::from("┌");
+    let mut mid = String::from("│");
+    let mut bot = String::from("└");
+
+    for i in 0..total {
+        let cell = if i < buf.next_play {
+            '▓'
+        } else if i == buf.next_play && buf.chunks.contains_key(&i) {
+            '░'
+        } else if buf.chunks.contains_key(&i) {
+            '█'
+        } else if buf.total.is_some() {
+            '·'
+        } else {
+            ' '
+        };
+
+        if i > 0 {
+            top.push('┬');
+            mid.push('│');
+            bot.push('┴');
+        }
+        top.push_str("───");
+        mid.push_str(&format!(" {cell} "));
+        bot.push_str("───");
+    }
+    top.push('┐');
+    mid.push('│');
+    bot.push('┘');
+
+    let status = match buf.status() {
+        Status::Filling { received, played } => {
+            format!("filling {received} received, {played} played")
+        }
+        Status::Draining {
+            received,
+            total,
+            played,
+        } => format!("{played}/{total} played ({received} received)"),
+        Status::Done { total } => format!("done ({total} chunks)"),
+    };
+
+    format!("{top}\n{mid}  {status}\n{bot}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,5 +426,46 @@ mod tests {
 
         let c = buf.peek(0).unwrap();
         assert!((c.duration_secs() - 1.0).abs() < 0.05);
+    }
+
+    // ── Render ──
+
+    #[test]
+    fn render_empty() {
+        let buf = PlaybackBuffer::new();
+        let bar = render_bar(&buf);
+        eprintln!("{bar}");
+        assert!(bar.contains('┌'));
+    }
+
+    #[test]
+    fn render_partial_progress() {
+        let mut buf = PlaybackBuffer::new();
+        buf.submit(chunk(0, 500));
+        buf.submit(chunk(1, 500));
+        buf.submit(chunk(3, 500));
+        buf.close(5);
+        buf.next(); // play 0
+
+        let bar = render_bar(&buf);
+        eprintln!("{bar}");
+        assert!(bar.contains('▓'), "should show played");
+        assert!(bar.contains('░'), "should show playing");
+        assert!(bar.contains('█'), "should show buffered");
+        assert!(bar.contains('·'), "should show pending");
+    }
+
+    #[test]
+    fn render_all_done() {
+        let mut buf = PlaybackBuffer::new();
+        buf.submit(chunk(0, 500));
+        buf.submit(chunk(1, 500));
+        buf.close(2);
+        buf.next();
+        buf.next();
+
+        let bar = render_bar(&buf);
+        eprintln!("{bar}");
+        assert!(bar.contains("done"));
     }
 }
