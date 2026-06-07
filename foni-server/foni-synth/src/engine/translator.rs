@@ -387,6 +387,43 @@ pub async fn ollama_translate(
     })
 }
 
+/// Translate using the NLLB-200-distilled-600M endpoint on Modal.
+///
+/// Falls back to the original text on any error so the pipeline never stalls.
+pub async fn nllb_translate(text: &str, url: &str, src: &str, tgt: &str) -> Result<String, String> {
+    let t = std::time::Instant::now();
+    let body = serde_json::json!({
+        "text": text,
+        "src_lang": src,
+        "tgt_lang": tgt,
+    });
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("NLLB request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("NLLB HTTP {}", resp.status()));
+    }
+
+    let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let result = data["text"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| text.to_owned());
+
+    tracing::info!(
+        nllb_ms = t.elapsed().as_millis() as u64,
+        "translate: nllb done"
+    );
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

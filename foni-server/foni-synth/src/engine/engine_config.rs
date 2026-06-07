@@ -37,6 +37,32 @@ pub struct FoniConfig {
     /// URL of the ruaccent sidecar (used when stress_mode = Ruaccent).
     #[serde(default = "default_ruaccent_url")]
     pub ruaccent_url: String,
+
+    /// Translation backend: Ollama (local) or Nllb (Modal).
+    #[serde(default)]
+    pub translate_backend: TranslateBackend,
+
+    /// URL of the NLLB Modal endpoint.
+    #[serde(default = "default_nllb_url")]
+    pub nllb_url: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TranslateBackend {
+    #[default]
+    Ollama,
+    Nllb,
+}
+
+impl std::str::FromStr for TranslateBackend {
+    type Err = std::convert::Infallible;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_ascii_lowercase().as_str() {
+            "nllb" | "modal" => Self::Nllb,
+            _ => Self::Ollama,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,12 +101,18 @@ impl Default for FoniConfig {
             dry_run: false,
             stress_mode: StressMode::Dict,
             ruaccent_url: default_ruaccent_url(),
+            translate_backend: TranslateBackend::Ollama,
+            nllb_url: default_nllb_url(),
         }
     }
 }
 
 fn default_ruaccent_url() -> String {
     "http://localhost:8765/annotate".into()
+}
+
+fn default_nllb_url() -> String {
+    "https://dpopsuev--foni-translate-nllbtranslator-translate.modal.run".into()
 }
 
 pub const PREWARM_RU: &[&str] = &[

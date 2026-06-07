@@ -41,6 +41,11 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
         use std::str::FromStr;
         config.stress_mode = super::stress::StressMode::from_str(&mode).unwrap_or_default();
     }
+    if let Ok(backend) = std::env::var("FONI_TRANSLATE") {
+        use std::str::FromStr;
+        config.translate_backend =
+            super::engine_config::TranslateBackend::from_str(&backend).unwrap_or_default();
+    }
     let annotator: Box<dyn StressAnnotator> =
         make_annotator(&config.stress_mode, &config.ruaccent_url);
     let cache = new_shared_cache();
@@ -261,20 +266,28 @@ async fn process_chunk(
         return;
     }
 
-    // Translate (skip Ollama in dry_run or same-lang mode)
+    // Translate (skipped in dry_run or same-lang mode)
     let mut text = if config.dry_run || config.input_lang == config.output_lang {
         translator::apply_glossary(&clean)
     } else {
+        use crate::engine::engine_config::TranslateBackend;
         let glossed = translator::apply_glossary(&clean);
-        translator::ollama_translate(
-            &glossed,
-            &config.ollama_url,
-            &config.ollama_model,
-            "en",
-            "ru",
-        )
-        .await
-        .unwrap_or(glossed)
+        match config.translate_backend {
+            TranslateBackend::Nllb => {
+                translator::nllb_translate(&glossed, &config.nllb_url, "eng_Latn", "rus_Cyrl")
+                    .await
+                    .unwrap_or(glossed)
+            }
+            TranslateBackend::Ollama => translator::ollama_translate(
+                &glossed,
+                &config.ollama_url,
+                &config.ollama_model,
+                "en",
+                "ru",
+            )
+            .await
+            .unwrap_or(glossed),
+        }
     };
 
     // Inject personality based on emotion state
