@@ -84,9 +84,10 @@ export default async function (pi: ExtensionAPI) {
       }
       bar += theme.fg("dim", "\u258c");
 
+      const total = snap.buffered + snap.pending;
       const label = snap.pending > 0
-        ? theme.fg("dim", ` ${snap.buffered}\u2588 ${snap.pending}\u2591`)
-        : theme.fg("success", ` ${snap.buffered} ready`);
+        ? theme.fg("dim", ` ${snap.buffered}/${total}`)
+        : theme.fg("success", ` ${snap.buffered}/${total} ready`);
 
       return {
         render: () => [bar + label],
