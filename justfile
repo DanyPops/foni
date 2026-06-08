@@ -246,3 +246,22 @@ push:
 [private]
 default:
     @just --list
+
+# Security gate — run on every commit (Swiss Cheese layer 1: detect before git)
+security-check:
+    @echo "=== Secret scan ==="
+    python3.11 -m detect_secrets scan \
+        --exclude-files '\.git|node_modules|target|training/stress|\.wav$|\.mp4$|\.onnx$|\.baseline$' \
+        --baseline .secrets.baseline
+    @echo "=== No hardcoded text in logs ==="
+    @! grep -rn 'tracing::info!.*text\s*=\s*%' \
+        foni-server/foni-synth/src/ foni-server/foni-cli/src/ 2>/dev/null \
+        | grep -v 'chars\|len\|count\|//\|#\[' \
+        | grep . && echo "✅ no raw text in tracing spans" || (echo "❌ raw text found in logs"; exit 1)
+    @echo "=== Token not in service files ==="
+    @! grep -r 'FONI_TTS_TOKEN\s*=\s*[A-Za-z0-9+/]\{20,\}' \
+        ~/.config/systemd/ 2>/dev/null \
+        | grep . && echo "✅ no hardcoded token in systemd units" || (echo "❌ token found in service file"; exit 1)
+    @echo "=== Rust contract tests ==="
+    cd foni-server && cargo test --test tts_contract 2>&1 | tail -3
+    @echo "✅ security-check passed"

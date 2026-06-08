@@ -65,7 +65,7 @@ class ChatterboxTTS:
         from fastapi.responses import JSONResponse, Response
         import torchaudio as ta
 
-        expected = os.environ.get("TTS_AUTH_TOKEN", "")
+        expected = os.environ.get("FONI_TTS_TOKEN", "")
         token = request.get("token", "")
         if expected and token != expected:
             return JSONResponse({"error": "unauthorized"}, status_code=401)

@@ -1,0 +1,15 @@
+title = "Foni gitleaks config"
+
+[[rules]]
+id = "foni-tts-token"
+description = "Foni TTS token (44-char base64)"
+regex = '''[A-Za-z0-9+/]{43}='''
+tags = ["secret", "token"]
+
+[allowlist]
+paths = [
+  '''.git''',
+  '''node_modules''',
+  '''target''',
+  '''training/stress''',
+]

@@ -35,7 +35,7 @@ async fn contract_success_returns_wav() {
     }))
     .await;
 
-    std::env::set_var("FISH_SPEECH_URL", format!("{base_url}/synthesize"));
+    std::env::set_var("FONI_TTS_URL", format!("{base_url}/synthesize"));
     std::env::remove_var("FONI_TTS_TOKEN");
 
     let app = foni_synth::build_router().await;
@@ -68,7 +68,7 @@ async fn contract_401_returns_error() {
     }))
     .await;
 
-    std::env::set_var("FISH_SPEECH_URL", format!("{base_url}/synthesize"));
+    std::env::set_var("FONI_TTS_URL", format!("{base_url}/synthesize"));
     std::env::remove_var("FONI_TTS_TOKEN");
 
     let app = foni_synth::build_router().await;
@@ -98,7 +98,7 @@ async fn contract_500_returns_error() {
     }))
     .await;
 
-    std::env::set_var("FISH_SPEECH_URL", format!("{base_url}/synthesize"));
+    std::env::set_var("FONI_TTS_URL", format!("{base_url}/synthesize"));
 
     let app = foni_synth::build_router().await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -119,7 +119,7 @@ async fn contract_500_returns_error() {
 
 #[tokio::test]
 async fn contract_no_url_returns_error() {
-    std::env::remove_var("FISH_SPEECH_URL");
+    std::env::remove_var("FONI_TTS_URL");
 
     let app = foni_synth::build_router().await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -140,7 +140,7 @@ async fn contract_no_url_returns_error() {
 
 #[tokio::test]
 async fn contract_empty_text_returns_error() {
-    std::env::remove_var("FISH_SPEECH_URL");
+    std::env::remove_var("FONI_TTS_URL");
 
     let app = foni_synth::build_router().await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

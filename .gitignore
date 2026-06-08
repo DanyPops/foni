@@ -28,3 +28,4 @@ stalker-anomaly-gamedata
 stalker-soc-gamedata
 rvc/.venv/
 training/models/
+secrets.env

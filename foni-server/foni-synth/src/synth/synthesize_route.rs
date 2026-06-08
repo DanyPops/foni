@@ -205,8 +205,9 @@ pub async fn synthesize(
     Json(req): Json<SynthRequest>,
 ) -> Result<Response, (StatusCode, String)> {
     let t_start = std::time::Instant::now();
-    let preview: String = req.text.chars().take(30).collect();
-    tracing::info!(text = %preview, voice = %req.voice, dsp = req.dsp, "synthesize: start");
+    // Log metadata only — never log text content (OWASP A09 / data minimisation).
+    let chars = req.text.chars().count();
+    tracing::info!(chars, voice = %req.voice, dsp = req.dsp, "synthesize: start");
 
     let key = cache_key(&req);
 

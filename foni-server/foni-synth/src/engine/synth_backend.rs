@@ -24,13 +24,15 @@ pub trait SynthBackend: Send + Sync {
 /// Shared `reqwest::Client` — no connection pool leak per call.
 pub struct ModalSynthBackend {
     url: String,
+    token: Option<String>,
     client: reqwest::Client,
 }
 
 impl ModalSynthBackend {
-    pub fn new(url: impl Into<String>) -> Self {
+    pub fn new(url: impl Into<String>, token: Option<String>) -> Self {
         Self {
             url: url.into(),
+            token,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(60))
                 .build()
@@ -44,14 +46,18 @@ impl ModalSynthBackend {
             .unwrap_or_else(|_| {
                 "https://dpopsuev--foni-tts-serve-chatterboxtts-tts.modal.run".into()
             });
-        Self::new(url)
+        let token = std::env::var("FONI_TTS_TOKEN").ok();
+        Self::new(url, token)
     }
 }
 
 #[async_trait::async_trait]
 impl SynthBackend for ModalSynthBackend {
     async fn synthesize(&self, text: &str, _model: &str) -> Result<Vec<u8>, String> {
-        let body = serde_json::json!({"text": text, "language": "ru"});
+        let mut body = serde_json::json!({"text": text, "language": "ru"});
+        if let Some(token) = &self.token {
+            body["token"] = serde_json::Value::String(token.clone());
+        }
 
         let resp = self
             .client
