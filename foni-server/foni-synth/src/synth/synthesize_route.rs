@@ -242,7 +242,8 @@ pub async fn synthesize(
         let ruaccent_url = std::env::var("FONI_RUACCENT_URL")
             .unwrap_or_else(|_| "http://localhost:8765/annotate".into());
         let annotator = make_annotator(&mode, &ruaccent_url);
-        annotator.annotate(&req.text)
+        let normalised = crate::engine::stream::normalise_numbers(&req.text);
+        annotator.annotate(&normalised)
     };
     let backend = "cloud";
     let raw_tts = synthesize_text(&text, &req)

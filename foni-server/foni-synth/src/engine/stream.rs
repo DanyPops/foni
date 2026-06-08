@@ -186,7 +186,214 @@ pub fn strip_markdown(text: &str) -> String {
         .replace_all(&s, "\n\n")
         .to_string();
 
+    s = normalise_numbers(&s);
     s.trim().to_string()
+}
+
+// ── Russian number normalisation ───────────────────────────────────────────────
+
+/// Convert a non-negative integer (up to 999 999 999) to Russian nominative cardinal words.
+///
+/// Gender agreement: masculine for standalone numbers and millions;
+/// feminine for the thousands multiplier (одна тысяча, две тысячи).
+pub fn num_to_words_ru(n: i64) -> String {
+    if n < 0 {
+        return format!("минус {}", num_to_words_ru(-n));
+    }
+    if n == 0 {
+        return "ноль".to_string();
+    }
+    num_below_billion(n as u64)
+}
+
+fn num_below_billion(n: u64) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    if n >= 1_000_000 {
+        let m = n / 1_000_000;
+        let form = match m % 100 {
+            11..=19 => "миллионов",
+            _ => match m % 10 {
+                1 => "миллион",
+                2..=4 => "миллиона",
+                _ => "миллионов",
+            },
+        };
+        parts.push(format!("{} {form}", num_below_thousand(m, false)));
+    }
+
+    let sub_m = n % 1_000_000;
+    if sub_m >= 1_000 {
+        let t = sub_m / 1_000;
+        let form = match t % 100 {
+            11..=19 => "тысяч",
+            _ => match t % 10 {
+                1 => "тысяча",
+                2..=4 => "тысячи",
+                _ => "тысяч",
+            },
+        };
+        // Thousands multiplier uses feminine (одна/две вместо один/два).
+        parts.push(format!("{} {form}", num_below_thousand(t, true)));
+    }
+
+    let sub_t = n % 1_000;
+    if sub_t > 0 {
+        parts.push(num_below_thousand(sub_t, false));
+    }
+
+    parts.join(" ")
+}
+
+/// Render 1–999 in Russian. `feminine` flips один→одна and два→две.
+fn num_below_thousand(n: u64, feminine: bool) -> String {
+    const HUNDREDS: &[&str] = &[
+        "",
+        "сто",
+        "двести",
+        "триста",
+        "четыреста",
+        "пятьсот",
+        "шестьсот",
+        "семьсот",
+        "восемьсот",
+        "девятьсот",
+    ];
+    const TEENS: &[&str] = &[
+        "десять",
+        "одиннадцать",
+        "двенадцать",
+        "тринадцать",
+        "четырнадцать",
+        "пятнадцать",
+        "шестнадцать",
+        "семнадцать",
+        "восемнадцать",
+        "девятнадцать",
+    ];
+    const TENS: &[&str] = &[
+        "",
+        "",
+        "двадцать",
+        "тридцать",
+        "сорок",
+        "пятьдесят",
+        "шестьдесят",
+        "семьдесят",
+        "восемьдесят",
+        "девяносто",
+    ];
+    const ONES_M: &[&str] = &[
+        "",
+        "один",
+        "два",
+        "три",
+        "четыре",
+        "пять",
+        "шесть",
+        "семь",
+        "восемь",
+        "девять",
+    ];
+    const ONES_F: &[&str] = &[
+        "",
+        "одна",
+        "две",
+        "три",
+        "четыре",
+        "пять",
+        "шесть",
+        "семь",
+        "восемь",
+        "девять",
+    ];
+
+    let mut parts: Vec<&str> = Vec::new();
+    let h = (n / 100) as usize;
+    let rem = n % 100;
+
+    if h > 0 {
+        parts.push(HUNDREDS[h]);
+    }
+
+    if (10..=19).contains(&rem) {
+        parts.push(TEENS[(rem - 10) as usize]);
+    } else {
+        let t = (rem / 10) as usize;
+        let o = (rem % 10) as usize;
+        if t > 1 {
+            parts.push(TENS[t]);
+        }
+        if o > 0 {
+            parts.push(if feminine { ONES_F[o] } else { ONES_M[o] });
+        }
+    }
+
+    parts.join(" ")
+}
+
+/// Replace standalone Arabic integers in `s` with Russian word forms.
+///
+/// Skips numbers that are part of:
+///   - version strings: letter immediately before (`v2`, `Python3`)
+///   - decimals / IPs: digit or dot immediately after (`3.14`, `192.168`)
+///   - unit suffixes: letter immediately after (`3D`, `50px`, `mp4`)
+///   - percentage: digit followed by `%` → appends «процентов»
+pub fn normalise_numbers(s: &str) -> String {
+    let re = Regex::new(r"-?\d+").expect("infallible");
+    let mut out = String::with_capacity(s.len());
+    let mut cursor = 0usize;
+
+    for mat in re.find_iter(s) {
+        let start = mat.start();
+        let end = mat.end();
+
+        // Emit everything up to this match unchanged.
+        out.push_str(&s[cursor..start]);
+        cursor = end;
+
+        let raw = mat.as_str();
+
+        // Char immediately before the match.
+        let prev = if start > 0 {
+            s[..start].chars().last()
+        } else {
+            None
+        };
+        // Char immediately after the match.
+        let next = s[end..].chars().next();
+
+        // Skip if the number is embedded in a larger token.
+        let skip = prev.is_some_and(|c| c.is_alphabetic() || c == '.')
+            || next.is_some_and(|c| c == '.' || c.is_alphabetic() || c == '_');
+
+        if skip {
+            out.push_str(raw);
+            continue;
+        }
+
+        // Percentage: replace "50%" with "пятьдесят процентов".
+        let pct = next == Some('%');
+        if pct {
+            // Consume the % too.
+            cursor += '%'.len_utf8();
+        }
+
+        let replacement = raw
+            .parse::<i64>()
+            .map(num_to_words_ru)
+            .unwrap_or_else(|_| raw.to_string());
+
+        if pct {
+            out.push_str(&replacement);
+            out.push_str(" процентов");
+        } else {
+            out.push_str(&replacement);
+        }
+    }
+
+    out.push_str(&s[cursor..]);
+    out
 }
 
 /// Feed one delta character into the stream state, appending non-code text to the buffer.
@@ -375,5 +582,187 @@ mod tests {
         feed_delta(&mut s, "`");
         feed_delta(&mut s, "x"); // should trigger resolve (backtick_run=1), then x is inline-code
         assert!(!s.buffer.contains("x") || s.buffer == "use ");
+    }
+
+    // ─ num_to_words_ru ───────────────────────────────────────────
+
+    #[test]
+    fn zero() {
+        assert_eq!(num_to_words_ru(0), "ноль");
+    }
+
+    #[test]
+    fn units() {
+        let cases = [
+            (1, "один"),
+            (2, "два"),
+            (3, "три"),
+            (4, "четыре"),
+            (5, "пять"),
+            (6, "шесть"),
+            (7, "семь"),
+            (8, "восемь"),
+            (9, "девять"),
+        ];
+        for (n, w) in cases {
+            assert_eq!(num_to_words_ru(n), w, "n={n}");
+        }
+    }
+
+    #[test]
+    fn teens() {
+        let cases = [
+            (10, "десять"),
+            (11, "одиннадцать"),
+            (12, "двенадцать"),
+            (13, "тринадцать"),
+            (14, "четырнадцать"),
+            (15, "пятнадцать"),
+            (16, "шестнадцать"),
+            (17, "семнадцать"),
+            (18, "восемнадцать"),
+            (19, "девятнадцать"),
+        ];
+        for (n, w) in cases {
+            assert_eq!(num_to_words_ru(n), w, "n={n}");
+        }
+    }
+
+    #[test]
+    fn tens() {
+        let cases = [
+            (20, "двадцать"),
+            (21, "двадцать один"),
+            (30, "тридцать"),
+            (40, "сорок"),
+            (50, "пятьдесят"),
+            (60, "шестьдесят"),
+            (70, "семьдесят"),
+            (80, "восемьдесят"),
+            (90, "девяносто"),
+            (99, "девяносто девять"),
+        ];
+        for (n, w) in cases {
+            assert_eq!(num_to_words_ru(n), w, "n={n}");
+        }
+    }
+
+    #[test]
+    fn hundreds() {
+        let cases = [
+            (100, "сто"),
+            (101, "сто один"),
+            (200, "двести"),
+            (300, "триста"),
+            (400, "четыреста"),
+            (500, "пятьсот"),
+            (600, "шестьсот"),
+            (700, "семьсот"),
+            (800, "восемьсот"),
+            (900, "девятьсот"),
+            (999, "девятьсот девяносто девять"),
+        ];
+        for (n, w) in cases {
+            assert_eq!(num_to_words_ru(n), w, "n={n}");
+        }
+    }
+
+    #[test]
+    fn thousands() {
+        let cases = [
+            (1_000, "одна тысяча"),
+            (2_000, "две тысячи"),
+            (3_000, "три тысячи"),
+            (4_000, "четыре тысячи"),
+            (5_000, "пять тысяч"),
+            (11_000, "одиннадцать тысяч"),
+            (21_000, "двадцать одна тысяча"),
+            (1_001, "одна тысяча один"),
+            (1_100, "одна тысяча сто"),
+        ];
+        for (n, w) in cases {
+            assert_eq!(num_to_words_ru(n), w, "n={n}");
+        }
+    }
+
+    #[test]
+    fn millions() {
+        let cases = [
+            (1_000_000, "один миллион"),
+            (2_000_000, "два миллиона"),
+            (5_000_000, "пять миллионов"),
+            (1_000_001, "один миллион один"),
+        ];
+        for (n, w) in cases {
+            assert_eq!(num_to_words_ru(n), w, "n={n}");
+        }
+    }
+
+    #[test]
+    fn negative() {
+        assert_eq!(num_to_words_ru(-1), "минус один");
+        assert_eq!(num_to_words_ru(-100), "минус сто");
+    }
+
+    // ─ normalise_numbers ────────────────────────────────────────
+
+    #[test]
+    fn normalise_simple_sequence() {
+        // "1, 2, 3" → words
+        let out = normalise_numbers("1, 2, 3");
+        assert!(out.contains("один"), "got: {out}");
+        assert!(out.contains("два"), "got: {out}");
+        assert!(out.contains("три"), "got: {out}");
+    }
+
+    #[test]
+    fn normalise_hundreds() {
+        let out = normalise_numbers("100, 200, 300");
+        assert!(out.contains("сто"), "got: {out}");
+        assert!(out.contains("двести"), "got: {out}");
+        assert!(out.contains("триста"), "got: {out}");
+    }
+
+    #[test]
+    fn normalise_skips_version_strings() {
+        // "v2" and "Python3" — letter precedes digit
+        let out = normalise_numbers("v2 Python3");
+        assert!(out.contains("v2"), "got: {out}");
+        assert!(out.contains("Python3"), "got: {out}");
+    }
+
+    #[test]
+    fn normalise_skips_decimals() {
+        let out = normalise_numbers("3.14");
+        assert!(out.contains("3.14"), "got: {out}");
+    }
+
+    #[test]
+    fn normalise_skips_ip_addresses() {
+        let out = normalise_numbers("192.168.1.1");
+        assert!(out.contains("192.168.1.1"), "got: {out}");
+    }
+
+    #[test]
+    fn normalise_skips_unit_suffixes() {
+        // "50px", "3D" — letter follows digit
+        let out = normalise_numbers("50px 3D");
+        assert!(out.contains("50px"), "got: {out}");
+        assert!(out.contains("3D"), "got: {out}");
+    }
+
+    #[test]
+    fn normalise_percentage() {
+        let out = normalise_numbers("50%");
+        assert!(out.contains("пятьдесят"), "got: {out}");
+        assert!(out.contains("процентов"), "got: {out}");
+    }
+
+    #[test]
+    fn normalise_in_strip_markdown() {
+        // End-to-end: strip_markdown calls normalise_numbers
+        let out = strip_markdown("The server handled 100 requests.");
+        assert!(out.contains("сто"), "expected 'сто' in: {out}");
+        assert!(!out.contains("100"), "raw digit should be gone: {out}");
     }
 }
