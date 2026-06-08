@@ -19,6 +19,7 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg", "libsndfile1")
     .pip_install("chatterbox-tts", "torchaudio", "scipy", "fastapi[standard]")
+
 )
 
 volume = modal.Volume.from_name("foni-training", create_if_missing=True)
@@ -39,6 +40,14 @@ REF_WAV = "/data/dataset-raw/trader1a.wav"
 class ChatterboxTTS:
     @modal.enter()
     def load(self):
+        import sys
+        from unittest.mock import MagicMock
+
+        # Chatterbox's Chinese tokenizer calls spacy_pkuseg() at import time,
+        # which tries to download a model from GitHub — fails in Modal containers.
+        # We only synthesize Russian/English, so the Cangjie segmenter is unused.
+        sys.modules.setdefault("spacy_pkuseg", MagicMock())
+
         import torch
         from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
