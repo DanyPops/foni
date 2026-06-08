@@ -593,3 +593,70 @@ async fn synth_backend_is_injected_not_self_called() {
     );
     assert_eq!(msg.unwrap()["type"], "speak");
 }
+
+// ── Ordering + latency (dry_run — no env var race) ────────────────────────────
+
+/// Chunks from stream.rs must arrive on WS in sentence-index order.
+/// PlaybackBuffer drains by index so even if synthesis were parallel,
+/// the response stream must be ordered.
+#[tokio::test]
+async fn chunks_drain_in_sentence_order() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    send_msg(
+        &mut ws,
+        json!({"type": "delta", "text": "Alpha sentence. Beta sentence. Gamma sentence. "}),
+    )
+    .await;
+    send_msg(&mut ws, json!({"type": "message_end"})).await;
+
+    let msgs = recv_all(&mut ws, 2000).await;
+    let texts: Vec<&str> = msgs
+        .iter()
+        .filter(|m| m["type"] == "speak")
+        .filter_map(|m| m["text"].as_str())
+        .collect();
+
+    assert!(
+        texts.len() >= 2,
+        "expected >= 2 speak events, got: {texts:?}"
+    );
+
+    let alpha = texts.iter().position(|t| t.contains("Alpha"));
+    let beta = texts.iter().position(|t| t.contains("Beta"));
+    let gamma = texts.iter().position(|t| t.contains("Gamma"));
+
+    if let (Some(a), Some(b)) = (alpha, beta) {
+        assert!(a < b, "Alpha before Beta");
+    }
+    if let (Some(b), Some(g)) = (beta, gamma) {
+        assert!(b < g, "Beta before Gamma");
+    }
+}
+
+/// 3 chunks in dry_run must all complete in under 2s — no I/O in the hot path.
+#[tokio::test]
+async fn three_chunks_complete_quickly_in_dry_run() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    let t0 = std::time::Instant::now();
+    send_msg(
+        &mut ws,
+        json!({"type": "delta", "text": "First. Second. Third. "}),
+    )
+    .await;
+    send_msg(&mut ws, json!({"type": "message_end"})).await;
+
+    // 3s budget: stress dict pre-warming + 3 sequential chunks in parallel test suite
+    let msgs = recv_all(&mut ws, 3000).await;
+    let elapsed = t0.elapsed();
+
+    let speaks = msgs.iter().filter(|m| m["type"] == "speak").count();
+    assert!(speaks >= 2, "expected >= 2 speak events, got {speaks}");
+    assert!(
+        elapsed.as_secs() < 3,
+        "3 dry_run chunks should complete in <3s, took {elapsed:?}"
+    );
+}

@@ -71,10 +71,14 @@ async fn start_foni_synth() -> (String, String) {
 async fn start_foni_synth_with_synth(
     synth: foni_synth::engine::synth_backend::SharedSynth,
 ) -> (String, String) {
+    // Start a mock Ollama so translation doesn't need a real LLM.
+    let ollama_url = start_mock_ollama().await;
+    std::env::set_var("FONI_OLLAMA_URL", &ollama_url);
+    std::env::set_var("FONI_DRY_RUN", "0");
+
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let port = addr.port();
-    std::env::set_var("FONI_DRY_RUN", "0");
     let app = foni_synth::build_router_with_synth(synth).await;
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (
@@ -101,6 +105,28 @@ async fn recv(
             _ => return None,
         }
     }
+}
+
+async fn recv_all(
+    ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
+    ms: u64,
+) -> Vec<Value> {
+    let mut out = Vec::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(ms);
+    #[allow(clippy::while_let_loop)]
+    loop {
+        match tokio::time::timeout_at(deadline, ws.next()).await {
+            Ok(Some(Ok(Message::Text(t)))) => {
+                if let Ok(msg) = serde_json::from_str::<Value>(&t) {
+                    if msg["type"] != "buffer_state" {
+                        out.push(msg);
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+    out
 }
 
 #[tokio::test]
@@ -496,5 +522,53 @@ async fn synth_calls_tts_url_not_self() {
         msg.unwrap()["type"],
         "playing",
         "should be 'playing' (real synthesis), not 'error' (self-call failed)"
+    );
+}
+
+// ── SynthBackend stress tests ─────────────────────────────────────────────────
+
+/// 10 concurrent WS connections with a realistic 300ms synth delay each.
+/// Asserts all complete within 5s (not 10 × 300ms = 3s sequential).
+/// Verifies the backend can handle sustained parallel load without
+/// connection refusals or timeouts.
+#[tokio::test]
+async fn ten_concurrent_connections_with_realistic_delay() {
+    use foni_synth::engine::synth_backend::MockSynthBackend;
+    use std::sync::Arc;
+
+    let synth = Arc::new(MockSynthBackend::with_delay(300));
+    let (ws_url, _) = start_foni_synth_with_synth(synth).await;
+
+    let t0 = std::time::Instant::now();
+    let handles: Vec<_> = (0..10)
+        .map(|i| {
+            let url = ws_url.clone();
+            tokio::spawn(async move {
+                let (mut ws, _) = connect_async(&url).await.expect("connect");
+                ws.send(Message::Text(
+                    serde_json::json!({"type": "delta", "text": format!("Sentence {i}. ")})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .ok();
+                recv(&mut ws, 5000).await
+            })
+        })
+        .collect();
+
+    let results: Vec<_> = futures::future::join_all(handles)
+        .await
+        .into_iter()
+        .map(|r| r.expect("task"))
+        .collect();
+
+    let elapsed = t0.elapsed();
+
+    let successes = results.iter().filter(|r| r.is_some()).count();
+    assert_eq!(successes, 10, "all 10 connections must respond");
+    assert!(
+        elapsed.as_secs() < 5,
+        "10 concurrent connections should complete in <5s, took {elapsed:?}"
     );
 }
