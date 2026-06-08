@@ -50,13 +50,14 @@ function capturePanel(state: FoniPanelState, actions: FoniPanelActions) {
     },
   } as unknown as Parameters<typeof openFoniPanel>[0];
 
-  openFoniPanel(ctx, state, actions);
+  openFoniPanel(ctx, () => state, actions);
 
   expect(capturedFactory).not.toBeNull();
 
   let doneValue: unknown;
   const done = (v: unknown) => { doneValue = v; };
-  const comp = capturedFactory!(null, null, null, done) as {
+  const fakeTui = { requestRender: vi.fn() };
+  const comp = capturedFactory!(fakeTui, null, null, done) as {
     render(w: number): string[];
     handleInput(d: string): void;
     invalidate(): void;

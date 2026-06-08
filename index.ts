@@ -291,7 +291,7 @@ export default async function (pi: ExtensionAPI) {
 
       // No subcommand → open interactive panel (like /mcp)
       if (!sub) {
-        openFoniPanel(ctx, panelState(), panelActions(ctx));
+        openFoniPanel(ctx, panelState, panelActions(ctx));
         return;
       }
 

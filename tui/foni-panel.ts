@@ -80,8 +80,8 @@ class FoniPanel {
   private invalidateFn?: () => void;
 
   constructor(
-    private state: FoniPanelState,
-    private actions: FoniPanelActions,
+    private readonly stateGetter: () => FoniPanelState,
+    private readonly actions: FoniPanelActions,
   ) {}
 
   setInvalidate(fn: () => void): void { this.invalidateFn = fn; }
@@ -95,7 +95,7 @@ class FoniPanel {
     if (this.cachedLines) return this.cachedLines;
 
     const lines: string[] = [];
-    const s = this.state;
+    const s = this.stateGetter();
 
     const title = bold("🔊 Foni");
     const titleW = visibleWidth("🔊 Foni");
@@ -139,7 +139,7 @@ class FoniPanel {
 
       const label = bold(item.label.padEnd(12));
       const rowContent = `${prefix} ${label} [${valueStr}]`;
-      lines.push(row(isCursor ? rowContent : rowContent));
+      lines.push(row(rowContent));
     }
 
     lines.push(emptyRow());
@@ -199,22 +199,19 @@ class FoniPanel {
     this.invalidate();
   }
 
-  updateState(next: Partial<FoniPanelState>): void {
-    Object.assign(this.state, next);
-    this.invalidate();
-  }
 }
 
 export function openFoniPanel(
   ctx: ExtensionContext,
-  state: FoniPanelState,
+  stateGetter: () => FoniPanelState,
   actions: FoniPanelActions,
 ): void {
   if (!ctx.hasUI) return;
 
   ctx.ui.custom(
-    (_tui, _theme, _keybindings, done) => {
-      const panel = new FoniPanel(state, actions);
+    (tui, _theme, _keybindings, done) => {
+      const panel = new FoniPanel(stateGetter, actions);
+      panel.setInvalidate(() => tui.requestRender());
 
       const component = {
         render(width: number): string[] { return panel.render(width); },
