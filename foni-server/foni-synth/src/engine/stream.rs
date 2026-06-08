@@ -144,8 +144,44 @@ pub fn strip_markdown(text: &str) -> String {
         .replace_all(&s, "")
         .to_string();
 
-    // Horizontal rules
+    // ASCII horizontal rules (--- / *** / ___)
     s = Regex::new(r"(?m)^[-*_]{3,}\s*$")
+        .expect("infallible")
+        .replace_all(&s, "")
+        .to_string();
+
+    // Unicode visual-formatting noise — lines made purely of Box Drawing (U+2500–U+257F)
+    // or Block Elements (U+2580–U+259F): ─ │ ┌ ┐ █ ▄ ▀ ▌ ░ etc.
+    // One contiguous range covers both complete Unicode blocks.
+    s = Regex::new(r"(?m)^[\u{2500}-\u{259F}\s]{2,}$")
+        .expect("infallible")
+        .replace_all(&s, "")
+        .to_string();
+
+    // Same chars inline flanking text ('─── Section ────') — strip chars, keep text.
+    s = Regex::new(r"[\u{2500}-\u{259F}]+")
+        .expect("infallible")
+        .replace_all(&s, " ")
+        .to_string();
+
+    // Markdown table separator rows (|---|---|, :---:|, etc.) — drop entirely.
+    s = Regex::new(r"(?m)^\|[-:\s|]+\|\s*$")
+        .expect("infallible")
+        .replace_all(&s, "")
+        .to_string();
+
+    // Markdown table data rows — strip the pipes, keep cell text.
+    // '| foo | bar |' → 'foo  bar'
+    s = Regex::new(r"(?m)^\|(.+)\|\s*$")
+        .expect("infallible")
+        .replace_all(&s, |caps: &regex::Captures| {
+            caps[1].replace('|', " ").trim().to_string()
+        })
+        .to_string();
+
+    // Lines that are pure non-alphabetic noise after all passes — drop.
+    // Matches lines with no Unicode letter or digit at all.
+    s = Regex::new(r"(?m)^[^\p{L}\p{N}\n]*$")
         .expect("infallible")
         .replace_all(&s, "")
         .to_string();
@@ -705,6 +741,87 @@ mod tests {
     }
 
     // ─ normalise_numbers ────────────────────────────────────────
+
+    // ─ formatting noise stripping ──────────────────────────────────────────
+
+    #[test]
+    fn strip_unicode_horizontal_rule() {
+        // A line of U+2500 box-drawing chars should disappear entirely.
+        let out = strip_markdown(
+            "────────────────────────────────────────────────────────────────────────────────",
+        );
+        assert!(out.is_empty(), "got: {out:?}");
+    }
+
+    #[test]
+    fn strip_double_line_box_rule() {
+        // U+2550 is inside Box Drawing (U+2500-U+257F) — covered by the same range.
+        let out = strip_markdown("════════════════════════════════");
+        assert!(out.is_empty(), "got: {out:?}");
+    }
+
+    #[test]
+    fn strip_block_elements_line() {
+        // Block Elements (U+2580–U+259F): █ ▄ ░ etc. appear in LLM progress bars.
+        let out = strip_markdown("████████░░░░░░░░");
+        assert!(out.is_empty(), "got: {out:?}");
+    }
+
+    #[test]
+    fn strip_box_chars_keeps_label_text() {
+        // '─── Section title ────────' should keep 'Section title'.
+        let out = strip_markdown("─── Section title ────────");
+        assert!(out.contains("Section title"), "got: {out:?}");
+        assert!(!out.contains('─'), "box chars should be gone: {out:?}");
+    }
+
+    #[test]
+    fn strip_table_separator_row() {
+        let out = strip_markdown("|---|---|---|");
+        assert!(out.is_empty(), "got: {out:?}");
+    }
+
+    #[test]
+    fn strip_table_separator_with_alignment() {
+        let out = strip_markdown("| :--- | :---: | ---: |");
+        assert!(out.is_empty(), "got: {out:?}");
+    }
+
+    #[test]
+    fn strip_table_data_row_keeps_cell_text() {
+        // '| Pattern | Problem | Solution |' → cell content survives, pipes gone.
+        let out = strip_markdown("| Pattern | Problem | Solution |");
+        assert!(out.contains("Pattern"), "got: {out:?}");
+        assert!(out.contains("Problem"), "got: {out:?}");
+        assert!(out.contains("Solution"), "got: {out:?}");
+        assert!(!out.contains('|'), "pipes should be gone: {out:?}");
+    }
+
+    #[test]
+    fn strip_full_markdown_table() {
+        let table = "| Col A | Col B |\n|---|---|\n| foo | bar |\n| baz | qux |";
+        let out = strip_markdown(table);
+        assert!(!out.contains('|'), "pipes should be gone: {out:?}");
+        assert!(!out.contains("---"), "separator should be gone: {out:?}");
+        assert!(out.contains("foo"), "cell text should survive: {out:?}");
+        assert!(out.contains("bar"), "cell text should survive: {out:?}");
+    }
+
+    #[test]
+    fn strip_pure_noise_line() {
+        // A line with only punctuation and no letters/digits should vanish.
+        let out = strip_markdown("=============================");
+        assert!(out.is_empty(), "got: {out:?}");
+    }
+
+    #[test]
+    fn strip_noise_preserves_surrounding_prose() {
+        let text = "Some prose.\n────────────────────\nMore prose.";
+        let out = strip_markdown(text);
+        assert!(out.contains("Some prose"), "got: {out:?}");
+        assert!(out.contains("More prose"), "got: {out:?}");
+        assert!(!out.contains('─'), "rule should be gone: {out:?}");
+    }
 
     #[test]
     fn normalise_simple_sequence() {
