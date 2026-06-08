@@ -168,6 +168,40 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                     }
                 }
             }
+            "prewarm" => {
+                // Tell the client warming has started so it can show a status indicator.
+                let _ = tx
+                    .send(Message::Text(
+                        serde_json::json!({"type": "prewarm_start"}).to_string(),
+                    ))
+                    .await;
+
+                // Pick a short phrase and synthesize silently to heat the Modal GPU.
+                // Result stored in cache — first real request of the same phrase is instant.
+                let phrase = super::engine_config::PREWARM_RU
+                    .first()
+                    .copied()
+                    .unwrap_or("Да.");
+                let synth_result = app_state
+                    .0
+                    .synth
+                    .synthesize(phrase, &config.rvc_model)
+                    .await;
+
+                match synth_result {
+                    Ok(wav) => {
+                        cache.put(cache_key(phrase, &config.rvc_model), wav).await;
+                        tracing::info!("prewarm: complete");
+                    }
+                    Err(e) => tracing::warn!(error = %e, "prewarm: failed"),
+                }
+
+                let _ = tx
+                    .send(Message::Text(
+                        serde_json::json!({"type": "prewarm_done"}).to_string(),
+                    ))
+                    .await;
+            }
             "reset" => {
                 stream_state = fresh_state();
                 emotion_state = neutral_state();

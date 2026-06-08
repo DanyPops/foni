@@ -660,3 +660,33 @@ async fn three_chunks_complete_quickly_in_dry_run() {
         "3 dry_run chunks should complete in <3s, took {elapsed:?}"
     );
 }
+
+// ── Prewarm ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn prewarm_sends_start_then_done() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    // Collect all messages — prewarm_start must arrive before prewarm_done.
+    send_msg(&mut ws, json!({"type": "prewarm"})).await;
+
+    let msgs = recv_all(&mut ws, 2000).await;
+    let types: Vec<&str> = msgs.iter().filter_map(|m| m["type"].as_str()).collect();
+
+    assert!(
+        types.contains(&"prewarm_start"),
+        "should send prewarm_start, got: {types:?}"
+    );
+    assert!(
+        types.contains(&"prewarm_done"),
+        "should send prewarm_done, got: {types:?}"
+    );
+
+    let start_pos = types.iter().position(|&t| t == "prewarm_start").unwrap();
+    let done_pos = types.iter().position(|&t| t == "prewarm_done").unwrap();
+    assert!(
+        start_pos < done_pos,
+        "prewarm_start must precede prewarm_done"
+    );
+}

@@ -116,6 +116,10 @@ export default async function (pi: ExtensionAPI) {
             emotionEmoji = msg.intensity >= 0.3 ? (msg.emoji ?? "") : "";
           } else if (msg.type === "buffer_state" && lastCtx) {
             updateBufferWidget(lastCtx, msg.data);
+          } else if (msg.type === "prewarm_start" && lastCtx) {
+            lastCtx.ui.setStatus("tts-warm", lastCtx.ui.theme.fg("warning", "⏳ warming TTS…"));
+          } else if (msg.type === "prewarm_done" && lastCtx) {
+            lastCtx.ui.setStatus("tts-warm", undefined);
           }
         } catch { /* malformed */ }
       });
