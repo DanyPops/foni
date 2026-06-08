@@ -233,40 +233,34 @@ export default async function (pi: ExtensionAPI) {
   function panelState(): FoniPanelState {
     return {
       enabled: config.enabled,
+      muted,
+      wsConnected: ws?.readyState === WebSocket.OPEN,
+      voice: config.rvcModel,
       inputLang: config.inputLang,
       outputLang: config.outputLang,
-      speed: config.speed,
-      backendName: "synth",
-      backendPref: config.backendPref,
-      rvcEnabled: config.rvcEnabled,
-      rvcModel: config.rvcModel,
-      rvcUrl: config.rvcUrl,
-      rvcServerOk: null,
+      matEnabled: config.matEnabled,
+      matProb: config.matProb,
+      interjectEnabled: config.interjectEnabled,
+      interjectProb: config.interjectProb,
     };
   }
 
   function panelActions(ctx: any): FoniPanelActions {
     return {
-      toggle() { config.enabled = !config.enabled; updateStatus(ctx); },
-      setLang(i, o) { config.inputLang = i; config.outputLang = o; wsSend({ type: "config", key: "lang", value: `${i},${o}` }); updateStatus(ctx); },
-      setSpeed(s) { config.speed = s; wsSend({ type: "config", key: "speed", value: String(s) }); updateStatus(ctx); },
-      setBackendPref(p) { config.backendPref = p as any; updateStatus(ctx); },
-      toggleRvc() { config.rvcEnabled = !config.rvcEnabled; updateStatus(ctx); },
-      async pickRvcModel() {
-        try {
-          const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(3000) });
-          const models = ((await r.json()) as { models?: string[] }).models ?? [];
-          if (!models.length) return;
-          const picked = await pickModel(ctx, models, config.rvcModel);
-          if (!picked) return;
-          config.rvcModel = picked;
-          await fetch(`${config.rvcUrl}/models/${encodeURIComponent(picked)}`, { method: "POST", signal: AbortSignal.timeout(10_000) });
-          updateStatus(ctx);
-        } catch {}
+      toggleEnabled() {
+        config.enabled = !config.enabled;
+        wsSend({ type: "set_config", enabled: config.enabled });
+        updateStatus(ctx);
       },
-      async checkRvcServer() {
-        try { const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) }); return r.ok; }
-        catch { return false; }
+      toggleMuted() { muted = !muted; updateStatus(ctx); },
+      toggleMat() { config.matEnabled = !config.matEnabled; updateStatus(ctx); },
+      toggleInterject() { config.interjectEnabled = !config.interjectEnabled; updateStatus(ctx); },
+      stop() { wsSend({ type: "reset" }); },
+      async test() {
+        try {
+          const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) });
+          ctx.ui.notify(r.ok ? "foni-synth reachable ✅" : `HTTP ${r.status}`, r.ok ? "info" : "warning");
+        } catch { ctx.ui.notify(`foni-synth unreachable at ${config.rvcUrl}`, "warning"); }
       },
     };
   }
@@ -285,39 +279,9 @@ export default async function (pi: ExtensionAPI) {
       const parts = (args ?? "").trim().split(/\s+/).filter(Boolean);
       const sub = parts[0] ?? "";
 
-      // No subcommand → open interactive panel
+      // No subcommand → open interactive panel (like /mcp)
       if (!sub) {
-        const lang = config.inputLang === config.outputLang
-          ? config.outputLang.toUpperCase()
-          : `${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`;
-        const options = [
-          `${config.enabled ? "✅" : "⬜"} TTS ${config.enabled ? "enabled" : "disabled"}`,
-          `🎙  voice: ${config.rvcModel || "(none)"}`,
-          `🌐  lang: ${lang}`,
-          `💬  mat: ${config.matEnabled ? "on" : "off"} (${config.matProb})`,
-          `💬  interject: ${config.interjectEnabled ? "on" : "off"} (${config.interjectProb})`,
-          `🔇  ${muted ? "unmute" : "mute"}`,
-          `🔌  ws: ${ws?.readyState === WebSocket.OPEN ? "connected" : "disconnected"}`,
-          "---",
-          "stop (reset stream)",
-          "test (ping foni-synth)",
-        ];
-        const picked = await ctx.ui.select("Foni TTS", options);
-        if (!picked || picked === "---") return;
-        if (picked.includes("disabled") || picked.includes("enabled")) {
-          config.enabled = !config.enabled;
-          wsSend({ type: "set_config", enabled: config.enabled });
-          updateStatus(ctx);
-        } else if (picked.includes("mute")) {
-          muted = !muted; updateStatus(ctx);
-        } else if (picked.includes("stop")) {
-          wsSend({ type: "reset" }); ctx.ui.notify("TTS stopped", "info");
-        } else if (picked.includes("test")) {
-          try {
-            const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) });
-            ctx.ui.notify(r.ok ? "foni-synth reachable ✅" : `HTTP ${r.status}`, r.ok ? "info" : "warning");
-          } catch { ctx.ui.notify(`foni-synth unreachable at ${config.rvcUrl}`, "warning"); }
-        }
+        openFoniPanel(ctx, panelState(), panelActions(ctx));
         return;
       }
 

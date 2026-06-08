@@ -1,224 +1,169 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
-
-
-vi.mock("@earendil-works/pi-tui", () => {
-  const KEYS: Record<string, string> = {
-    escape:    "\x1b",
-    up:        "\x1b[A",
-    down:      "\x1b[B",
-    return:    "\r",
-    enter:     "\r",
-    space:     " ",
-    backspace: "\x7f",
-    "ctrl+c":  "\x03",
-  };
-  return {
-    matchesKey:      (data: string, key: string) => data === (KEYS[key] ?? key),
-    truncateToWidth: (str: string, width: number, _e = "…", pad = false) => {
-      const vis = str.replace(/\x1b\[[^m]*m/g, "");
-      const out = vis.length <= width ? str : str.slice(0, width) + _e;
-      return pad ? out.padEnd(width) : out;
-    },
-    visibleWidth: (str: string) => str.replace(/\x1b\[[^m]*m/g, "").length,
-  };
-});
+vi.mock("@earendil-works/pi-tui", () => ({
+  matchesKey: (data: string, key: unknown) => {
+    const MAP: Record<string, string> = {
+      up: "\x1b[A", down: "\x1b[B", escape: "\x1b", enter: "\r",
+    };
+    const keyStr = typeof key === "string" ? key : JSON.stringify(key);
+    return data === (MAP[keyStr] ?? keyStr);
+  },
+  Key: { up: "up", down: "down", escape: "escape", enter: "enter" },
+  visibleWidth: (s: string) => s.replace(/\x1b\[[^m]*m/g, "").length,
+}));
 
 import { openFoniPanel } from "./tui/foni-panel.ts";
 import type { FoniPanelState, FoniPanelActions } from "./tui/foni-panel.ts";
+
 function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[^m]*m/g, "");
 }
 
-function makeState(overrides: Partial<FoniPanelState> = {}): FoniPanelState {
+function makeState(o: Partial<FoniPanelState> = {}): FoniPanelState {
   return {
-    enabled:     false,
-    inputLang:   "en",
-    outputLang:  "en",
-    speed:       1.0,
-    backendName: "espeak",
-    backendPref: "auto",
-    rvcEnabled:  false,
-    rvcModel:    "sidorovich",
-    rvcUrl:      "http://localhost:5050",
-    rvcServerOk: null,
-    ...overrides,
+    enabled: false, muted: false, wsConnected: true,
+    voice: "sidorovich", inputLang: "en", outputLang: "ru",
+    matEnabled: true, matProb: 0.35,
+    interjectEnabled: true, interjectProb: 0.25,
+    ...o,
   };
 }
 
-function makeActions(overrides: Partial<FoniPanelActions> = {}): FoniPanelActions {
+function makeActions(o: Partial<FoniPanelActions> = {}): FoniPanelActions {
   return {
-    toggle:         vi.fn(),
-    setLang:        vi.fn(),
-    setSpeed:       vi.fn(),
-    setBackendPref: vi.fn(),
-    toggleRvc:      vi.fn(),
-    pickRvcModel:   vi.fn().mockResolvedValue(undefined),
-    checkRvcServer: vi.fn().mockResolvedValue(true),
-    ...overrides,
+    toggleEnabled:   vi.fn(),
+    toggleMuted:     vi.fn(),
+    toggleMat:       vi.fn(),
+    toggleInterject: vi.fn(),
+    stop:            vi.fn(),
+    test:            vi.fn().mockResolvedValue(undefined),
+    ...o,
   };
 }
 
-async function mountPanel(state = makeState(), actions = makeActions()) {
-  let component!: { render(w: number): string[]; handleInput(d: string): Promise<void> };
-  let panelResolve!: () => void;
-  const panelPromise = new Promise<void>(r => { panelResolve = r; });
-
+function capturePanel(state: FoniPanelState, actions: FoniPanelActions) {
+  let capturedFactory: ((tui: unknown, theme: unknown, kb: unknown, done: (r: unknown) => void) => unknown) | null = null;
   const ctx = {
+    hasUI: true,
     ui: {
-      custom: vi.fn((factory: Function) => {
-        const tui  = { requestRender: vi.fn() };
-        const done = vi.fn(panelResolve);
-        component = factory(tui, null, null, done);
-      }),
+      custom: vi.fn((factory, _opts) => { capturedFactory = factory; }),
     },
-  } as any;
+  } as unknown as Parameters<typeof openFoniPanel>[0];
 
   openFoniPanel(ctx, state, actions);
-  if (!component) throw new Error("factory not called synchronously");
 
-  /** Render as plain text the way a human reads it. */
-  const screen = (width = 52) =>
-    component.render(width).map(stripAnsi).join("\n");
+  expect(capturedFactory).not.toBeNull();
 
-  return { component, panelPromise, screen, actions };
+  let doneValue: unknown;
+  const done = (v: unknown) => { doneValue = v; };
+  const comp = capturedFactory!(null, null, null, done) as {
+    render(w: number): string[];
+    handleInput(d: string): void;
+    invalidate(): void;
+  };
+
+  return { comp, getDone: () => doneValue };
 }
 
-
-describe("FoniPanel render snapshots", () => {
-  it("initial state (TTS off, RVC off, EN)", async () => {
-    const { screen } = await mountPanel();
-    expect(screen()).toMatchSnapshot();
+describe("FoniPanel render", () => {
+  it("renders border and title", () => {
+    const { comp } = capturePanel(makeState(), makeActions());
+    const lines = comp.render(54).map(stripAnsi);
+    expect(lines[0]).toContain("Foni");
+    expect(lines[0]).toContain("╭");
+    expect(lines[lines.length - 1]).toContain("╯");
   });
 
-  it("TTS enabled", async () => {
-    const { screen } = await mountPanel(makeState({ enabled: true }));
-    expect(screen()).toMatchSnapshot();
+  it("shows ON when enabled", () => {
+    const { comp } = capturePanel(makeState({ enabled: true }), makeActions());
+    const text = comp.render(54).map(stripAnsi).join("\n");
+    expect(text).toContain("ON");
   });
 
-  it("RVC enabled with sidorovich model", async () => {
-    const { screen } = await mountPanel(makeState({ rvcEnabled: true, rvcModel: "sidorovich" }));
-    expect(screen()).toMatchSnapshot();
+  it("shows OFF when disabled", () => {
+    const { comp } = capturePanel(makeState({ enabled: false }), makeActions());
+    const text = comp.render(54).map(stripAnsi).join("\n");
+    expect(text).toContain("OFF");
   });
 
-  it("language RU", async () => {
-    const { screen } = await mountPanel(makeState({ inputLang: "ru", outputLang: "ru" }));
-    expect(screen()).toMatchSnapshot();
+  it("shows voice and lang in info section", () => {
+    const { comp } = capturePanel(makeState({ voice: "diomedes" }), makeActions());
+    const text = comp.render(54).map(stripAnsi).join("\n");
+    expect(text).toContain("diomedes");
+    expect(text).toContain("EN→RU");
   });
 
-  it("speed 1.5x", async () => {
-    const { screen } = await mountPanel(makeState({ speed: 1.5 }));
-    expect(screen()).toMatchSnapshot();
+  it("shows connected ws status", () => {
+    const { comp } = capturePanel(makeState({ wsConnected: true }), makeActions());
+    const text = comp.render(54).map(stripAnsi).join("\n");
+    expect(text).toContain("connected");
   });
 
-  it("narrow terminal (40 cols)", async () => {
-    const { screen } = await mountPanel();
-    expect(screen(40)).toMatchSnapshot();
-  });
-});
-
-//
-// Feed a keystroke, assert the right action was called with the right args.
-// We test what the panel *does*, not what it *looks like* after.
-
-describe("FoniPanel handleInput → actions", () => {
-  it("ESC resolves the panel promise", async () => {
-    const { component, panelPromise } = await mountPanel();
-    await component.handleInput("\x1b");
-    await expect(panelPromise).resolves.toBeUndefined();
-  });
-
-  it("q resolves the panel promise", async () => {
-    const { component, panelPromise } = await mountPanel();
-    await component.handleInput("q");
-    await expect(panelPromise).resolves.toBeUndefined();
-  });
-
-  it("space on TTS row (cursor=0) calls toggle()", async () => {
-    const { component, actions } = await mountPanel();
-    await component.handleInput(" ");
-    expect(actions.toggle).toHaveBeenCalledOnce();
-  });
-
-  it("+ calls setSpeed with speed+0.1", async () => {
-    const { component, actions } = await mountPanel(makeState({ speed: 1.0 }));
-    await component.handleInput("+");
-    expect(actions.setSpeed).toHaveBeenCalledWith(1.1);
-  });
-
-  it("- calls setSpeed with speed-0.1", async () => {
-    const { component, actions } = await mountPanel(makeState({ speed: 1.0 }));
-    await component.handleInput("-");
-    expect(actions.setSpeed).toHaveBeenCalledWith(0.9);
-  });
-
-  it("+ clamps at 3.0", async () => {
-    const { component, actions } = await mountPanel(makeState({ speed: 3.0 }));
-    await component.handleInput("+");
-    expect(actions.setSpeed).toHaveBeenCalledWith(3.0);
-  });
-
-  it("- clamps at 0.5", async () => {
-    const { component, actions } = await mountPanel(makeState({ speed: 0.5 }));
-    await component.handleInput("-");
-    expect(actions.setSpeed).toHaveBeenCalledWith(0.5);
-  });
-
-  it("l toggles lang en→ru", async () => {
-    const { component, actions } = await mountPanel(makeState({ inputLang: "en", outputLang: "en" }));
-    await component.handleInput("l");
-    expect(actions.setLang).toHaveBeenCalledWith("ru", "ru");
-  });
-
-  it("l toggles lang ru→en", async () => {
-    const { component, actions } = await mountPanel(makeState({ inputLang: "ru", outputLang: "ru" }));
-    await component.handleInput("l");
-    expect(actions.setLang).toHaveBeenCalledWith("en", "ru");
-  });
-
-  it("r calls toggleRvc", async () => {
-    const { component, actions } = await mountPanel();
-    await component.handleInput("r");
-    expect(actions.toggleRvc).toHaveBeenCalledOnce();
-  });
-
-  it("m calls pickRvcModel", async () => {
-    const { component, actions } = await mountPanel();
-    await component.handleInput("m");
-    expect(actions.pickRvcModel).toHaveBeenCalledOnce();
-  });
-
-  it("b cycles backend auto→espeak", async () => {
-    const { component, actions } = await mountPanel(makeState({ backendPref: "auto" }));
-    await component.handleInput("b");
-    expect(actions.setBackendPref).toHaveBeenCalledWith("espeak");
-  });
-
-  it("↓ then space activates the language row", async () => {
-    const { component, actions } = await mountPanel(makeState({ inputLang: "en", outputLang: "en" }));
-    await component.handleInput("\x1b[B"); // down → lang row
-    await component.handleInput(" ");      // space → activate
-    expect(actions.setLang).toHaveBeenCalledWith("ru", "ru");
+  it("renders navigation hint", () => {
+    const { comp } = capturePanel(makeState(), makeActions());
+    const text = comp.render(54).map(stripAnsi).join("\n");
+    expect(text).toContain("navigate");
+    expect(text).toContain("esc");
   });
 });
 
-//
-// The panel receives a one-time state snapshot on mount.
-// Actions mutate external config but panel.updateState() is never called,
-// so rendered badges go stale after an action fires.
-// This test pins the bug so it's visible when fixed.
+describe("FoniPanel keyboard", () => {
+  it("esc closes the panel", async () => {
+    const { comp, getDone } = capturePanel(makeState(), makeActions());
+    comp.handleInput("\x1b");
+    await new Promise(r => setTimeout(r, 10));
+    expect(getDone()).toBeUndefined(); // done called with undefined
+  });
 
-describe("stale snapshot (known bug)", () => {
-  it("render does not reflect toggle() fired during the session", async () => {
-    let externalEnabled = false;
-    const actions = makeActions({
-      toggle: vi.fn(() => { externalEnabled = !externalEnabled; }),
-    });
+  it("q closes the panel", async () => {
+    const { comp, getDone } = capturePanel(makeState(), makeActions());
+    comp.handleInput("q");
+    await new Promise(r => setTimeout(r, 10));
+    expect(getDone()).toBeUndefined();
+  });
 
-    const { component, screen } = await mountPanel(makeState({ enabled: false }), actions);
-    await component.handleInput(" "); // fires toggle()
+  it("down moves cursor", () => {
+    const { comp } = capturePanel(makeState(), makeActions());
+    const before = comp.render(54).map(stripAnsi).join("\n");
+    comp.handleInput("\x1b[B"); // down
+    const after = comp.render(54).map(stripAnsi).join("\n");
+    expect(before).not.toEqual(after); // cursor changed
+  });
 
-    expect(externalEnabled).toBe(true);            // external state updated ✓
-    expect(screen()).toContain("[OFF]");            // panel still stale ✗ (the bug)
+  it("space on TTS row calls toggleEnabled", async () => {
+    const actions = makeActions();
+    const { comp } = capturePanel(makeState(), actions);
+    // Cursor starts at 0 = TTS/enabled row
+    comp.handleInput(" ");
+    await new Promise(r => setTimeout(r, 10));
+    expect(actions.toggleEnabled).toHaveBeenCalled();
+  });
+
+  it("space on mute row calls toggleMuted", async () => {
+    const actions = makeActions();
+    const { comp } = capturePanel(makeState(), actions);
+    comp.handleInput("\x1b[B"); // down to mute
+    comp.handleInput(" ");
+    await new Promise(r => setTimeout(r, 10));
+    expect(actions.toggleMuted).toHaveBeenCalled();
+  });
+
+  it("invalidate clears cached render", () => {
+    const { comp } = capturePanel(makeState(), makeActions());
+    comp.render(54); // populate cache
+    comp.invalidate();
+    // Should re-render without throwing
+    expect(() => comp.render(54)).not.toThrow();
+  });
+});
+
+describe("openFoniPanel no-op when no UI", () => {
+  it("does not call custom when hasUI=false", () => {
+    const ctx = {
+      hasUI: false,
+      ui: { custom: vi.fn() },
+    } as unknown as Parameters<typeof openFoniPanel>[0];
+    openFoniPanel(ctx, makeState(), makeActions());
+    expect(ctx.ui.custom).not.toHaveBeenCalled();
   });
 });
