@@ -149,6 +149,24 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                 }
             }
             "set_config" => {
+                // dry_run can be toggled per-connection so tests don't need
+                // the FONI_DRY_RUN env var (which is process-global).
+                if let Some(dr) = msg["dry_run"].as_bool() {
+                    config.dry_run = dr;
+                }
+                // lang: "en,ru" or "ru,ru" — sets input and output language.
+                // Passing same code for both sides disables translation (useful in tests).
+                if let Some(lang) = msg["lang"].as_str() {
+                    use crate::engine::engine_config::Lang;
+                    if let Some((inp, out)) = lang.split_once(',') {
+                        if let Some(l) = Lang::from_code(inp) {
+                            config.input_lang = l;
+                        }
+                        if let Some(l) = Lang::from_code(out) {
+                            config.output_lang = l;
+                        }
+                    }
+                }
                 if let Some(enabled) = msg["enabled"].as_bool() {
                     let was_disabled = !config.enabled;
                     config.enabled = enabled;

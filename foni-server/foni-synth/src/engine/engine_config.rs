@@ -87,6 +87,16 @@ pub enum Lang {
     Ru,
 }
 
+impl Lang {
+    pub fn from_code(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "en" => Some(Self::En),
+            "ru" => Some(Self::Ru),
+            _ => None,
+        }
+    }
+}
+
 impl Default for FoniConfig {
     fn default() -> Self {
         Self {
