@@ -13,6 +13,8 @@ use super::emotion::{
 };
 use super::engine_config::FoniConfig;
 use super::facade::{cache_key, new_shared_cache, PlayQueue, SharedCache};
+use std::sync::atomic::Ordering;
+
 use rand::Rng;
 
 use super::lexicon;
@@ -441,12 +443,59 @@ async fn process_chunk(
         .synthesize(&translated, &config.rvc_model)
         .await
     {
-        Ok(wav) => {
+        Ok(raw_wav) => {
             tracing::info!(
                 synth_ms = t_synth.elapsed().as_millis() as u64,
-                bytes = wav.len(),
+                bytes = raw_wav.len(),
                 "ws: synth done"
             );
+
+            // Apply DSP chain (loudnorm, compression, EQ) using the server’s
+            // configured defaults and reactive controller correction.
+            let dsp_defaults = app_state.0.dsp_defaults.read().await.clone();
+            let base_opts = crate::quality::dsp::SmoothingOptions::from(&dsp_defaults);
+            let controller_enabled = app_state.0.controller_enabled.load(Ordering::Relaxed);
+            let controller_cfg = app_state.0.controller_config.read().await.clone();
+            let policy_arc = app_state.0.policy_engine.read().await.clone();
+
+            let wav = tokio::task::spawn_blocking(move || {
+                crate::wav::roundtrip(&raw_wav, |samples, sr| {
+                    let opts = if controller_enabled {
+                        let analysis = foni_analyse::analyse_fast(samples, sr);
+                        if let Some(ref policy) = policy_arc {
+                            if let Some((corrected, _)) =
+                                policy.evaluate(&analysis, &base_opts, &controller_cfg)
+                            {
+                                corrected
+                            } else {
+                                crate::quality::dsp::controller::correct(
+                                    &analysis,
+                                    &base_opts,
+                                    &controller_cfg,
+                                )
+                                .0
+                            }
+                        } else {
+                            crate::quality::dsp::controller::correct(
+                                &analysis,
+                                &base_opts,
+                                &controller_cfg,
+                            )
+                            .0
+                        }
+                    } else {
+                        base_opts
+                    };
+                    *samples = crate::quality::dsp::apply(std::mem::take(samples), sr, &opts);
+                })
+                .unwrap_or(raw_wav)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "ws: dsp spawn_blocking failed, using raw audio");
+                vec![]
+            });
+
             cache.put(key, wav.clone()).await;
             play_queue.enqueue(wav).await;
             use super::playback_buffer::AudioChunk;

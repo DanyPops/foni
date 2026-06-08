@@ -101,6 +101,41 @@ impl Default for SmoothingOptions {
     }
 }
 
+impl From<&crate::config::DspDefaults> for SmoothingOptions {
+    fn from(d: &crate::config::DspDefaults) -> Self {
+        Self {
+            fade_secs: d.fade_secs,
+            highpass_freq: d.highpass_freq,
+            de_harsh_freq: d.de_harsh_freq,
+            de_harsh_db: d.de_harsh_db,
+            de_harsh_q: d.de_harsh_q,
+            compression_ratio: d.compression_ratio,
+            compression_attack_ms: d.compression_attack_ms,
+            compression_release_ms: d.compression_release_ms,
+            compression_threshold_db: d.compression_threshold_db,
+            compression_makeup_db: d.compression_makeup_db,
+            warmth_boost_db: d.warmth_boost_db,
+            warmth_freq: d.warmth_freq,
+            presence_db: d.presence_db,
+            air_boost_db: d.air_boost_db,
+            air_freq: d.air_freq,
+            tilt_low_db: d.tilt_low_db,
+            tilt_high_db: d.tilt_high_db,
+            de_ess_db: d.de_ess_db,
+            vibrato_freq: d.vibrato_freq,
+            vibrato_depth: d.vibrato_depth,
+            reverb_ms: d.reverb_ms,
+            reverb_decay: d.reverb_decay,
+            reverb_in_gain: d.reverb_in_gain,
+            reverb_out_gain: d.reverb_out_gain,
+            rms_target_lufs: d.rms_target_lufs,
+            limiter_db: d.limiter_db,
+            normalize: true,
+            ..Self::default()
+        }
+    }
+}
+
 /// Apply the full DSP chain to mono f32 samples. Returns processed samples.
 pub fn apply(mut samples: Vec<f32>, sr: u32, opts: &SmoothingOptions) -> Vec<f32> {
     // 0. Silence trim (two-pass, preserves interior pauses)
