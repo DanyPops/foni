@@ -43,6 +43,50 @@ macro_rules! apply_overrides {
 }
 
 impl WireOpts {
+    /// Apply request overrides on top of `base`.
+    ///
+    /// Use this in routes that should respect the server’s configured
+    /// `dsp_defaults` rather than the hardcoded `SmoothingOptions::default()`.
+    pub(crate) fn into_smoothing_with_base(
+        self,
+        base: dsp::SmoothingOptions,
+    ) -> (dsp::SmoothingOptions, f32) {
+        let mut o = base;
+        apply_overrides!(
+            self,
+            o,
+            rms_target_lufs,
+            compression_ratio,
+            compression_attack_ms,
+            compression_release_ms,
+            compression_threshold_db,
+            compression_makeup_db,
+            tilt_low_db,
+            tilt_high_db,
+            vibrato_freq,
+            vibrato_depth,
+            highpass_freq,
+            presence_db,
+            de_ess_db,
+            warmth_boost_db,
+            warmth_freq,
+            air_boost_db,
+            air_freq,
+            de_harsh_db,
+            de_harsh_freq,
+            de_harsh_q,
+            reverb_ms,
+            reverb_decay,
+            fade_secs,
+        );
+        let pad = self.pad_secs.unwrap_or(0.0);
+        (o, pad)
+    }
+
+    /// Apply request overrides on top of [`dsp::SmoothingOptions::default`].
+    ///
+    /// Used by `/process` where callers supply explicit knobs and the
+    /// server’s configured defaults are irrelevant.
     pub(crate) fn into_smoothing(self) -> (dsp::SmoothingOptions, f32) {
         let mut o = dsp::SmoothingOptions::default();
         apply_overrides!(

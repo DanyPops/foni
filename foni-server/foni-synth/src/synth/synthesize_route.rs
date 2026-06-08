@@ -270,9 +270,11 @@ pub async fn synthesize(
         .0
         .dsp_enabled
         .load(std::sync::atomic::Ordering::Relaxed);
-    let skip_dsp = backend == "cloud";
-    let final_wav = if req.dsp && dsp_globally_enabled && !skip_dsp {
-        let (base_opts, _pad) = req.opts.into_smoothing();
+    let final_wav = if req.dsp && dsp_globally_enabled {
+        // Base on the server’s configured dsp_defaults; request opts layer on top.
+        let dsp_defaults = state.0.dsp_defaults.read().await.clone();
+        let base = crate::quality::dsp::SmoothingOptions::from(&dsp_defaults);
+        let (base_opts, _pad) = req.opts.into_smoothing_with_base(base);
         let controller_enabled = state
             .0
             .controller_enabled
