@@ -33,10 +33,10 @@ foni-analyse = { path = "../foni-analyse" }
 rayon        = { workspace = true }
 regex        = "1"
 futures      = "0.3"
+foni-client  = { path = "../foni-client" }
 reqwest      = { workspace = true }
 
 [dev-dependencies]
-foni-client  = { path = "../foni-client" }
 reqwest      = { workspace = true }
 futures      = "0.3"
 tokio-tungstenite = { version = "0.26", features = ["connect"] }

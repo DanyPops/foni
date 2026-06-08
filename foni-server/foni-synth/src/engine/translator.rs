@@ -332,134 +332,16 @@ pub fn scrub_model_artifacts(raw: &str) -> String {
 
 // ── LLM commentary injection ─────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Placement {
-    Prefix,
-    Mid,
-    Suffix,
-}
-
-#[derive(Debug, Clone)]
-pub struct CommentaryResult {
-    pub text: String,
-    pub placement: Placement,
-}
-
-const COMMENTARY_SYSTEM_PROMPT: &str = "\
-You are roleplaying a character. Your ONLY job: produce ONE short Russian \
-interjection or expletive (1–5 words) the character would insert into the sentence, \
-plus where to insert it.
-
-Output format — exactly one line, nothing else:
-  PLACEMENT: expression
-
-PLACEMENT is one of: PREFIX  SUFFIX  MID
-
-Examples:
-  SUFFIX: блядь
-  PREFIX: Ёпта,
-  MID: нихуя себе
-
-Rules:
-- 1 to 5 Russian words only
-- No explanation, no alternatives, no quotes
-- SUFFIX / MID should read naturally appended to surrounding text\
-";
-
-/// Parse the one-line `PLACEMENT: text` response from Ollama.
-pub fn parse_commentary_response(raw: &str) -> Result<CommentaryResult, String> {
-    for line in raw.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("PREFIX:") {
-            let t = rest.trim().to_string();
-            if !t.is_empty() {
-                return Ok(CommentaryResult {
-                    text: t,
-                    placement: Placement::Prefix,
-                });
-            }
-        }
-        if let Some(rest) = line.strip_prefix("SUFFIX:") {
-            let t = rest.trim().to_string();
-            if !t.is_empty() {
-                return Ok(CommentaryResult {
-                    text: t,
-                    placement: Placement::Suffix,
-                });
-            }
-        }
-        if let Some(rest) = line.strip_prefix("MID:") {
-            let t = rest.trim().to_string();
-            if !t.is_empty() {
-                return Ok(CommentaryResult {
-                    text: t,
-                    placement: Placement::Mid,
-                });
-            }
-        }
-    }
-    // Unrecognised format — use first non-empty line as suffix fallback.
-    let text = raw
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if text.is_empty() {
-        return Err("empty commentary response".to_string());
-    }
-    Ok(CommentaryResult {
-        text,
-        placement: Placement::Suffix,
-    })
-}
-
-/// Apply a `CommentaryResult` to `text`, returning the modified string.
-pub fn apply_commentary(text: &str, result: &CommentaryResult) -> String {
-    match result.placement {
-        Placement::Prefix => {
-            let sep = if result.text.ends_with(',') {
-                " "
-            } else {
-                ", "
-            };
-            format!("{}{sep}{text}", result.text)
-        }
-        Placement::Suffix => {
-            let (stripped, punct) = strip_trailing_punct(text);
-            let sep = if result.text.starts_with(',') {
-                ""
-            } else {
-                ", "
-            };
-            format!("{stripped}{sep}{}{punct}", result.text)
-        }
-        Placement::Mid => {
-            let (stripped, punct) = strip_trailing_punct(text);
-            if let Some(idx) = stripped.rfind(',') {
-                format!(
-                    "{}, {}{}{punct}",
-                    &stripped[..idx],
-                    result.text,
-                    &stripped[idx..]
-                )
-            } else {
-                // No clause boundary — fall back to suffix.
-                let sep = if result.text.starts_with(',') {
-                    ""
-                } else {
-                    ", "
-                };
-                format!("{stripped}{sep}{}{punct}", result.text)
-            }
-        }
-    }
-}
+// Types and pure helpers live in foni-client so fonictl can reuse them.
+pub use foni_client::commentary::{
+    apply_commentary, parse_commentary_response, CommentaryResult, Placement,
+};
 
 /// Ask Ollama to generate a single contextual interjection for `sentence`.
 ///
+/// Delegates to `foni_client::commentary::ollama_commentary` with the emotion
+/// label derived from `bias` and the character seed from `lexicon.yaml`.
 /// Returns `Err` on timeout, HTTP error, or unparseable response.
-/// Caller is responsible for falling back to static injection on error.
 pub async fn ollama_commentary(
     sentence: &str,
     bias: WordBias,
@@ -475,44 +357,26 @@ pub async fn ollama_commentary(
         WordBias::Excitement => "excited, enthusiastic",
         WordBias::Neutral => "neutral, matter-of-fact",
     };
-    let expressions = seed.expressions.join(", ");
-    let system = format!(
-        "{COMMENTARY_SYSTEM_PROMPT}\nCharacter: {}\nVocabulary sample: {expressions}",
-        seed.persona,
-    );
-    let user = format!("Sentence: \"{sentence}\"\nEmotion: {emotion}\nProvide the injection:");
-
-    let body = serde_json::json!({
-        "model": model,
-        "stream": false,
-        "think": false,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user",   "content": user},
-        ],
-    });
-
-    let client = reqwest::Client::new();
-    let send = client.post(format!("{url}/api/chat")).json(&body).send();
-
-    let resp = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), send)
-        .await
-        .map_err(|_| "ollama_commentary: timeout".to_string())?
-        .map_err(|e| format!("ollama_commentary: request failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("ollama_commentary: HTTP {}", resp.status()));
-    }
-
-    let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let raw = data["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let cleaned = scrub_model_artifacts(&raw);
-    tracing::debug!(raw = %raw, cleaned = %cleaned, "ollama_commentary: raw response");
-    parse_commentary_response(&cleaned)
+    let expressions: Vec<&str> = seed.expressions.iter().map(String::as_str).collect();
+    let client_seed = foni_client::commentary::CharacterSeed {
+        persona: &seed.persona,
+        expressions: &expressions,
+    };
+    let result = foni_client::commentary::ollama_commentary(
+        sentence,
+        emotion,
+        &client_seed,
+        url,
+        model,
+        timeout_ms,
+    )
+    .await?;
+    let cleaned_text = scrub_model_artifacts(&result.text);
+    tracing::debug!(injection = %cleaned_text, "ollama_commentary: applied");
+    Ok(CommentaryResult {
+        text: cleaned_text,
+        ..result
+    })
 }
 
 pub async fn ollama_translate(
@@ -821,108 +685,8 @@ mod tests {
         assert_eq!(scrub_model_artifacts("Чистый текст."), "Чистый текст.");
     }
 
-    // ─ parse_commentary_response ───────────────────────────────────────────
-
-    #[test]
-    fn parse_suffix_response() {
-        let r = parse_commentary_response("SUFFIX: блядь").unwrap();
-        assert_eq!(r.text, "блядь");
-        assert_eq!(r.placement, Placement::Suffix);
-    }
-
-    #[test]
-    fn parse_prefix_response() {
-        let r = parse_commentary_response("PREFIX: Ёпта,").unwrap();
-        assert_eq!(r.text, "Ёпта,");
-        assert_eq!(r.placement, Placement::Prefix);
-    }
-
-    #[test]
-    fn parse_mid_response() {
-        let r = parse_commentary_response("MID: нихуя себе").unwrap();
-        assert_eq!(r.text, "нихуя себе");
-        assert_eq!(r.placement, Placement::Mid);
-    }
-
-    #[test]
-    fn parse_response_with_leading_whitespace() {
-        let r = parse_commentary_response("  SUFFIX: ёпта  ").unwrap();
-        assert_eq!(r.text, "ёпта");
-    }
-
-    #[test]
-    fn parse_malformed_falls_back_to_suffix() {
-        // Model returned something without a PLACEMENT: prefix
-        let r = parse_commentary_response("блядь").unwrap();
-        assert_eq!(r.placement, Placement::Suffix);
-        assert_eq!(r.text, "блядь");
-    }
-
-    #[test]
-    fn parse_empty_is_err() {
-        assert!(parse_commentary_response("").is_err());
-        assert!(parse_commentary_response("   ").is_err());
-    }
-
-    #[test]
-    fn parse_multiline_picks_first_valid() {
-        let raw = "Thinking...\nSUFFIX: тьфу";
-        let r = parse_commentary_response(raw).unwrap();
-        assert_eq!(r.placement, Placement::Suffix);
-        assert_eq!(r.text, "тьфу");
-    }
-
-    // ─ apply_commentary ───────────────────────────────────────────────
-
-    #[test]
-    fn apply_suffix_appends_before_punct() {
-        let r = CommentaryResult {
-            text: "блядь".into(),
-            placement: Placement::Suffix,
-        };
-        let out = apply_commentary("Деплой прошёл.", &r);
-        assert!(out.ends_with('.'), "should end with period: {out}");
-        assert!(out.contains("блядь"), "should contain injection: {out}");
-        assert!(out.contains("Деплой"), "should keep original: {out}");
-    }
-
-    #[test]
-    fn apply_prefix_prepends() {
-        let r = CommentaryResult {
-            text: "Ёпта,".into(),
-            placement: Placement::Prefix,
-        };
-        let out = apply_commentary("сервер упал.", &r);
-        assert!(
-            out.starts_with("Ёпта,"),
-            "should start with injection: {out}"
-        );
-    }
-
-    #[test]
-    fn apply_mid_inserts_before_last_clause() {
-        let r = CommentaryResult {
-            text: "ну".into(),
-            placement: Placement::Mid,
-        };
-        let out = apply_commentary("Деплой, братан, прошёл успешно.", &r);
-        assert!(out.contains("ну"), "should contain injection: {out}");
-        assert!(out.contains("Деплой"), "should keep original: {out}");
-    }
-
-    #[test]
-    fn apply_mid_no_comma_falls_back_to_suffix() {
-        let r = CommentaryResult {
-            text: "ёпта".into(),
-            placement: Placement::Mid,
-        };
-        let out = apply_commentary("Готово.", &r);
-        // no comma in input — falls back to suffix placement
-        assert!(out.contains("Готово"));
-        assert!(out.contains("ёпта"));
-    }
-
     // ─ character_seed loader ──────────────────────────────────────────
+    // parse_commentary_response / apply_commentary tests live in foni-client.
 
     #[test]
     fn character_seed_loads_from_compiled_yaml() {

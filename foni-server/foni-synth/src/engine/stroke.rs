@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn unicode_ellipsis() {
-        let strokes = split_strokes("The warp\u{2026} it calls.");
+        let strokes = split_strokes("The warp… it calls.");
         assert_eq!(strokes.len(), 2);
         assert_eq!(strokes[0].delimiter, Delimiter::Ellipsis);
     }

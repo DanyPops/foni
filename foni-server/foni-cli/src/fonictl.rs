@@ -1,4 +1,5 @@
 mod cmd_bench;
+mod cmd_commentary;
 mod cmd_common;
 mod cmd_data;
 mod cmd_quality;
@@ -437,6 +438,31 @@ enum Cmd {
         call_id: String,
     },
 
+    /// Generate a contextual character commentary injection via Ollama.
+    Commentary {
+        /// Text to inject into (Russian sentence).
+        text: String,
+        /// Emotional context label passed to the LLM.
+        #[arg(long, default_value = "neutral")]
+        emotion: String,
+        /// Ollama base URL.
+        #[arg(
+            long,
+            env = "FONI_OLLAMA_URL",
+            default_value = "http://localhost:11434"
+        )]
+        ollama_url: String,
+        /// Ollama model name.
+        #[arg(long, env = "FONI_OLLAMA_MODEL", default_value = "qwen3:1.7b")]
+        model: String,
+        /// Timeout for the Ollama call in milliseconds.
+        #[arg(long, default_value_t = 2000)]
+        timeout_ms: u64,
+        /// Path to a custom lexicon.yaml with character_seed.
+        #[arg(long)]
+        lexicon: Option<PathBuf>,
+    },
+
     /// Benchmark TTS endpoint latency (cold + warm)
     TtsBench {
         /// Endpoint URL
@@ -812,6 +838,25 @@ fn main() {
             if let Err(e) = cmd_quality::cmd_energy(&file, frame_ms) {
                 tracing::error!("{e}");
             }
+        }
+        Cmd::Commentary {
+            text,
+            emotion,
+            ollama_url,
+            model,
+            timeout_ms,
+            lexicon,
+        } => {
+            tokio::runtime::Runtime::new()
+                .expect("tokio runtime")
+                .block_on(cmd_commentary::cmd_commentary(
+                    &text,
+                    &emotion,
+                    &ollama_url,
+                    &model,
+                    timeout_ms,
+                    lexicon.as_ref(),
+                ));
         }
         Cmd::TtsBench { url, phrase } => {
             cmd_train::cmd_tts_bench(&url, &phrase);

@@ -372,7 +372,7 @@ pub fn cmd_sweep(
     let ref_an = analyse(&ref_wav.samples, ref_wav.sample_rate);
     let tensor = TargetTensor::from_analysis(&ref_an, "ref");
 
-    eprint!("  Synthesizing base (RVC only)\u{2026} ");
+    eprint!("  Synthesizing base (RVC only)… ");
     std::io::stdout().flush().ok();
     let base_wav = match synth_request(
         server,
@@ -388,7 +388,7 @@ pub fn cmd_sweep(
             b
         }
         Err(e) => {
-            info!("\n  \u{2717} {e}");
+            info!("\n  ✗ {e}");
             return;
         }
     };
@@ -510,7 +510,7 @@ pub fn cmd_diff(
     let ref_wav = decode_wav(&ref_bytes).expect("reference WAV");
     let ref_an = analyse(&ref_wav.samples, ref_wav.sample_rate);
 
-    eprint!("  Synthesizing base (RVC only)\u{2026} ");
+    eprint!("  Synthesizing base (RVC only)… ");
     std::io::stdout().flush().ok();
     let base_wav = match synth_request(
         server,
@@ -526,7 +526,7 @@ pub fn cmd_diff(
             b
         }
         Err(e) => {
-            info!("\n  \u{2717} {e}");
+            info!("\n  ✗ {e}");
             return;
         }
     };
@@ -575,18 +575,18 @@ pub fn cmd_diff(
     let gap_delta = after_gap.mean_gap_pct - before_gap.mean_gap_pct;
     let lsd_delta = after_tl.spectral_gap - before_tl.spectral_gap;
     let _gap_arrow = if gap_delta < -1.0 {
-        "\u{2193} improved"
+        "↓ improved"
     } else if gap_delta > 1.0 {
-        "\u{2191} worse"
+        "↑ worse"
     } else {
-        "\u{2194} same"
+        "↔ same"
     };
     let _lsd_arrow = if lsd_delta < -0.5 {
-        "\u{2193} improved"
+        "↓ improved"
     } else if lsd_delta > 0.5 {
-        "\u{2191} worse"
+        "↑ worse"
     } else {
-        "\u{2194} same"
+        "↔ same"
     };
 
     use owo_colors::OwoColorize;
@@ -606,9 +606,9 @@ pub fn cmd_diff(
 
     let arrow = |d: f32, threshold: f32| -> String {
         if d < -threshold {
-            format!("{:+.1} \u{2193}", d).green().to_string()
+            format!("{:+.1} ↓", d).green().to_string()
         } else if d > threshold {
-            format!("{:+.1} \u{2191}", d).red().to_string()
+            format!("{:+.1} ↑", d).red().to_string()
         } else {
             format!("{:+.1} =", d).dimmed().to_string()
         }
@@ -682,7 +682,7 @@ pub fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str
     let ref_wav = decode_wav(&ref_bytes).expect("reference WAV");
     let _ref_a = analyse_fast(&ref_wav.samples, ref_wav.sample_rate);
 
-    eprint!("  Synthesizing base (RVC, no DSP)\u{2026} ");
+    eprint!("  Synthesizing base (RVC, no DSP)… ");
     std::io::stdout().flush().ok();
     let base = match synth_request(
         server,
@@ -698,7 +698,7 @@ pub fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str
             b
         }
         Err(e) => {
-            info!("\n  \u{2717} {e}");
+            info!("\n  ✗ {e}");
             return;
         }
     };
@@ -779,7 +779,7 @@ pub fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str
     let base_vals: Vec<f32> = metrics.iter().map(|m| (m.extract)(&base_a)).collect();
 
     println!(
-        "\n  Sweeping {} knobs \u{00d7} {} metrics\u{2026}\n",
+        "\n  Sweeping {} knobs × {} metrics…\n",
         knobs.len(),
         metrics.len()
     );
@@ -846,7 +846,7 @@ pub fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str
     }
 
     // Print as Rust const for controller.rs
-    println!("\n  \u{2500}\u{2500} Rust const for dsp/controller.rs \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n");
+    println!("\n  ── Rust const for dsp/controller.rs ─────────────────\n");
     info!("// Rows: tiltLowDb, tiltHighDb, rmsTargetLufs, presenceDb, compressionRatio");
     info!("// Cols: brightness_hz, loudness_db, bass_balance_db, vocal_darkness_db_oct, breathiness_db");
     println!(

@@ -25,6 +25,7 @@ base64       = { workspace = true }
 foni-client  = { path = "../foni-client" }
 rayon        = { workspace = true }
 serde_json   = { workspace = true }
+serde_yaml   = { workspace = true }
 reqwest      = { workspace = true }
 tokio        = { workspace = true }
 thiserror    = { workspace = true }

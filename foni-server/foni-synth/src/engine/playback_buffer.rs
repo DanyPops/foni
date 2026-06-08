@@ -214,11 +214,11 @@ impl BufferSnapshot {
             return String::new();
         }
         // Torrent-style: █ = ready, ░ = pending. Bar shrinks left as chunks drain.
-        let mut bar = String::from("\u{2590}");
+        let mut bar = String::from('▐');
         for &ready in &self.slots {
-            bar.push(if ready { '\u{2588}' } else { '\u{2591}' });
+            bar.push(if ready { '█' } else { '░' });
         }
-        bar.push('\u{258c}');
+        bar.push('▌');
         bar
     }
 }
@@ -513,10 +513,7 @@ mod tests {
 
         let bar = buf.snapshot().render_bar();
         // ▐ left-half, █ ready, ░ pending (light shade), ▌ right-half
-        assert_eq!(
-            bar,
-            "\u{2590}\u{2588}\u{2588}\u{2591}\u{2588}\u{2591}\u{258c}"
-        );
+        assert_eq!(bar, "▐██░█░▌");
     }
 
     #[test]

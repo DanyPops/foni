@@ -117,7 +117,7 @@ fn strip_accent_marks(s: &str) -> String {
 
 /// Convert apostrophe notation to Unicode combining acute (U+0301).
 pub fn apostrophe_to_unicode(s: &str) -> String {
-    s.replace('\'', "\u{0301}")
+    s.replace('\'', "́")
 }
 
 fn insert_pair(bare: &str, accented: &str, map: &mut HashMap<String, String>) {
@@ -192,7 +192,7 @@ fn restore_case(original: &str, accented: &str) -> String {
     let mut orig_chars = original.chars();
     let mut out = String::with_capacity(accented.len() + 4);
     for ch in accented.chars() {
-        if ch == '\u{0301}' {
+        if ch == '́' {
             out.push(ch);
         } else if let Some(orig_ch) = orig_chars.next() {
             if orig_ch.is_uppercase() {
@@ -327,7 +327,7 @@ mod tests {
     fn known_word_gets_accent() {
         let out = dict().annotate("привет");
         assert!(
-            out.contains('\u{0301}'),
+            out.contains('́'),
             "приве́т should have combining acute: {out}"
         );
     }
@@ -390,7 +390,7 @@ mod tests {
     fn apostrophe_to_unicode_roundtrip() {
         let s = "приве'т";
         let u = apostrophe_to_unicode(s);
-        assert!(u.contains('\u{0301}'));
+        assert!(u.contains('́'));
         assert!(!u.contains('\''));
     }
 
@@ -398,17 +398,14 @@ mod tests {
     fn noun_inflection_covered() {
         // "человека" is genitive of "человек" — should be in the map from sg_gen column.
         let out = dict().annotate("человека");
-        assert!(
-            out.contains('\u{0301}'),
-            "inflected noun should have stress: {out}"
-        );
+        assert!(out.contains('́'), "inflected noun should have stress: {out}");
     }
 
     #[test]
     fn sentence_annotates_multiple_words() {
         let out = dict().annotate("это хорошо");
         // Both "это" and "хорошо" are common words — at least one should be stressed.
-        let accent_count = out.chars().filter(|&c| c == '\u{0301}').count();
+        let accent_count = out.chars().filter(|&c| c == '́').count();
         assert!(accent_count >= 1, "at least one word stressed in: {out}");
     }
 }

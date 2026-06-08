@@ -305,7 +305,7 @@ pub fn cmd_clean(dir: &PathBuf, out: &PathBuf) {
 
     println!("{}", Table::new(&rows).with(Style::rounded()));
     tracing::info!(
-        "\n  {files} files, {before:.1}s \u{2192} {after:.1}s  \u{2192} {out}",
+        "\n  {files} files, {before:.1}s → {after:.1}s  → {out}",
         files = rows.len(),
         before = total_before,
         after = total_after,
@@ -387,7 +387,7 @@ pub fn cmd_augment(dir: &PathBuf, out: &PathBuf, speeds_csv: &str) {
     }
 
     tracing::info!(
-        "  {total_files} files ({:.1} min) \u{2192} {}",
+        "  {total_files} files ({:.1} min) → {}",
         total_dur / 60.0,
         out.display()
     );

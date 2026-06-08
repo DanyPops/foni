@@ -6,6 +6,7 @@
 //!
 //! All methods are async. Construct one `FoniClient` and share it (Clone).
 
+pub mod commentary;
 pub mod error;
 pub mod types;
 
