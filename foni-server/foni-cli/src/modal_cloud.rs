@@ -150,6 +150,7 @@ pub async fn list_volume_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing::info;
 
     fn has_token() -> bool {
         let home = std::env::var("HOME").unwrap_or_default();

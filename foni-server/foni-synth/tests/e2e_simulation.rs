@@ -107,6 +107,7 @@ async fn recv(
     }
 }
 
+#[allow(dead_code)]
 async fn recv_all(
     ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
     ms: u64,

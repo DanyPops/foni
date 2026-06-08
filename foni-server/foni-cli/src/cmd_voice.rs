@@ -1031,7 +1031,7 @@ mod tests {
     fn storyboard_single_beat_old_format() {
         let raw = "The Emperor protects!\n[E:1.3 A:0.2 W:0.7]";
         let beats = parse_storyboard(raw);
-        assert!(beats.len() >= 1);
+        assert!(!beats.is_empty());
         assert!(beats.iter().any(|b| b.text.contains("Emperor")));
     }
 
