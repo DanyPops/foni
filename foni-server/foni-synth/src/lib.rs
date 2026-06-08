@@ -27,6 +27,17 @@ pub async fn build_router() -> Router {
     build_router_with(config::ServerConfig::load()).await
 }
 
+/// Build with an injected synth backend (tests only).
+pub async fn build_router_with_synth(synth: engine::synth_backend::SharedSynth) -> Router {
+    tokio::task::spawn_blocking(|| {
+        once_cell::sync::Lazy::force(&engine::stress::STRESS_MAP);
+    })
+    .await
+    .ok();
+    let state = state::AppState::from_config_with_synth(config::ServerConfig::load(), synth);
+    build_router_from_state(state)
+}
+
 fn build_router_from_state(state: state::AppState) -> Router {
     Router::new()
         .route("/models", get(synth::models_route::list))

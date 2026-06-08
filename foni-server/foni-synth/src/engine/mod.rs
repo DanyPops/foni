@@ -11,6 +11,7 @@ pub mod player;
 pub mod stream;
 pub mod stress;
 pub mod stroke;
+pub mod synth_backend;
 pub mod train_events;
 pub mod translator;
 pub mod ws;

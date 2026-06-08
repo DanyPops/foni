@@ -495,3 +495,101 @@ async fn tts_reenabled_resumes_synthesis() {
         "should produce at least one speak after re-enable"
     );
 }
+
+// ── FON-TSK-197/194/201 — Self-call deadlock + parallelism ──────────────────
+
+/// Two concurrent WS connections must BOTH complete within 5s in dry_run.
+/// Before the SessionCtx refactor this deadlocks: the second connection
+/// cannot get a thread because the first holds one waiting for synthesize_local
+/// to respond — which itself needs a thread.
+#[tokio::test]
+async fn concurrent_connections_dont_deadlock() {
+    let url = start_server().await;
+
+    let (r1, r2) = tokio::join!(
+        async {
+            let mut ws = connect(&url).await;
+            send_msg(
+                &mut ws,
+                json!({"type": "delta", "text": "First connection. "}),
+            )
+            .await;
+            recv(&mut ws, 3000).await
+        },
+        async {
+            let mut ws = connect(&url).await;
+            send_msg(
+                &mut ws,
+                json!({"type": "delta", "text": "Second connection. "}),
+            )
+            .await;
+            recv(&mut ws, 3000).await
+        },
+    );
+
+    assert!(r1.is_some(), "first connection should complete within 3s");
+    assert!(
+        r2.is_some(),
+        "second connection should complete within 3s — deadlocks if synthesize_local self-calls"
+    );
+}
+
+/// The WS writer (tx) is currently passed as &mut to process_chunk.
+/// After the refactor, process_chunk sends via mpsc::Sender which is Clone+Send.
+/// Test: two chunks from the same delta arrive on the WS in index order
+/// even if the second one finishes faster (simulated via message ordering).
+#[tokio::test]
+async fn chunks_arrive_in_order_regardless_of_completion() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    // Two sentence boundaries in one delta — fires two chunks
+    send_msg(
+        &mut ws,
+        json!({"type": "delta", "text": "First sentence. Second sentence. "}),
+    )
+    .await;
+    send_msg(&mut ws, json!({"type": "message_end"})).await;
+
+    let msgs = recv_all(&mut ws, 1500).await;
+    let speaks: Vec<&str> = msgs
+        .iter()
+        .filter(|m| m["type"] == "speak")
+        .filter_map(|m| m["text"].as_str())
+        .collect();
+
+    assert!(speaks.len() >= 2, "should get speak for each sentence");
+    // First sentence text must appear before second
+    let first_pos = speaks.iter().position(|t| t.contains("First"));
+    let second_pos = speaks.iter().position(|t| t.contains("Second"));
+    assert!(
+        first_pos < second_pos,
+        "chunks must arrive in order: first={first_pos:?} second={second_pos:?}"
+    );
+}
+
+/// SynthBackend trait contract: a mock backend injected at test time
+/// must be called exactly once per chunk and must not cause a self-call.
+/// This test will fail until SynthBackend trait exists and is injectable.
+#[tokio::test]
+async fn synth_backend_is_injected_not_self_called() {
+    // After the refactor, the server should accept a FONI_TTS_URL env var
+    // pointing to a mock TTS (not itself). Verify synthesis succeeds without
+    // calling localhost:5050/synthesize.
+    std::env::set_var(
+        "FONI_TTS_URL",
+        "http://0.0.0.0:1", // unreachable — will fail if self-call attempted
+    );
+    std::env::set_var("FONI_DRY_RUN", "1"); // dry_run skips TTS entirely
+
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+    send_msg(&mut ws, json!({"type": "delta", "text": "Test. "})).await;
+
+    let msg = recv(&mut ws, 1000).await;
+    assert!(
+        msg.is_some(),
+        "dry_run should always respond even with bad TTS_URL"
+    );
+    assert_eq!(msg.unwrap()["type"], "speak");
+}

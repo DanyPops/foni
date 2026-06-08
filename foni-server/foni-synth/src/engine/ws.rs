@@ -252,7 +252,7 @@ async fn process_chunk(
     config: &FoniConfig,
     cache: &SharedCache,
     play_queue: &PlayQueue,
-    _app_state: &AppState,
+    app_state: &AppState,
     mat_div: &mut WordDiversifier,
     interject_div: &mut WordDiversifier,
     tx: &mut (impl SinkExt<Message> + Unpin),
@@ -340,13 +340,13 @@ async fn process_chunk(
         return;
     }
 
-    let addr = std::env::var("FONI_SYNTH_ADDR").unwrap_or_else(|_| "0.0.0.0:5050".into());
-    let synth_url = format!(
-        "http://localhost:{}",
-        addr.rsplit(':').next().unwrap_or("5050")
-    );
     let t_synth = std::time::Instant::now();
-    match synthesize_local(&synth_url, &translated, &config.rvc_model).await {
+    match app_state
+        .0
+        .synth
+        .synthesize(&translated, &config.rvc_model)
+        .await
+    {
         Ok(wav) => {
             tracing::info!(
                 synth_ms = t_synth.elapsed().as_millis() as u64,
@@ -376,35 +376,6 @@ async fn process_chunk(
             let _ = tx.send(Message::Text(reply.to_string())).await;
         }
     }
-}
-
-async fn synthesize_local(base_url: &str, text: &str, model: &str) -> Result<Vec<u8>, String> {
-    let body = serde_json::json!({
-        "text": text,
-        "model": model,
-        "voice": "ru",
-        "speed": 150,
-        "dsp": true,
-        "prosody": true,
-    });
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{base_url}/synthesize"))
-        .json(&body)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|e| format!("synthesize request: {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-
-    resp.bytes()
-        .await
-        .map(|b| b.to_vec())
-        .map_err(|e| e.to_string())
 }
 
 fn now_ms() -> f64 {

@@ -875,6 +875,7 @@ dependencies = [
 name = "foni-synth"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum 0.7.9",
  "base64",
  "ebur128",

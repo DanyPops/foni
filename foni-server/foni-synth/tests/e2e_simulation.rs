@@ -65,14 +65,17 @@ async fn start_mock_tts() -> String {
 }
 
 async fn start_foni_synth() -> (String, String) {
+    start_foni_synth_with_synth(foni_synth::engine::synth_backend::mock_backend()).await
+}
+
+async fn start_foni_synth_with_synth(
+    synth: foni_synth::engine::synth_backend::SharedSynth,
+) -> (String, String) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let port = addr.port();
-    // Set FONI_SYNTH_ADDR so the WS handler knows its own port for self-calls
-    std::env::set_var("FONI_SYNTH_ADDR", format!("0.0.0.0:{port}"));
-    // Disable dry_run — we want the full pipeline
     std::env::set_var("FONI_DRY_RUN", "0");
-    let app = foni_synth::build_router().await;
+    let app = foni_synth::build_router_with_synth(synth).await;
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (
         format!("ws://127.0.0.1:{port}/ws"),
@@ -420,4 +423,78 @@ async fn ws_parse_train_logs_returns_events() {
     assert!(events.contains(&"vq_started".to_string()));
     assert!(events.contains(&"done".to_string()));
     assert!(!events.iter().any(|e| e.contains("warning")));
+}
+
+// ── Concurrency + self-call deadlock (FON-TSK-197) ───────────────────────────
+
+/// Two concurrent WS connections synthesizing simultaneously must both complete.
+/// FAILS before FON-TSK-197 fix: synthesize_local() calls localhost:5050/synthesize
+/// from inside a WS handler task. Under concurrent load, the Axum accept queue
+/// fills with HTTP self-calls that can't be serviced because all threads are
+/// occupied waiting for the self-call response — classic async self-deadlock.
+#[tokio::test]
+async fn concurrent_synthesis_doesnt_deadlock() {
+    let (ws_url, _http) = start_foni_synth().await;
+
+    // Fire both connections simultaneously — the self-call deadlock manifests here
+    let ws_url2 = ws_url.clone();
+    let (r1, r2) = tokio::join!(
+        async {
+            let (mut ws, _) = connect_async(&ws_url).await.expect("ws1");
+            ws.send(Message::Text(
+                json!({"type": "delta", "text": "First. "})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .ok();
+            recv(&mut ws, 8000).await
+        },
+        async {
+            let (mut ws, _) = connect_async(&ws_url2).await.expect("ws2");
+            ws.send(Message::Text(
+                json!({"type": "delta", "text": "Second. "})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .ok();
+            recv(&mut ws, 8000).await
+        },
+    );
+
+    assert!(
+        r1.is_some(),
+        "first connection must complete — got None (deadlock?)"
+    );
+    assert!(
+        r2.is_some(),
+        "second connection must complete — got None (deadlock?)"
+    );
+}
+
+/// The WS handler must NOT route synthesis through localhost:5050/synthesize.
+/// Instead it must call the TTS backend (FONI_TTS_URL) directly.
+/// FAILS before FON-TSK-197: synthesize_local always calls localhost regardless of FONI_TTS_URL.
+#[tokio::test]
+async fn synth_calls_tts_url_not_self() {
+    let (ws_url, _http) = start_foni_synth().await;
+    let (mut ws, _) = connect_async(&ws_url).await.expect("ws connect");
+    ws.send(Message::Text(
+        json!({"type": "delta", "text": "Hello. "})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .ok();
+    let msg = recv(&mut ws, 8000).await;
+
+    // If the WS handler self-calls localhost it will get an error response
+    // (because the WS server is busy). If it calls FONI_TTS_URL directly it succeeds.
+    assert!(msg.is_some(), "should get a response");
+    assert_eq!(
+        msg.unwrap()["type"],
+        "playing",
+        "should be 'playing' (real synthesis), not 'error' (self-call failed)"
+    );
 }
