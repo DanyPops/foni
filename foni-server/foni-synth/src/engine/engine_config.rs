@@ -36,6 +36,12 @@ pub struct FoniConfig {
     #[serde(default = "default_llm_commentary_timeout_ms")]
     pub llm_commentary_timeout_ms: u64,
 
+    /// Dice sides for the LLM seeder gate: roll 1–N, fire only on 1.
+    /// 1 = always fire (every eligible chunk). 4 = 1-in-4 chance. 6 = 1-in-6.
+    /// Combined with mat_cooldown_ms this controls overall injection frequency.
+    #[serde(default = "default_injection_dice")]
+    pub injection_dice: u32,
+
     /// Skip external calls (Ollama, synthesis, playback). For testing.
     pub dry_run: bool,
 
@@ -109,6 +115,7 @@ impl Default for FoniConfig {
             ollama_model: "qwen3:1.7b".into(),
             llm_commentary_enabled: false,
             llm_commentary_timeout_ms: default_llm_commentary_timeout_ms(),
+            injection_dice: default_injection_dice(),
             dry_run: false,
             stress_mode: StressMode::Dict,
             ruaccent_url: default_ruaccent_url(),
@@ -120,6 +127,10 @@ impl Default for FoniConfig {
 
 fn default_llm_commentary_timeout_ms() -> u64 {
     800
+}
+
+fn default_injection_dice() -> u32 {
+    4
 }
 
 fn default_ruaccent_url() -> String {

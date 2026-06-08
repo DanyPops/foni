@@ -13,6 +13,8 @@ use super::emotion::{
 };
 use super::engine_config::FoniConfig;
 use super::facade::{cache_key, new_shared_cache, PlayQueue, SharedCache};
+use rand::Rng;
+
 use super::lexicon;
 use super::playback_buffer::PlaybackBuffer;
 use super::stream::{drain_chunks, feed_delta, fresh_state, strip_markdown, StreamState};
@@ -55,6 +57,9 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
     let mut chunk_counter: usize = 0;
     let mut mat_diversifier = WordDiversifier::new();
     let mut interject_diversifier = WordDiversifier::new();
+    // Timestamp (ms) of the last successful personality injection.
+    // Shared across mat and interject — one cooldown clock for both.
+    let mut last_injection_ms: f64 = 0.0;
 
     while let Some(Ok(msg)) = rx.next().await {
         let text = match msg {
@@ -82,6 +87,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         &app_state,
                         &mut mat_diversifier,
                         &mut interject_diversifier,
+                        &mut last_injection_ms,
                         &mut tx,
                         &mut buffer,
                         &mut chunk_counter,
@@ -111,6 +117,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         &app_state,
                         &mut mat_diversifier,
                         &mut interject_diversifier,
+                        &mut last_injection_ms,
                         &mut tx,
                         &mut buffer,
                         idx,
@@ -159,6 +166,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                                 &app_state,
                                 &mut mat_diversifier,
                                 &mut interject_diversifier,
+                                &mut last_injection_ms,
                                 &mut tx,
                                 &mut buffer,
                                 idx,
@@ -247,6 +255,7 @@ async fn handle_delta(
     app_state: &AppState,
     mat_div: &mut WordDiversifier,
     interject_div: &mut WordDiversifier,
+    last_injection_ms: &mut f64,
     tx: &mut (impl SinkExt<Message> + Unpin),
     buffer: &mut PlaybackBuffer,
     chunk_counter: &mut usize,
@@ -271,6 +280,7 @@ async fn handle_delta(
             app_state,
             mat_div,
             interject_div,
+            last_injection_ms,
             tx,
             buffer,
             idx,
@@ -290,6 +300,7 @@ async fn process_chunk(
     app_state: &AppState,
     mat_div: &mut WordDiversifier,
     interject_div: &mut WordDiversifier,
+    last_injection_ms: &mut f64,
     tx: &mut (impl SinkExt<Message> + Unpin),
     buffer: &mut PlaybackBuffer,
     chunk_idx: usize,
@@ -332,11 +343,21 @@ async fn process_chunk(
         let mat_prob = config.mat_prob * weights.mat_multiplier;
         let interject_prob = config.interject_prob * weights.interject_multiplier;
         let bias = Some(weights.word_bias);
-        let wants_personality = (config.mat_enabled && mat_prob > 0.0)
-            || (config.interject_enabled && interject_prob > 0.0);
 
-        let mut used_llm = false;
-        if config.llm_commentary_enabled && wants_personality {
+        // Cooldown gate — shared clock for mat and interject.
+        let cooled = (now - *last_injection_ms)
+            >= config.mat_cooldown_ms.min(config.interject_cooldown_ms) as f64;
+
+        let wants_mat = config.mat_enabled && mat_prob > 0.0 && cooled;
+        let wants_interject = config.interject_enabled && interject_prob > 0.0 && cooled;
+        let wants_personality = wants_mat || wants_interject;
+
+        // Dice roll gates the LLM seeder — injection_dice = N means 1-in-N chance.
+        let dice_pass = config.injection_dice <= 1
+            || rand::thread_rng().gen_range(1..=config.injection_dice) == 1;
+
+        let mut injected = false;
+        if config.llm_commentary_enabled && wants_personality && dice_pass {
             let seed = lexicon::character_seed();
             match translator::ollama_commentary(
                 &text,
@@ -351,7 +372,8 @@ async fn process_chunk(
                 Ok(commentary) => {
                     tracing::debug!(injection = %commentary.text, "llm_commentary: applied");
                     text = translator::apply_commentary(&text, &commentary);
-                    used_llm = true;
+                    *last_injection_ms = now;
+                    injected = true;
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "llm_commentary failed, using static injection");
@@ -359,12 +381,21 @@ async fn process_chunk(
             }
         }
 
-        if !used_llm {
-            if config.mat_enabled && mat_prob > 0.0 {
+        if !injected {
+            if wants_mat {
+                let before = text.len();
                 text = translator::inject_mat(&text, mat_prob, config.mat_stretch, mat_div, bias);
+                if text.len() != before {
+                    *last_injection_ms = now;
+                    injected = true;
+                }
             }
-            if config.interject_enabled && interject_prob > 0.0 {
+            if !injected && wants_interject {
+                let before = text.len();
                 text = translator::inject_interject(&text, interject_prob, interject_div, bias);
+                if text.len() != before {
+                    *last_injection_ms = now;
+                }
             }
         }
     }
