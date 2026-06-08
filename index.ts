@@ -68,21 +68,26 @@ export default async function (pi: ExtensionAPI) {
   let lastCtx: { ui: any } | null = null;
 
   function updateBufferWidget(ctx: { ui: any }, snap: BufferSnapshot): void {
-    if (snap.slots.length === 0 && snap.complete) {
+    // Clear when complete or nothing to show.
+    if (snap.complete || snap.slots.length === 0) {
       ctx.ui.setWidget("foni-buffer", undefined);
       return;
     }
-    if (snap.slots.length === 0) return;
 
     ctx.ui.setWidget("foni-buffer", (_tui: any, theme: any) => {
+      // Torrent-style: █ ready, ░ pending. Left side drains as chunks play.
       let bar = theme.fg("dim", "\u2590");
       for (const ready of snap.slots) {
-        bar += ready ? theme.fg("accent", "\u2588") : theme.fg("dim", "\u00b7");
+        bar += ready
+          ? theme.fg("accent", "\u2588")      // ready — solid block
+          : theme.fg("dim", "\u2591");        // pending — light shade (etched)
       }
       bar += theme.fg("dim", "\u258c");
+
       const label = snap.pending > 0
-        ? theme.fg("muted", ` ${snap.buffered} ready, ${snap.pending} pending`)
+        ? theme.fg("dim", ` ${snap.buffered}\u2588 ${snap.pending}\u2591`)
         : theme.fg("success", ` ${snap.buffered} ready`);
+
       return {
         render: () => [bar + label],
         invalidate: () => {},

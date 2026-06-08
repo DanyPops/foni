@@ -159,20 +159,37 @@ impl PlaybackBuffer {
     }
 
     /// Snapshot for WS/TUI consumption.
+    ///
+    /// Slot semantics (torrent model):
+    ///   true  = chunk arrived and ready to play
+    ///   false = chunk expected but not yet arrived
+    ///
+    /// Consumed chunks (already played) are not included — the bar
+    /// shrinks from the left as playback advances.
+    /// Only known slots are shown: from the play cursor to the last
+    /// known index. Unknown future chunks are not speculated.
     pub fn snapshot(&self) -> BufferSnapshot {
-        let remaining = match self.total {
-            Some(t) => t.saturating_sub(self.next_play),
-            None => self.buffered_ahead() + 3,
+        // Find the highest chunk index we know about.
+        let last_known = self.chunks.keys().copied().max();
+
+        let window_end = match (self.total, last_known) {
+            (Some(t), _) => t,              // total known: show up to end
+            (None, Some(hi)) => hi + 1,     // total unknown: up to highest received
+            (None, None) => self.next_play, // nothing buffered yet
         };
+
+        let remaining = window_end.saturating_sub(self.next_play);
         let mut slots = Vec::with_capacity(remaining);
         for slot in 0..remaining {
             let abs = self.next_play + slot;
             slots.push(self.chunks.contains_key(&abs));
         }
+
+        let buffered = self.buffered_ahead();
         BufferSnapshot {
+            pending: remaining.saturating_sub(buffered),
             slots,
-            buffered: self.buffered_ahead(),
-            pending: remaining.saturating_sub(self.buffered_ahead()),
+            buffered,
             complete: self.is_complete(),
         }
     }
@@ -194,11 +211,12 @@ pub struct BufferSnapshot {
 impl BufferSnapshot {
     pub fn render_bar(&self) -> String {
         if self.slots.is_empty() {
-            return String::from("\u{2590}\u{258c}");
+            return String::new();
         }
+        // Torrent-style: █ = ready, ░ = pending. Bar shrinks left as chunks drain.
         let mut bar = String::from("\u{2590}");
         for &ready in &self.slots {
-            bar.push(if ready { '\u{2588}' } else { '\u{00b7}' });
+            bar.push(if ready { '\u{2588}' } else { '\u{2591}' });
         }
         bar.push('\u{258c}');
         bar
@@ -441,7 +459,7 @@ mod tests {
         buf.close(5);
 
         let bar = render_bar(&buf);
-        assert_eq!(bar, "▐██·█·▌");
+        assert_eq!(bar, "▐██░█░▌");
     }
 
     // ── Snapshot ──
@@ -494,9 +512,10 @@ mod tests {
         buf.close(5);
 
         let bar = buf.snapshot().render_bar();
+        // ▐ left-half, █ ready, ░ pending (light shade), ▌ right-half
         assert_eq!(
             bar,
-            "\u{2590}\u{2588}\u{2588}\u{00b7}\u{2588}\u{00b7}\u{258c}"
+            "\u{2590}\u{2588}\u{2588}\u{2591}\u{2588}\u{2591}\u{258c}"
         );
     }
 
@@ -528,6 +547,7 @@ mod tests {
 
         buf.drain_next();
         buf.drain_next();
-        assert_eq!(render_bar(&buf), "▐▌");
+        // All chunks consumed — bar is empty (slots is empty, no brackets).
+        assert_eq!(render_bar(&buf), "");
     }
 }
