@@ -274,10 +274,52 @@ export default async function (pi: ExtensionAPI) {
   // ── Commands ──────────────────────────────────────────────────────────────
 
   pi.registerCommand("tts", {
-    description: "/tts | status | test | voice | speed | lang | mat | interject | rvc | stop | mute | mix",
+    description: "Foni TTS controls — opens panel or pass subcommand",
+    getArgumentCompletions: (prefix: string) => {
+      const subs = ["status", "test", "enable", "disable", "voice", "speed",
+                    "lang", "mat", "interject", "stop", "mute", "unmute", "mix"];
+      const matches = subs.filter(s => s.startsWith(prefix));
+      return matches.length ? matches.map(s => ({ value: s, label: s })) : null;
+    },
     handler: async (args, ctx) => {
       const parts = (args ?? "").trim().split(/\s+/).filter(Boolean);
       const sub = parts[0] ?? "";
+
+      // No subcommand → open interactive panel
+      if (!sub) {
+        const lang = config.inputLang === config.outputLang
+          ? config.outputLang.toUpperCase()
+          : `${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`;
+        const options = [
+          `${config.enabled ? "✅" : "⬜"} TTS ${config.enabled ? "enabled" : "disabled"}`,
+          `🎙  voice: ${config.rvcModel || "(none)"}`,
+          `🌐  lang: ${lang}`,
+          `💬  mat: ${config.matEnabled ? "on" : "off"} (${config.matProb})`,
+          `💬  interject: ${config.interjectEnabled ? "on" : "off"} (${config.interjectProb})`,
+          `🔇  ${muted ? "unmute" : "mute"}`,
+          `🔌  ws: ${ws?.readyState === WebSocket.OPEN ? "connected" : "disconnected"}`,
+          "---",
+          "stop (reset stream)",
+          "test (ping foni-synth)",
+        ];
+        const picked = await ctx.ui.select("Foni TTS", options);
+        if (!picked || picked === "---") return;
+        if (picked.includes("disabled") || picked.includes("enabled")) {
+          config.enabled = !config.enabled;
+          wsSend({ type: "set_config", enabled: config.enabled });
+          updateStatus(ctx);
+        } else if (picked.includes("mute")) {
+          muted = !muted; updateStatus(ctx);
+        } else if (picked.includes("stop")) {
+          wsSend({ type: "reset" }); ctx.ui.notify("TTS stopped", "info");
+        } else if (picked.includes("test")) {
+          try {
+            const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) });
+            ctx.ui.notify(r.ok ? "foni-synth reachable ✅" : `HTTP ${r.status}`, r.ok ? "info" : "warning");
+          } catch { ctx.ui.notify(`foni-synth unreachable at ${config.rvcUrl}`, "warning"); }
+        }
+        return;
+      }
 
       if (sub === "status") {
         ctx.ui.notify([
@@ -356,38 +398,32 @@ export default async function (pi: ExtensionAPI) {
         return;
       }
 
-      if (sub === "rvc") {
-        const rvcSub = parts[1] ?? "";
-        if (rvcSub === "on" || rvcSub === "off") { config.rvcEnabled = rvcSub === "on"; ctx.ui.notify(`RVC ${config.rvcEnabled ? "enabled" : "disabled"}`, "info"); updateStatus(ctx); return; }
-        if (rvcSub === "url") { config.rvcUrl = parts[2] ?? config.rvcUrl; ctx.ui.notify(`RVC URL → ${config.rvcUrl}`, "info"); return; }
-        if (rvcSub === "model") {
-          if (!parts[2]) {
-            try {
-              const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(3000) });
-              const models = ((await r.json()) as { models?: string[] }).models ?? [];
-              const picked = await pickModel(ctx, models, config.rvcModel);
-              if (picked) { config.rvcModel = picked; await fetch(`${config.rvcUrl}/models/${encodeURIComponent(picked)}`, { method: "POST", signal: AbortSignal.timeout(10_000) }); }
-            } catch { ctx.ui.notify(`RVC unreachable at ${config.rvcUrl}`, "warning"); }
-          } else { config.rvcModel = parts[2]; }
-          updateStatus(ctx);
-          return;
-        }
-        if (rvcSub === "models") {
+      if (sub === "enable")  { config.enabled = true;  wsSend({ type: "set_config", enabled: true });  updateStatus(ctx); ctx.ui.notify("TTS enabled", "info"); return; }
+      if (sub === "disable") { config.enabled = false; wsSend({ type: "set_config", enabled: false }); updateStatus(ctx); ctx.ui.notify("TTS disabled", "info"); return; }
+      if (sub === "stop")    { wsSend({ type: "reset" }); ctx.ui.notify("TTS stopped", "info"); return; }
+      if (sub === "mute")    { muted = true;  updateStatus(ctx); ctx.ui.notify("TTS muted", "info"); return; }
+      if (sub === "unmute")  { muted = false; updateStatus(ctx); ctx.ui.notify("TTS unmuted", "info"); return; }
+
+      if (sub === "voice") {
+        if (parts[1]) {
           try {
-            const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(5_000) });
-            const data = await r.json() as { models?: string[] };
-            ctx.ui.notify((data.models ?? []).join("\n") || "No models", "info");
-          } catch { ctx.ui.notify("RVC unreachable", "warning"); }
-          return;
+            const r = await fetch(`${config.rvcUrl}/models`, { signal: AbortSignal.timeout(3000) });
+            const models = ((await r.json()) as { models?: string[] }).models ?? [];
+            const picked = parts[1] === "pick"
+              ? await pickModel(ctx, models, config.rvcModel)
+              : parts[1];
+            if (picked) {
+              config.rvcModel = picked;
+              await fetch(`${config.rvcUrl}/models/${encodeURIComponent(picked)}`, { method: "POST", signal: AbortSignal.timeout(10_000) });
+              updateStatus(ctx);
+              ctx.ui.notify(`voice → ${picked}`, "info");
+            }
+          } catch { ctx.ui.notify(`foni-synth unreachable at ${config.rvcUrl}`, "warning"); }
+        } else {
+          ctx.ui.notify(`voice: ${config.rvcModel || "(none)"}\nUsage: /tts voice <name>|pick`, "info");
         }
-        ctx.ui.notify("Usage: /tts rvc on|off|model|url|models", "warning");
         return;
       }
-
-      if (sub === "stop") { wsSend({ type: "reset" }); ctx.ui.notify("TTS stopped", "info"); return; }
-      if (sub === "mute") { muted = true; ctx.ui.notify("TTS muted", "info"); updateStatus(ctx); return; }
-      if (sub === "unmute") { muted = false; ctx.ui.notify("TTS unmuted", "info"); updateStatus(ctx); return; }
-      if (sub === "cache") { ctx.ui.notify("/tts cache — managed by Rust engine", "info"); return; }
 
       if (sub === "mix") {
         const mixSub = parts[1] ?? "";
@@ -401,14 +437,7 @@ export default async function (pi: ExtensionAPI) {
         return;
       }
 
-      if (sub === "") {
-        config.enabled = !config.enabled;
-        updateStatus(ctx);
-        return;
-      }
-
-      await openFoniPanel(ctx, panelState(), panelActions(ctx));
-      updateStatus(ctx);
+      ctx.ui.notify(`Unknown /tts subcommand: ${sub}\nUse /tts without arguments to open the panel.`, "warning");
     },
   });
 }
