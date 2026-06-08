@@ -59,30 +59,51 @@ pub fn cache_key(text: &str, model: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Generation-tagged audio queue.
+///
+/// Each chunk is tagged with the generation in which it was enqueued.
+/// Calling `clear()` atomically bumps the generation; the player task
+/// skips any chunk whose tag is older than the current generation,
+/// draining pending audio instantly without blocking or sleeping.
 pub struct PlayQueue {
-    tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    tx: tokio::sync::mpsc::Sender<(u64, Vec<u8>)>,
+    generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl PlayQueue {
     pub fn new() -> (Self, tokio::task::JoinHandle<()>) {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(u64, Vec<u8>)>(32);
+        let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let gen_reader = generation.clone();
+
         let handle = tokio::spawn(async move {
-            while let Some(wav) = rx.recv().await {
+            while let Some((item_gen, wav)) = rx.recv().await {
+                // Skip chunks from a cleared (old) generation.
+                if item_gen != gen_reader.load(std::sync::atomic::Ordering::Acquire) {
+                    continue;
+                }
                 if let Err(e) = super::player::play_wav_async(wav).await {
                     tracing::warn!("playback failed: {e}");
                 }
             }
         });
-        (Self { tx }, handle)
+        (Self { tx, generation }, handle)
     }
 
     pub async fn enqueue(&self, wav: Vec<u8>) {
-        let _ = self.tx.send(wav).await;
+        let gen = self.generation.load(std::sync::atomic::Ordering::Relaxed);
+        let _ = self.tx.send((gen, wav)).await;
     }
 
-    pub fn stop(&self) {
-        // Closing sender would kill the task; instead we just let the queue drain.
-        // For immediate stop, we'd need a cancellation token — future enhancement.
+    /// Immediately discard all queued audio by bumping the generation counter.
+    ///
+    /// Chunks already in the channel are received by the player task but
+    /// skipped because their generation tag is stale. The next `enqueue`
+    /// call uses the new generation and plays normally.
+    pub fn clear(&self) {
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+        tracing::debug!("play_queue: cleared (generation bumped)");
     }
 }
 

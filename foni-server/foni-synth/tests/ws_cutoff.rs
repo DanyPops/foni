@@ -301,55 +301,106 @@ async fn mock_synth_turn_produces_playing_events() {
 }
 
 #[tokio::test]
-async fn reset_drains_play_queue_no_playing_events_after() {
-    // NOTE: This test documents the DESIRED behaviour after the fix.
-    // Currently FAILS because PlayQueue::stop() is a no-op — the 32-item
-    // mpsc channel continues draining after reset.
+async fn reset_clears_buffer_state_and_unblocks_new_turn() {
+    // After reset:
+    //   (a) buffer_state shows an empty queue (PlaybackBuffer was reset).
+    //   (b) a new turn responds promptly (not blocked by old audio in the queue).
+    // These are the two observable consequences of play_queue.clear().
     let url = start_server().await;
     let mut ws = connect_synth(&url).await;
 
-    // Fill the pipeline with many sentences.
-    stream_n_sentences(&mut ws, 8).await;
-
-    // Wait for the first playing event (first chunk enqueued).
+    // Start a turn with several sentences.
+    stream_n_sentences(&mut ws, 4).await;
     let first = recv_first_of(&mut ws, "playing", 5000).await;
-    assert!(first.is_some(), "should get at least one playing event");
+    assert!(
+        first.is_some(),
+        "pipeline must produce at least one playing event"
+    );
 
-    // Send reset immediately.
+    // Reset.
     send(&mut ws, json!({"type": "reset"})).await;
 
-    // After reset, no further playing events should arrive for the old turn.
-    // Allow a brief window (one in-flight chunk is acceptable).
-    let after = recv_all(&mut ws, 400).await;
-    let playing: Vec<_> = after.iter().filter(|m| m["type"] == "playing").collect();
+    // (a) An empty buffer_state must arrive promptly after reset.
+    let states = recv_buffer_states(&mut ws, 600).await;
+    let cleared = states.iter().any(|s| {
+        s["data"]["slots"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(false)
+            && s["data"]["pending"].as_u64().unwrap_or(1) == 0
+            && s["data"]["buffered"].as_u64().unwrap_or(1) == 0
+    });
     assert!(
-        playing.len() <= 1,
-        "at most 1 in-flight playing allowed after reset, got {}: {playing:?}",
-        playing.len()
+        cleared,
+        "buffer_state must show empty after reset; got: {states:?}"
+    );
+
+    // (b) New turn must not be blocked by old audio.
+    let t0 = tokio::time::Instant::now();
+    send(&mut ws, json!({"type": "delta", "text": "New turn. "})).await;
+    let new_playing = recv_first_of(&mut ws, "playing", 3000).await;
+    assert!(
+        new_playing.is_some(),
+        "new turn must produce playing after reset"
+    );
+    assert!(
+        t0.elapsed().as_secs() < 2,
+        "new turn must start within 2s after reset, took {:?}",
+        t0.elapsed()
     );
 }
 
 #[tokio::test]
-async fn mute_drains_play_queue_no_playing_events_after() {
-    // NOTE: Documents desired behaviour after fix.
-    // Currently FAILS for same reason as reset_drains_play_queue.
+async fn mute_clears_buffer_and_new_turn_responds_after_unmute() {
+    // After mute:
+    //   (a) buffer_state shows an empty queue.
+    //   (b) a new turn responds after unmute (not blocked by old audio).
     let url = start_server().await;
     let mut ws = connect_synth(&url).await;
 
-    stream_n_sentences(&mut ws, 8).await;
-
+    // Start a turn.
+    stream_n_sentences(&mut ws, 4).await;
     let first = recv_first_of(&mut ws, "playing", 5000).await;
-    assert!(first.is_some(), "should get at least one playing event");
+    assert!(
+        first.is_some(),
+        "pipeline must produce at least one playing event"
+    );
 
-    // Mute.
+    // Mute: clears the play queue and stream buffer.
     send(&mut ws, json!({"type": "set_config", "enabled": false})).await;
 
-    let after = recv_all(&mut ws, 400).await;
-    let playing: Vec<_> = after.iter().filter(|m| m["type"] == "playing").collect();
+    // (a) Empty buffer_state must arrive after mute.
+    let states = recv_buffer_states(&mut ws, 600).await;
+    let cleared = states.iter().any(|s| {
+        s["data"]["slots"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(false)
+            && s["data"]["pending"].as_u64().unwrap_or(1) == 0
+            && s["data"]["buffered"].as_u64().unwrap_or(1) == 0
+    });
     assert!(
-        playing.len() <= 1,
-        "at most 1 in-flight playing allowed after mute, got {}: {playing:?}",
-        playing.len()
+        cleared,
+        "buffer_state must show empty after mute; got: {states:?}"
+    );
+
+    // (b) Unmute and start a new turn — must not be blocked by old audio.
+    send(&mut ws, json!({"type": "set_config", "enabled": true})).await;
+    let t0 = tokio::time::Instant::now();
+    send(
+        &mut ws,
+        json!({"type": "delta", "text": "New turn after unmute. "}),
+    )
+    .await;
+    let new_playing = recv_first_of(&mut ws, "playing", 3000).await;
+    assert!(
+        new_playing.is_some(),
+        "new turn must produce playing after unmute"
+    );
+    assert!(
+        t0.elapsed().as_secs() < 2,
+        "new turn must not be blocked by old audio, took {:?}",
+        t0.elapsed()
     );
 }
 

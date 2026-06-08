@@ -170,6 +170,14 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                 if let Some(enabled) = msg["enabled"].as_bool() {
                     let was_disabled = !config.enabled;
                     config.enabled = enabled;
+                    if !enabled && !was_disabled {
+                        // Muting: clear the play queue so in-flight audio stops.
+                        play_queue.clear();
+                        stream_state = fresh_state();
+                        buffer = PlaybackBuffer::new();
+                        chunk_counter = 0;
+                        emit_buffer_state(&buffer, &mut tx).await;
+                    }
                     if enabled && was_disabled {
                         // Drain any text that accumulated while disabled.
                         let result = drain_chunks(&stream_state.buffer);
@@ -232,8 +240,16 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                     .await;
             }
             "reset" => {
+                // Clear the play queue immediately — generation bump drops all
+                // pending chunks without waiting for them to play.
+                play_queue.clear();
                 stream_state = fresh_state();
                 emotion_state = neutral_state();
+                mat_diversifier.reset();
+                interject_diversifier.reset();
+                buffer = PlaybackBuffer::new();
+                chunk_counter = 0;
+                emit_buffer_state(&buffer, &mut tx).await;
             }
             "parse_train_logs" => {
                 if let Some(text) = msg["text"].as_str() {
