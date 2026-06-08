@@ -27,6 +27,15 @@ pub struct FoniConfig {
     pub ollama_url: String,
     pub ollama_model: String,
 
+    /// Use Ollama to generate contextual commentary instead of static word pools.
+    /// Falls back to static injection on timeout or error.
+    #[serde(default)]
+    pub llm_commentary_enabled: bool,
+
+    /// Maximum milliseconds to wait for a commentary response before falling back.
+    #[serde(default = "default_llm_commentary_timeout_ms")]
+    pub llm_commentary_timeout_ms: u64,
+
     /// Skip external calls (Ollama, synthesis, playback). For testing.
     pub dry_run: bool,
 
@@ -98,6 +107,8 @@ impl Default for FoniConfig {
 
             ollama_url: "http://localhost:11434".into(),
             ollama_model: "qwen3:1.7b".into(),
+            llm_commentary_enabled: false,
+            llm_commentary_timeout_ms: default_llm_commentary_timeout_ms(),
             dry_run: false,
             stress_mode: StressMode::Dict,
             ruaccent_url: default_ruaccent_url(),
@@ -105,6 +116,10 @@ impl Default for FoniConfig {
             nllb_url: default_nllb_url(),
         }
     }
+}
+
+fn default_llm_commentary_timeout_ms() -> u64 {
+    800
 }
 
 fn default_ruaccent_url() -> String {

@@ -13,6 +13,7 @@ use super::emotion::{
 };
 use super::engine_config::FoniConfig;
 use super::facade::{cache_key, new_shared_cache, PlayQueue, SharedCache};
+use super::lexicon;
 use super::playback_buffer::PlaybackBuffer;
 use super::stream::{drain_chunks, feed_delta, fresh_state, strip_markdown, StreamState};
 use super::stress::{make_annotator, StressAnnotator};
@@ -331,12 +332,40 @@ async fn process_chunk(
         let mat_prob = config.mat_prob * weights.mat_multiplier;
         let interject_prob = config.interject_prob * weights.interject_multiplier;
         let bias = Some(weights.word_bias);
+        let wants_personality = (config.mat_enabled && mat_prob > 0.0)
+            || (config.interject_enabled && interject_prob > 0.0);
 
-        if config.mat_enabled && mat_prob > 0.0 {
-            text = translator::inject_mat(&text, mat_prob, config.mat_stretch, mat_div, bias);
+        let mut used_llm = false;
+        if config.llm_commentary_enabled && wants_personality {
+            let seed = lexicon::character_seed();
+            match translator::ollama_commentary(
+                &text,
+                weights.word_bias,
+                seed,
+                &config.ollama_url,
+                &config.ollama_model,
+                config.llm_commentary_timeout_ms,
+            )
+            .await
+            {
+                Ok(commentary) => {
+                    tracing::debug!(injection = %commentary.text, "llm_commentary: applied");
+                    text = translator::apply_commentary(&text, &commentary);
+                    used_llm = true;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "llm_commentary failed, using static injection");
+                }
+            }
         }
-        if config.interject_enabled && interject_prob > 0.0 {
-            text = translator::inject_interject(&text, interject_prob, interject_div, bias);
+
+        if !used_llm {
+            if config.mat_enabled && mat_prob > 0.0 {
+                text = translator::inject_mat(&text, mat_prob, config.mat_stretch, mat_div, bias);
+            }
+            if config.interject_enabled && interject_prob > 0.0 {
+                text = translator::inject_interject(&text, interject_prob, interject_div, bias);
+            }
         }
     }
 

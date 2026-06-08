@@ -1,3 +1,32 @@
+use std::sync::OnceLock;
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CharacterSeed {
+    pub persona: String,
+    pub expressions: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct LexiconFile {
+    character_seed: CharacterSeed,
+}
+
+static LEXICON_YAML: &str = include_str!("../../lexicon.yaml");
+static CHARACTER_SEED: OnceLock<CharacterSeed> = OnceLock::new();
+
+/// Returns the compiled-in character seed, overridable via `FONI_LEXICON_PATH`.
+pub fn character_seed() -> &'static CharacterSeed {
+    CHARACTER_SEED.get_or_init(|| {
+        let yaml = std::env::var("FONI_LEXICON_PATH")
+            .ok()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .unwrap_or_else(|| LEXICON_YAML.to_string());
+        let file: LexiconFile = serde_yaml::from_str(&yaml)
+            .expect("invalid lexicon.yaml — check character_seed section");
+        file.character_seed
+    })
+}
+
 pub const MAT_INTERJECT: &[&str] = &[
     "блядь",
     "сука",
