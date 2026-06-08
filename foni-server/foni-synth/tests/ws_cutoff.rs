@@ -1,401 +1,271 @@
 //! ws_cutoff — E2E tests for Stop and Mute signal handling during active streams.
 //!
-//! Verifies that when a `reset` or `set_config {enabled:false}` arrives mid-stream:
-//!   (a) no further synthesis events are emitted for the current turn, and
-//!   (b) the play queue is drained immediately (no lingering audio).
+//! Verifies that when `reset` or `set_config {enabled:false}` arrives mid-stream:
+//!   (a) no further synthesis events are emitted for the current turn
+//!   (b) the play queue drains immediately (buffer_state → empty)
+//!   (c) a new turn is not blocked by lingering audio
 //!
-//! Two server modes used:
-//!   dry_run=true   → pipeline-level tests; `speak` replaces `playing`; no real synthesis.
-//!   MockSynthBackend → queue-level tests; real WS path, instant synthesis, no Modal calls.
-//!
-//! Known failures (document desired behaviour before fix):
-//!   reset_drains_play_queue        — PlayQueue::stop() is currently a no-op.
-//!   mute_drains_play_queue         — same root cause.
+//! All tests use [`support::StreamFixture`] so raw WS plumbing is invisible.
 
-use futures::{SinkExt, StreamExt};
-use serde_json::{json, Value};
-use tokio::net::TcpListener;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+mod support;
 
-// ── Server fixtures ───────────────────────────────────────────────────────────
-
-/// Start a server with a MockSynthBackend (instant sine WAV, no Modal calls).
-/// dry_run is controlled per-connection via `set_config` — no env var needed.
-async fn start_server() -> String {
-    // Ensure any process-level dry_run flag is cleared so the server
-    // starts in real-synthesis mode. Per-connection dry_run is set via WS.
-    std::env::remove_var("FONI_DRY_RUN");
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let synth = foni_synth::engine::synth_backend::mock_backend();
-    let app = foni_synth::build_router_with_synth(synth).await;
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    format!("ws://127.0.0.1:{}/ws", addr.port())
-}
-
-/// Connect and immediately switch the connection to dry_run mode.
-/// In dry_run: `speak` events replace real synthesis; play_queue unused.
-async fn connect_dry(
-    url: &str,
-) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
-    let mut ws = connect(url).await;
-    send(&mut ws, json!({"type": "set_config", "dry_run": true})).await;
-    ws
-}
-
-/// Connect in real-synth mode (MockSynthBackend → instant WAV → `playing` events).
-/// Sets lang=ru,ru to skip Ollama translation (same-lang → no translate call).
-async fn connect_synth(
-    url: &str,
-) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
-    let mut ws = connect(url).await;
-    // Disable translation so tests don’t hit Ollama.
-    send(&mut ws, json!({"type": "set_config", "lang": "ru,ru"})).await;
-    ws
-}
-
-async fn connect(
-    url: &str,
-) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
-    connect_async(url).await.expect("WS connect failed").0
-}
-
-async fn send(
-    ws: &mut (impl SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin),
-    msg: Value,
-) {
-    ws.send(Message::Text(msg.to_string().into()))
-        .await
-        .expect("WS send failed");
-}
-
-/// Collect all non-buffer_state messages within `ms` milliseconds.
-async fn recv_all(
-    ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
-    ms: u64,
-) -> Vec<Value> {
-    let mut out = Vec::new();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(ms);
-    #[allow(clippy::while_let_loop)]
-    loop {
-        match tokio::time::timeout_at(deadline, ws.next()).await {
-            Ok(Some(Ok(Message::Text(t)))) => {
-                if let Ok(v) = serde_json::from_str::<Value>(&t) {
-                    if v["type"] != "buffer_state" {
-                        out.push(v);
-                    }
-                }
-            }
-            _ => break,
-        }
-    }
-    out
-}
-
-/// Collect only buffer_state messages within `ms` milliseconds.
-async fn recv_buffer_states(
-    ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
-    ms: u64,
-) -> Vec<Value> {
-    let mut out = Vec::new();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(ms);
-    #[allow(clippy::while_let_loop)]
-    loop {
-        match tokio::time::timeout_at(deadline, ws.next()).await {
-            Ok(Some(Ok(Message::Text(t)))) => {
-                if let Ok(v) = serde_json::from_str::<Value>(&t) {
-                    if v["type"] == "buffer_state" {
-                        out.push(v);
-                    }
-                }
-            }
-            _ => break,
-        }
-    }
-    out
-}
-
-/// Wait for the first message matching `type_filter`, ignoring others.
-async fn recv_first_of(
-    ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
-    type_filter: &str,
-    ms: u64,
-) -> Option<Value> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(ms);
-    loop {
-        match tokio::time::timeout_at(deadline, ws.next()).await {
-            Ok(Some(Ok(Message::Text(t)))) => {
-                if let Ok(v) = serde_json::from_str::<Value>(&t) {
-                    if v["type"] == type_filter {
-                        return Some(v);
-                    }
-                }
-            }
-            _ => return None,
-        }
-    }
-}
-
-// ── Synthetic stream fixture ──────────────────────────────────────────────────
-
-/// Sends enough delta text to produce `n` complete sentences and flush them.
-/// Each sentence has a period so the chunk splitter fires immediately.
-async fn stream_n_sentences(
-    ws: &mut (impl SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin),
-    n: usize,
-) {
-    for i in 0..n {
-        let sentence = format!("Sentence {}. ", i + 1);
-        send(ws, json!({"type": "delta", "text": sentence})).await;
-    }
-}
+use support::{start_mock_server, StreamFixture};
 
 // ── Pipeline-level tests (dry_run) ───────────────────────────────────────────
 //
-// In dry_run mode synthesis is synchronous and emits `speak` immediately.
-// These tests verify the stream_state + pipeline are reset on signal.
+// dry_run=true: synthesis is synchronous, emits `speak` instead of `playing`.
+// No play queue involved — tests verify stream-buffer cancellation.
 
 #[tokio::test]
-async fn reset_stops_pipeline_no_more_speak_events() {
-    let url = start_server().await;
-    let mut ws = connect_dry(&url).await;
+async fn reset_cancels_buffered_partial_text() {
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_dry(&url).await;
 
-    // Start a turn and get at least one speak.
-    send(
-        &mut ws,
-        json!({"type": "delta", "text": "First sentence. "}),
-    )
-    .await;
-    let first = recv_first_of(&mut ws, "speak", 1500).await;
+    f.tick().await;
     assert!(
-        first.is_some(),
-        "expected a speak event for the first sentence"
+        f.wait_for("speak", 1500).await.is_some(),
+        "pipeline must be alive"
     );
 
-    // Buffer PARTIAL text (no sentence boundary — stays in buffer, not yet drained).
-    send(
-        &mut ws,
-        json!({"type": "delta", "text": "This text should be silenced"}),
-    )
-    .await;
+    // Buffer partial text (no period → stays in buffer).
+    f.buffer("This should be silenced").await;
 
-    // Reset before message_end: clears the stream buffer.
-    send(&mut ws, json!({"type": "reset"})).await;
+    // Reset before flush → buffer wiped.
+    f.reset().await;
+    f.flush().await;
 
-    // Flush the now-empty state — nothing to speak.
-    send(&mut ws, json!({"type": "message_end"})).await;
-
-    let after = recv_all(&mut ws, 800).await;
-    let speaks: Vec<_> = after.iter().filter(|m| m["type"] == "speak").collect();
-    assert!(
-        speaks.is_empty(),
-        "buffered partial text must not produce speak after reset, got: {speaks:?}"
-    );
+    StreamFixture::assert_none(&f.collect(800).await, "speak");
 }
 
 #[tokio::test]
-async fn mute_stops_pipeline_no_more_speak_events() {
-    let url = start_server().await;
-    let mut ws = connect_dry(&url).await;
+async fn mute_cancels_buffered_partial_text() {
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_dry(&url).await;
 
-    // Start a turn.
-    send(
-        &mut ws,
-        json!({"type": "delta", "text": "First sentence. "}),
-    )
-    .await;
-    let first = recv_first_of(&mut ws, "speak", 1500).await;
-    assert!(first.is_some(), "expected first speak");
-
-    // Buffer PARTIAL text (stays in buffer, not yet drained).
-    send(
-        &mut ws,
-        json!({"type": "delta", "text": "This should be silenced"}),
-    )
-    .await;
-
-    // Mute before message_end: server is now disabled.
-    send(&mut ws, json!({"type": "set_config", "enabled": false})).await;
-
-    // Flush: server is disabled so it clears the buffer without synthesising.
-    send(&mut ws, json!({"type": "message_end"})).await;
-
-    let after = recv_all(&mut ws, 800).await;
-    let speaks: Vec<_> = after.iter().filter(|m| m["type"] == "speak").collect();
+    f.tick().await;
     assert!(
-        speaks.is_empty(),
-        "buffered partial text must not produce speak after mute, got: {speaks:?}"
+        f.wait_for("speak", 1500).await.is_some(),
+        "pipeline must be alive"
     );
-}
 
-#[tokio::test]
-async fn reset_then_new_turn_produces_fresh_output() {
-    let url = start_server().await;
-    let mut ws = connect_dry(&url).await;
+    f.buffer("This should be silenced").await;
+    f.mute().await;
+    f.flush().await; // disabled → no synthesis
 
-    // First turn.
-    send(&mut ws, json!({"type": "delta", "text": "First turn. "})).await;
-    let _ = recv_first_of(&mut ws, "speak", 1500).await;
-
-    // Reset.
-    send(&mut ws, json!({"type": "reset"})).await;
-
-    // New turn must work — not blocked or confused.
-    send(&mut ws, json!({"type": "delta", "text": "Fresh turn. "})).await;
-    let fresh = recv_first_of(&mut ws, "speak", 1500).await;
-    assert!(fresh.is_some(), "new turn after reset must produce speak");
-    let text = fresh.unwrap()["text"].as_str().unwrap_or("").to_owned();
-    assert!(
-        text.contains("Fresh"),
-        "speak text should contain fresh turn content, got: {text}"
-    );
+    StreamFixture::assert_none(&f.collect(800).await, "speak");
 }
 
 #[tokio::test]
 async fn reset_cancels_multiple_buffered_fragments() {
-    // Verify that multiple partial fragments accumulated across several delta
-    // messages are all cancelled by a single reset before message_end flushes them.
-    let url = start_server().await;
-    let mut ws = connect_dry(&url).await;
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_dry(&url).await;
 
-    // Confirm the pipeline is alive with one complete sentence.
-    send(&mut ws, json!({"type": "delta", "text": "Active. "})).await;
-    let first = recv_first_of(&mut ws, "speak", 1500).await;
-    assert!(first.is_some(), "pipeline must be alive");
+    f.tick().await;
+    assert!(f.wait_for("speak", 1500).await.is_some());
 
-    // Accumulate fragments WITHOUT sentence boundaries — all stay buffered.
     for i in 0..5_u32 {
-        let frag = format!("Fragment {i} ");
-        send(&mut ws, json!({"type": "delta", "text": frag})).await;
+        f.buffer(&format!("Fragment {i} ")).await;
     }
 
-    // Reset wipes the stream buffer.
-    send(&mut ws, json!({"type": "reset"})).await;
+    f.reset().await;
+    f.flush().await;
 
-    // Flush the now-empty state.
-    send(&mut ws, json!({"type": "message_end"})).await;
+    StreamFixture::assert_none(&f.collect(800).await, "speak");
+}
 
-    let after = recv_all(&mut ws, 800).await;
-    let speaks: Vec<_> = after.iter().filter(|m| m["type"] == "speak").collect();
+#[tokio::test]
+async fn reset_then_new_turn_produces_fresh_output() {
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_dry(&url).await;
+
+    f.tick().await;
+    assert!(f.wait_for("speak", 1500).await.is_some());
+
+    f.reset().await;
+
+    f.tick().await;
+    let speak = f.wait_for("speak", 1500).await;
+    assert!(speak.is_some(), "new turn after reset must produce speak");
+    let text = speak.unwrap()["text"].as_str().unwrap_or("").to_owned();
     assert!(
-        speaks.is_empty(),
-        "all buffered fragments must be cancelled by reset, got: {speaks:?}"
+        text.contains("Tick 2"),
+        "speak must contain new-turn text, got: {text}"
+    );
+}
+
+// ── Enable / unmute path ────────────────────────────────────────────────────
+//
+// Verifies the "other way around": what happens when TTS is re-enabled
+// after being disabled or muted.
+//
+// Invariants:
+//   (a) Text buffered WHILE muted (arrives after mute signal) is spoken on unmute.
+//   (b) Text that was in the buffer WHEN mute fired is discarded (stream_state reset).
+//   (c) After reset → new turn starts clean with no carryover.
+
+#[tokio::test]
+async fn enable_speaks_text_buffered_while_muted() {
+    // Text arriving AFTER mute accumulates in the fresh stream buffer
+    // and is spoken when TTS is re-enabled.
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_dry(&url).await;
+
+    f.mute().await;
+
+    // Text arriving while muted — stays in stream buffer, not synthesised.
+    f.buffer("Text sent while muted. ").await;
+
+    // Re-enable → accumulated text should drain and produce speak.
+    f.unmute().await;
+
+    let events = f.collect(1500).await;
+    let speaks = StreamFixture::count(&events, "speak");
+    assert!(
+        speaks > 0,
+        "text buffered while muted must produce speak on unmute, got: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn text_in_buffer_at_mute_time_is_discarded() {
+    // Partial text already in the buffer WHEN mute fires is discarded
+    // because mute resets stream_state.
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_dry(&url).await;
+
+    // Buffer partial text (no period — stays in buffer).
+    f.buffer("Partial text that should vanish").await;
+
+    // Mute: clears stream_state → the buffered text is gone.
+    f.mute().await;
+
+    // Unmute and flush the now-empty state.
+    f.unmute().await;
+    f.flush().await;
+
+    let events = f.collect(800).await;
+    StreamFixture::assert_none(&events, "speak");
+}
+
+#[tokio::test]
+async fn reenable_resumes_synthesis_of_queued_text() {
+    // Disable before any text arrives. Text sent while disabled accumulates.
+    // Re-enabling drains the buffer and speaks it.
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_dry(&url).await;
+
+    f.mute().await;
+    f.tick().await; // complete sentence — stored in buffer while disabled
+
+    // No speak events while disabled.
+    StreamFixture::assert_none(&f.collect(500).await, "speak");
+
+    // Re-enable — the buffered tick should now be spoken.
+    f.unmute().await;
+
+    let events = f.collect(1500).await;
+    assert!(
+        StreamFixture::count(&events, "speak") > 0,
+        "re-enable must speak buffered text, got: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn reset_then_enable_starts_completely_fresh() {
+    // After reset, re-enabling should produce no carryover speech.
+    // Only a new tick AFTER enable should be spoken.
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_dry(&url).await;
+
+    f.tick().await;
+    assert!(f.wait_for("speak", 1500).await.is_some());
+
+    // Reset clears everything, then mute the fresh state.
+    f.reset().await;
+    f.mute().await;
+    f.unmute().await;
+
+    // No carryover from old turn.
+    StreamFixture::assert_none(&f.collect(600).await, "speak");
+
+    // New explicit tick after unmute DOES speak.
+    f.tick().await;
+    assert!(
+        f.wait_for("speak", 1500).await.is_some(),
+        "new tick after reset+unmute must speak"
     );
 }
 
 // ── Queue-level tests (MockSynthBackend) ──────────────────────────────────────
 //
-// These tests use the real WS streaming path with instant synthesis (MockSynthBackend).
-// `playing` events are emitted when chunks are enqueued.
-// `play_wav_async` will fail in CI (no audio device) — the player logs a warning
-// and continues; this does not affect queue observability.
+// Ticker sends one sentence per interval; server has time to enqueue audio
+// between ticks, making stop/mute timing deterministic.
+// `playing` events mark enqueue (not playback); buffer_state and new-turn
+// response time are the canonical observables for queue-drain correctness.
 
 #[tokio::test]
-async fn mock_synth_turn_produces_playing_events() {
-    let url = start_server().await;
-    let mut ws = connect_synth(&url).await;
+async fn mock_synth_produces_playing_events() {
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_synth(&url).await;
 
-    send(&mut ws, json!({"type": "delta", "text": "Hello world. "})).await;
-    let msg = recv_first_of(&mut ws, "playing", 5000).await;
-    assert!(msg.is_some(), "mock synth must emit playing event");
+    f.tick().await;
+    assert!(f.wait_for("playing", 5000).await.is_some());
 }
 
 #[tokio::test]
-async fn reset_clears_buffer_state_and_unblocks_new_turn() {
-    // After reset:
-    //   (a) buffer_state shows an empty queue (PlaybackBuffer was reset).
-    //   (b) a new turn responds promptly (not blocked by old audio in the queue).
-    // These are the two observable consequences of play_queue.clear().
-    let url = start_server().await;
-    let mut ws = connect_synth(&url).await;
+async fn reset_clears_buffer_state_immediately() {
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_synth(&url).await;
 
-    // Start a turn with several sentences.
-    stream_n_sentences(&mut ws, 4).await;
-    let first = recv_first_of(&mut ws, "playing", 5000).await;
+    // Ticker: one sentence every 80ms so server has time to process each.
+    f.tick_n(3, 80).await;
     assert!(
-        first.is_some(),
-        "pipeline must produce at least one playing event"
+        f.wait_for("playing", 5000).await.is_some(),
+        "pipeline alive"
     );
 
-    // Reset.
-    send(&mut ws, json!({"type": "reset"})).await;
+    f.reset().await;
 
-    // (a) An empty buffer_state must arrive promptly after reset.
-    let states = recv_buffer_states(&mut ws, 600).await;
-    let cleared = states.iter().any(|s| {
-        s["data"]["slots"]
-            .as_array()
-            .map(|a| a.is_empty())
-            .unwrap_or(false)
-            && s["data"]["pending"].as_u64().unwrap_or(1) == 0
-            && s["data"]["buffered"].as_u64().unwrap_or(1) == 0
-    });
     assert!(
-        cleared,
-        "buffer_state must show empty after reset; got: {states:?}"
-    );
-
-    // (b) New turn must not be blocked by old audio.
-    let t0 = tokio::time::Instant::now();
-    send(&mut ws, json!({"type": "delta", "text": "New turn. "})).await;
-    let new_playing = recv_first_of(&mut ws, "playing", 3000).await;
-    assert!(
-        new_playing.is_some(),
-        "new turn must produce playing after reset"
-    );
-    assert!(
-        t0.elapsed().as_secs() < 2,
-        "new turn must start within 2s after reset, took {:?}",
-        t0.elapsed()
+        f.wait_buffer_empty(800).await,
+        "buffer_state must show empty after reset"
     );
 }
 
 #[tokio::test]
-async fn mute_clears_buffer_and_new_turn_responds_after_unmute() {
-    // After mute:
-    //   (a) buffer_state shows an empty queue.
-    //   (b) a new turn responds after unmute (not blocked by old audio).
-    let url = start_server().await;
-    let mut ws = connect_synth(&url).await;
+async fn mute_clears_buffer_state_immediately() {
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_synth(&url).await;
 
-    // Start a turn.
-    stream_n_sentences(&mut ws, 4).await;
-    let first = recv_first_of(&mut ws, "playing", 5000).await;
+    f.tick_n(3, 80).await;
     assert!(
-        first.is_some(),
-        "pipeline must produce at least one playing event"
+        f.wait_for("playing", 5000).await.is_some(),
+        "pipeline alive"
     );
 
-    // Mute: clears the play queue and stream buffer.
-    send(&mut ws, json!({"type": "set_config", "enabled": false})).await;
+    f.mute().await;
 
-    // (a) Empty buffer_state must arrive after mute.
-    let states = recv_buffer_states(&mut ws, 600).await;
-    let cleared = states.iter().any(|s| {
-        s["data"]["slots"]
-            .as_array()
-            .map(|a| a.is_empty())
-            .unwrap_or(false)
-            && s["data"]["pending"].as_u64().unwrap_or(1) == 0
-            && s["data"]["buffered"].as_u64().unwrap_or(1) == 0
-    });
     assert!(
-        cleared,
-        "buffer_state must show empty after mute; got: {states:?}"
+        f.wait_buffer_empty(800).await,
+        "buffer_state must show empty after mute"
     );
+}
 
-    // (b) Unmute and start a new turn — must not be blocked by old audio.
-    send(&mut ws, json!({"type": "set_config", "enabled": true})).await;
+#[tokio::test]
+async fn reset_new_turn_not_blocked() {
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_synth(&url).await;
+
+    f.tick_n(4, 80).await;
+    assert!(f.wait_for("playing", 5000).await.is_some());
+
+    f.reset().await;
+
     let t0 = tokio::time::Instant::now();
-    send(
-        &mut ws,
-        json!({"type": "delta", "text": "New turn after unmute. "}),
-    )
-    .await;
-    let new_playing = recv_first_of(&mut ws, "playing", 3000).await;
+    f.tick().await;
     assert!(
-        new_playing.is_some(),
-        "new turn must produce playing after unmute"
+        f.wait_for("playing", 3000).await.is_some(),
+        "new turn after reset must produce playing"
     );
     assert!(
         t0.elapsed().as_secs() < 2,
@@ -405,64 +275,25 @@ async fn mute_clears_buffer_and_new_turn_responds_after_unmute() {
 }
 
 #[tokio::test]
-async fn reset_emits_empty_buffer_state() {
-    // NOTE: Documents desired behaviour after fix.
-    // Currently FAILS because the reset handler does not reset PlaybackBuffer
-    // or emit a buffer_state event.
-    let url = start_server().await;
-    let mut ws = connect_synth(&url).await;
+async fn mute_unmute_new_turn_not_blocked() {
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_synth(&url).await;
 
-    stream_n_sentences(&mut ws, 4).await;
+    f.tick_n(4, 80).await;
+    assert!(f.wait_for("playing", 5000).await.is_some());
 
-    // Wait for at least one playing event so some chunks are enqueued.
-    let _ = recv_first_of(&mut ws, "playing", 5000).await;
+    f.mute().await;
+    f.unmute().await;
 
-    // Reset.
-    send(&mut ws, json!({"type": "reset"})).await;
-
-    // Collect buffer_state events in the next 400ms.
-    // After reset, a buffer_state with complete=false and slots=[] must arrive.
-    let states = recv_buffer_states(&mut ws, 400).await;
-    let cleared = states.iter().any(|s| {
-        let slots = s["data"]["slots"]
-            .as_array()
-            .map(|a| a.is_empty())
-            .unwrap_or(false);
-        let pending = s["data"]["pending"].as_u64().unwrap_or(1) == 0;
-        let buffered = s["data"]["buffered"].as_u64().unwrap_or(1) == 0;
-        slots && pending && buffered
-    });
-    assert!(
-        cleared,
-        "a buffer_state with empty slots, 0 pending, 0 buffered must arrive after reset. got: {states:?}"
-    );
-}
-
-#[tokio::test]
-async fn reset_then_new_mock_turn_is_not_blocked() {
-    // After reset, the server must accept and process a new turn without delay.
-    let url = start_server().await;
-    let mut ws = connect_synth(&url).await;
-
-    // First turn — 3 sentences.
-    stream_n_sentences(&mut ws, 3).await;
-    let _ = recv_first_of(&mut ws, "playing", 5000).await;
-
-    // Reset.
-    send(&mut ws, json!({"type": "reset"})).await;
-
-    // Second turn must start quickly — not blocked by the old play queue.
     let t0 = tokio::time::Instant::now();
-    send(&mut ws, json!({"type": "delta", "text": "New turn. "})).await;
-    let second = recv_first_of(&mut ws, "playing", 3000).await;
-    let elapsed = t0.elapsed();
-
+    f.tick().await;
     assert!(
-        second.is_some(),
-        "new turn after reset must produce playing"
+        f.wait_for("playing", 3000).await.is_some(),
+        "new turn after mute+unmute must produce playing"
     );
     assert!(
-        elapsed.as_secs() < 2,
-        "new turn should start quickly after reset, took {elapsed:?}"
+        t0.elapsed().as_secs() < 2,
+        "new turn must not be blocked after unmute, took {:?}",
+        t0.elapsed()
     );
 }
