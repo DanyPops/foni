@@ -36,7 +36,7 @@ async fn bug1_mute_during_in_flight_synthesis_is_ignored() {
 async fn bug2_stale_chunk_tagged_with_new_generation_plays_anyway() {
     use foni_synth::engine::facade::PlayQueue;
 
-    let (queue, _handle) = PlayQueue::new();
+    let (queue, _handle, _played) = PlayQueue::new();
 
     // generation_snapshot() does not exist yet → compile error
     let snap_gen = queue.generation_snapshot();
@@ -45,7 +45,7 @@ async fn bug2_stale_chunk_tagged_with_new_generation_plays_anyway() {
 
     // enqueue() loads the current (post-clear) generation, so the chunk
     // passes the player's guard and plays despite the reset.
-    queue.enqueue(vec![0u8; 44]).await;
+    queue.enqueue(vec![0u8; 44], 0).await;
 
     tokio::time::sleep(Duration::from_millis(150)).await;
 
