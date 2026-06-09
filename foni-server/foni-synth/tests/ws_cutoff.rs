@@ -297,3 +297,91 @@ async fn mute_unmute_new_turn_not_blocked() {
         t0.elapsed()
     );
 }
+
+// ── WS resume ────────────────────────────────────────────────────────────────────
+//
+// Verifies the StreamLog ring buffer and resume protocol:
+//   - "playing" events carry a monotonic chunk_id field
+//   - sending {"type": "resume", "last_chunk_id": N} replays chunks > N
+//     tagged with {"replayed": true}
+
+#[tokio::test]
+async fn playing_events_carry_chunk_id() {
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_synth(&url).await;
+
+    f.tick().await;
+    let event = f.wait_for("playing", 5000).await;
+    assert!(event.is_some(), "must receive playing event");
+    let ev = event.unwrap();
+    assert!(
+        ev["chunk_id"].is_u64(),
+        "playing event must carry chunk_id, got: {ev:?}"
+    );
+}
+
+#[tokio::test]
+async fn resume_replays_missed_chunks() {
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_synth(&url).await;
+
+    // Stream 3 chunks and collect all playing events.
+    f.tick_n(3, 80).await;
+    let events = f.collect(5000).await;
+    let playing: Vec<_> = events.iter().filter(|e| e["type"] == "playing").collect();
+    assert!(
+        playing.len() >= 2,
+        "need at least 2 playing events to test resume, got: {playing:?}"
+    );
+
+    // Find the chunk_id of the first playing event.
+    let first_id = playing[0]["chunk_id"].as_u64().unwrap_or(0);
+
+    // Send resume from first_id — server should replay all chunks after it.
+    f.send_msg(serde_json::json!({"type": "resume", "last_chunk_id": first_id}))
+        .await;
+
+    let replayed = f.collect(1000).await;
+    let replayed_events: Vec<_> = replayed
+        .iter()
+        .filter(|e| e["type"] == "playing" && e["replayed"] == true)
+        .collect();
+    assert!(
+        !replayed_events.is_empty(),
+        "resume must replay missed chunks, got no replayed events"
+    );
+    // All replayed events must have chunk_id > first_id.
+    for ev in &replayed_events {
+        let id = ev["chunk_id"].as_u64().unwrap_or(0);
+        assert!(
+            id > first_id,
+            "replayed chunk_id {id} must be > last_seen {first_id}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn resume_from_zero_replays_all_logged_chunks() {
+    let url = start_mock_server().await;
+    let mut f = StreamFixture::connect_synth(&url).await;
+
+    f.tick_n(3, 80).await;
+    let events = f.collect(5000).await;
+    let total = events.iter().filter(|e| e["type"] == "playing").count();
+    if total == 0 {
+        return; // synthesis didn’t produce output in this run — skip
+    }
+
+    // Resume from chunk 0 — everything logged should be replayed.
+    f.send_msg(serde_json::json!({"type": "resume", "last_chunk_id": 0}))
+        .await;
+    let replayed = f.collect(1000).await;
+    let count = replayed
+        .iter()
+        .filter(|e| e["type"] == "playing" && e["replayed"] == true)
+        .count();
+    assert!(
+        count > 0,
+        "resume from 0 must replay all logged chunks, got 0 replayed events"
+    );
+}

@@ -90,6 +90,11 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
     let mut chunk_queue: VecDeque<ChunkJob> = VecDeque::new();
     let mut synth_active = false;
 
+    // StreamLog — ring buffer of the last STREAM_LOG_CAPACITY (text, chunk_idx) pairs.
+    // Enables replay when a client reconnects mid-turn (foundation for WS resume).
+    const STREAM_LOG_CAPACITY: usize = 20;
+    let mut stream_log: VecDeque<(usize, String)> = VecDeque::with_capacity(STREAM_LOG_CAPACITY);
+
     loop {
         tokio::select! {
             msg = rx.next() => {
@@ -262,6 +267,30 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                             ))
                             .await;
                     }
+                    "resume" => {
+                        // Client reconnected and wants to replay from a given chunk.
+                        // Replay all logged chunks with chunk_id > last_seen.
+                        let last_seen = msg["last_chunk_id"].as_u64().unwrap_or(0) as usize;
+                        let replay: Vec<_> = stream_log
+                            .iter()
+                            .filter(|(idx, _)| *idx > last_seen)
+                            .cloned()
+                            .collect();
+                        tracing::info!(
+                            last_seen,
+                            replaying = replay.len(),
+                            "ws: resume requested"
+                        );
+                        for (chunk_id, text) in replay {
+                            let reply = serde_json::json!({
+                                "type": "playing",
+                                "text": text,
+                                "chunk_id": chunk_id,
+                                "replayed": true,
+                            });
+                            let _ = tx.send(Message::Text(reply.to_string())).await;
+                        }
+                    }
                     "reset" => {
                         play_queue.clear();
                         chunk_queue.clear();
@@ -272,6 +301,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         interject_diversifier.reset();
                         buffer = PlaybackBuffer::new();
                         chunk_counter = 0;
+                        stream_log.clear();
                         emit_buffer_state(&buffer, &mut tx).await;
                     }
                     "parse_train_logs" => {
@@ -317,8 +347,17 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                             sample_rate: 24_000,
                         });
                         emit_buffer_state(&buffer, &mut tx).await;
-                        let reply =
-                            serde_json::json!({"type": "playing", "text": r.text});
+                        // Append to StreamLog ring buffer for replay on reconnect.
+                        if stream_log.len() == STREAM_LOG_CAPACITY {
+                            stream_log.pop_front();
+                        }
+                        stream_log.push_back((r.chunk_idx, r.text.clone()));
+
+                        let reply = serde_json::json!({
+                            "type": "playing",
+                            "text": r.text,
+                            "chunk_id": r.chunk_idx,
+                        });
                         let _ = tx.send(Message::Text(reply.to_string())).await;
                     }
                     Some(Ok(_)) => {}
