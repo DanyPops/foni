@@ -87,9 +87,9 @@ impl Default for SmoothingOptions {
             tilt_low_db: 0.,  // neutral; controller computes from analysis
             tilt_high_db: 0., // neutral; controller computes from analysis
             de_ess_db: 4.,
-            vibrato_freq: 6.,
-            vibrato_depth: 0.003,
-            reverb_ms: 8.,
+            vibrato_freq: 0.,
+            vibrato_depth: 0.,
+            reverb_ms: 0.,
             reverb_decay: 0.04,
             reverb_in_gain: 0.8,
             reverb_out_gain: 0.88,

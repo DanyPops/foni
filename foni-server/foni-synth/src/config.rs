@@ -96,7 +96,7 @@ impl Default for DspDefaults {
             warmth_freq: 200.0,
             air_boost_db: 0.0,
             air_freq: 8000.0,
-            reverb_ms: 6.0,
+            reverb_ms: 0.0,
             reverb_decay: 0.03,
             reverb_in_gain: 0.8,
             reverb_out_gain: 0.88,
