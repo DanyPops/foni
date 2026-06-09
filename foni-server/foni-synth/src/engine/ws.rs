@@ -39,11 +39,17 @@ struct ChunkJob {
     chunk_idx: usize,
     /// Generation at the time the chunk entered the queue.
     snap_gen: u64,
+    /// Optional in-flight LLM commentary task started in parallel with synthesis.
+    /// If it resolves to a Suffix before synthesis completes, the suffix text
+    /// is synthesised as a mini audio clip appended after the main chunk.
+    commentary_task: Option<tokio::task::JoinHandle<Result<translator::CommentaryResult, String>>>,
 }
 
 /// Result returned by a spawned synthesis task.
 struct SynthResult {
     wav: Vec<u8>,
+    /// Optional suffix clip synthesised from LLM commentary (plays after main wav).
+    suffix_wav: Option<Vec<u8>>,
     chunk_idx: usize,
     text: String,
     snap_gen: u64,
@@ -338,6 +344,10 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         play_queue
                             .enqueue_tagged(r.wav, r.snap_gen, r.chunk_idx)
                             .await;
+                        // Suffix commentary clip (synthesised in parallel with main).
+                        if let Some(sfx) = r.suffix_wav {
+                            play_queue.enqueue_tagged(sfx, r.snap_gen, r.chunk_idx).await;
+                        }
                         use super::playback_buffer::AudioChunk;
                         // submit only — drain_next is deferred to played_rx so
                         // the slot stays visible (█) until audio actually plays.
@@ -487,9 +497,38 @@ async fn synthesize_job(
         vec![]
     });
 
+    // Await the LLM commentary task (started concurrently with synthesis).
+    // By now Fish Speech has finished, so the timeout is effectively "whatever
+    // arrived during synthesis" — no added latency on the main path.
+    let suffix_wav = if let Some(task) = job.commentary_task {
+        match tokio::time::timeout(std::time::Duration::from_millis(50), task).await {
+            Ok(Ok(Ok(commentary))) => {
+                // Commentary resolved to a Suffix — synthesise the short clip.
+                let suffix_text = commentary.text.clone();
+                tracing::debug!(suffix = %suffix_text, "commentary: synthesising suffix clip");
+                match app_state
+                    .0
+                    .synth
+                    .synthesize(&suffix_text, &config.rvc_model)
+                    .await
+                {
+                    Ok(raw) => Some(raw),
+                    Err(e) => {
+                        tracing::debug!(error = %e, "commentary: suffix synth failed");
+                        None
+                    }
+                }
+            }
+            _ => None, // timed out, task failed, or non-suffix — skip
+        }
+    } else {
+        None
+    };
+
     let _ = tx
         .send(Ok(SynthResult {
             wav,
+            suffix_wav,
             chunk_idx: job.chunk_idx,
             text: job.text,
             snap_gen: job.snap_gen,
@@ -591,6 +630,9 @@ async fn prepare_and_enqueue(
         }
     };
 
+    let commentary_dice_pass =
+        config.injection_dice <= 1 || rand::thread_rng().gen_range(1..=config.injection_dice) == 1;
+
     if !config.dry_run {
         let now = now_ms();
         let weights = effective_weights(emotion_state, now);
@@ -601,50 +643,21 @@ async fn prepare_and_enqueue(
             >= config.mat_cooldown_ms.min(config.interject_cooldown_ms) as f64;
         let wants_mat = config.mat_enabled && mat_prob > 0.0 && cooled;
         let wants_interject = config.interject_enabled && interject_prob > 0.0 && cooled;
-        let wants_personality = wants_mat || wants_interject;
-        let dice_pass = config.injection_dice <= 1
-            || rand::thread_rng().gen_range(1..=config.injection_dice) == 1;
-
-        let mut injected = false;
-        if config.llm_commentary_enabled && wants_personality && dice_pass {
-            let seed = lexicon::character_seed();
-            match translator::ollama_commentary(
-                &text,
-                weights.word_bias,
-                seed,
-                &config.ollama_url,
-                &config.ollama_model,
-                config.llm_commentary_timeout_ms,
-            )
-            .await
-            {
-                Ok(commentary) => {
-                    tracing::debug!(injection = %commentary.text, "llm_commentary: applied");
-                    text = translator::apply_commentary(&text, &commentary);
-                    *last_injection_ms = now;
-                    injected = true;
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "llm_commentary failed, using static injection");
-                }
+        // Static injection (synchronous, no latency).
+        let mut stat_injected = false;
+        if wants_mat {
+            let before = text.len();
+            text = translator::inject_mat(&text, mat_prob, config.mat_stretch, mat_div, bias);
+            if text.len() != before {
+                *last_injection_ms = now;
+                stat_injected = true;
             }
         }
-
-        if !injected {
-            if wants_mat {
-                let before = text.len();
-                text = translator::inject_mat(&text, mat_prob, config.mat_stretch, mat_div, bias);
-                if text.len() != before {
-                    *last_injection_ms = now;
-                    injected = true;
-                }
-            }
-            if !injected && wants_interject {
-                let before = text.len();
-                text = translator::inject_interject(&text, interject_prob, interject_div, bias);
-                if text.len() != before {
-                    *last_injection_ms = now;
-                }
+        if !stat_injected && wants_interject {
+            let before = text.len();
+            text = translator::inject_interject(&text, interject_prob, interject_div, bias);
+            if text.len() != before {
+                *last_injection_ms = now;
             }
         }
     }
@@ -684,11 +697,65 @@ async fn prepare_and_enqueue(
         return;
     }
 
+    // Spawn LLM commentary concurrently with synthesis.
+    // It resolves inside synthesize_job (hidden by Fish Speech latency)
+    // and appends a short suffix clip after the main audio.
+    let commentary_task = if !config.dry_run
+        && config.llm_commentary_enabled
+        && commentary_dice_pass
+        && translated.len() > 2
+    {
+        use foni_client::commentary::Placement;
+        // `character_seed()` returns &'static — safe to move into spawn.
+        let seed: &'static _ = lexicon::character_seed();
+        let commentary_bias = {
+            let now2 = now_ms();
+            effective_weights(emotion_state, now2).word_bias
+        };
+        let emotion_str: &'static str = match commentary_bias {
+            super::emotion::WordBias::Aggressive => "angry, aggressive",
+            super::emotion::WordBias::Commiseration => "sympathetic, commiserating",
+            super::emotion::WordBias::Mockery => "mocking, sarcastic",
+            super::emotion::WordBias::Excitement => "excited, enthusiastic",
+            super::emotion::WordBias::Neutral => "neutral",
+        };
+        let text_for_commentary = translated.clone();
+        let url = config.ollama_url.clone();
+        let model = config.ollama_model.clone();
+        let timeout = config.llm_commentary_timeout_ms;
+        let handle: tokio::task::JoinHandle<Result<_, String>> = tokio::spawn(async move {
+            // Build refs inside the async block where seed is 'static.
+            let exprs: Vec<&str> = seed.expressions.iter().map(String::as_str).collect();
+            let client_seed = foni_client::commentary::CharacterSeed {
+                persona: &seed.persona,
+                expressions: &exprs,
+            };
+            let r = foni_client::commentary::ollama_commentary(
+                &text_for_commentary,
+                emotion_str,
+                &client_seed,
+                &url,
+                &model,
+                timeout,
+            )
+            .await?;
+            if r.placement == Placement::Suffix {
+                Ok(r)
+            } else {
+                Err("non-suffix commentary discarded in pipeline mode".into())
+            }
+        });
+        Some(handle)
+    } else {
+        None
+    };
+
     chunk_queue.push_back(ChunkJob {
         text: translated,
         cache_key: key,
         chunk_idx,
         snap_gen: play_queue.generation_snapshot(),
+        commentary_task,
     });
 }
 
