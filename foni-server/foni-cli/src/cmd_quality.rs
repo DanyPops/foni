@@ -355,7 +355,6 @@ pub fn cmd_sweep(
 ) {
     use foni_analyse::{analyse, compute_gap, decode_wav, spectral_timeline, TargetTensor};
     use owo_colors::OwoColorize;
-    use std::io::Write;
     use tabled::{settings::Style, Table, Tabled};
 
     let values: Vec<f32> = values_csv
@@ -372,8 +371,7 @@ pub fn cmd_sweep(
     let ref_an = analyse(&ref_wav.samples, ref_wav.sample_rate);
     let tensor = TargetTensor::from_analysis(&ref_an, "ref");
 
-    eprint!("  Synthesizing base (RVC only)… ");
-    std::io::stdout().flush().ok();
+    tracing::info!("synthesizing base (RVC only)");
     let base_wav = match synth_request(
         server,
         phrase,
@@ -504,14 +502,12 @@ pub fn cmd_diff(
     model: &str,
 ) {
     use foni_analyse::{analyse, compute_gap, decode_wav, spectral_timeline, TargetTensor};
-    use std::io::Write;
 
     let ref_bytes = std::fs::read(ref_path).expect("cannot read reference WAV");
     let ref_wav = decode_wav(&ref_bytes).expect("reference WAV");
     let ref_an = analyse(&ref_wav.samples, ref_wav.sample_rate);
 
-    eprint!("  Synthesizing base (RVC only)… ");
-    std::io::stdout().flush().ok();
+    tracing::info!("synthesizing base (RVC only)");
     let base_wav = match synth_request(
         server,
         phrase,
@@ -676,14 +672,12 @@ pub fn cmd_diff(
 
 pub fn cmd_calibrate(server: &str, phrase: &str, ref_path: &PathBuf, model: &str) {
     use foni_analyse::{analyse_fast, decode_wav};
-    use std::io::Write;
 
     let ref_bytes = std::fs::read(ref_path).expect("cannot read reference WAV");
     let ref_wav = decode_wav(&ref_bytes).expect("reference WAV");
     let _ref_a = analyse_fast(&ref_wav.samples, ref_wav.sample_rate);
 
-    eprint!("  Synthesizing base (RVC, no DSP)… ");
-    std::io::stdout().flush().ok();
+    tracing::info!("synthesizing base (RVC, no DSP)");
     let base = match synth_request(
         server,
         phrase,

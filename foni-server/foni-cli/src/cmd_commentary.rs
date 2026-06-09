@@ -80,7 +80,7 @@ pub async fn cmd_commentary(
             println!("result:    {modified}");
         }
         Err(e) => {
-            eprintln!("commentary failed: {e}");
+            tracing::error!(error = %e, "commentary failed");
             std::process::exit(1);
         }
     }

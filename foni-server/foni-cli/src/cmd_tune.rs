@@ -26,8 +26,7 @@ pub fn cmd_tune(
     println!("   Controls: 1–5 rate  n next  r replay  q quit\n");
 
     // Synthesize RVC base once, apply each preset via /process.
-    eprint!("  Synthesizing RVC base… ");
-    std::io::stdout().flush().ok();
+    tracing::info!("synthesizing RVC base");
     let base: Vec<u8> =
         match synth_request(server, text, model, "ru", 150, false, serde_json::json!({})) {
             Ok(b) => {
@@ -51,8 +50,7 @@ pub fn cmd_tune(
 
         // Render preset.
         if !wav_path.exists() {
-            eprint!("  Rendering «{}»… ", m.name);
-            std::io::stdout().flush().ok();
+            tracing::info!(name = %m.name, "rendering preset");
             match process_request(server, &base, m.opts.clone()) {
                 Ok(wav) => {
                     std::fs::write(&wav_path, &wav).unwrap();
@@ -143,7 +141,6 @@ pub fn cmd_tune_auto(
     reference: Option<&std::path::Path>,
 ) {
     use foni_analyse::{analyse, compute_gap, decode_wav, TargetTensor};
-    use std::io::Write;
 
     // Gap score weights — brightness is the biggest problem, then loudness and voice presence
     const W_BRIGHTNESS: f32 = 0.35;
@@ -173,8 +170,7 @@ pub fn cmd_tune_auto(
     };
 
     // Synthesize the base audio once (RVC only, no DSP)
-    eprint!("  Synthesizing base (RVC only)… ");
-    std::io::stdout().flush().ok();
+    tracing::info!("synthesizing base (RVC only)");
     let base = match synth_request(
         server,
         phrase,

@@ -56,12 +56,32 @@ struct SynthResult {
     cache_key: String,
 }
 
+// ── Session state ────────────────────────────────────────────────────────────
+
+/// Per-connection mutable state bundled into one struct.
+///
+/// Passed as `&mut SessionCtx` to `handle_delta` and `prepare_and_enqueue`
+/// instead of 14 individual `&mut` parameters. Infrastructure handles
+/// (`tx`, `cache`, `play_queue`, `app_state`, `synth_tx`) are kept separate
+/// because they are used directly in the `handle_socket` main loop as well.
+struct SessionCtx {
+    stream_state: StreamState,
+    emotion_state: EmotionState,
+    config: FoniConfig,
+    mat_diversifier: WordDiversifier,
+    interject_diversifier: WordDiversifier,
+    last_injection_ms: f64,
+    buffer: PlaybackBuffer,
+    chunk_counter: usize,
+    annotator: Box<dyn StressAnnotator>,
+    chunk_queue: VecDeque<ChunkJob>,
+    stream_log: VecDeque<(usize, String)>,
+}
+
 // ── Socket handler ────────────────────────────────────────────────────────────
 
 async fn handle_socket(socket: WebSocket, app_state: AppState) {
     let (mut tx, mut rx) = socket.split();
-    let mut stream_state = fresh_state();
-    let mut emotion_state = neutral_state();
     let defaults = FoniConfig::default();
     let mut config = FoniConfig {
         dry_run: std::env::var("FONI_DRY_RUN")
@@ -80,26 +100,30 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
         config.translate_backend =
             super::engine_config::TranslateBackend::from_str(&backend).unwrap_or_default();
     }
-    let annotator: Box<dyn StressAnnotator> =
-        make_annotator(&config.stress_mode, &config.ruaccent_url);
+    // Build annotator before moving config into SessionCtx.
+    let annotator = make_annotator(&config.stress_mode, &config.ruaccent_url);
     let cache = new_shared_cache();
     let (play_queue, _play_handle, mut played_rx) = PlayQueue::new();
-    let mut buffer = PlaybackBuffer::new();
-    let mut chunk_counter: usize = 0;
-    let mut mat_diversifier = WordDiversifier::new();
-    let mut interject_diversifier = WordDiversifier::new();
-    let mut last_injection_ms: f64 = 0.0;
 
     // Synthesis is offloaded to spawned tasks so the WS receive loop stays
     // responsive to control messages (reset, mute) during slow TTS calls.
     let (synth_tx, mut synth_rx) = tokio::sync::mpsc::channel::<Result<SynthResult, String>>(8);
-    let mut chunk_queue: VecDeque<ChunkJob> = VecDeque::new();
     let mut synth_active = false;
 
-    // StreamLog — ring buffer of the last STREAM_LOG_CAPACITY (text, chunk_idx) pairs.
-    // Enables replay when a client reconnects mid-turn (foundation for WS resume).
     const STREAM_LOG_CAPACITY: usize = 20;
-    let mut stream_log: VecDeque<(usize, String)> = VecDeque::with_capacity(STREAM_LOG_CAPACITY);
+    let mut ctx = SessionCtx {
+        stream_state: fresh_state(),
+        emotion_state: neutral_state(),
+        config,
+        mat_diversifier: WordDiversifier::new(),
+        interject_diversifier: WordDiversifier::new(),
+        last_injection_ms: 0.0,
+        buffer: PlaybackBuffer::new(),
+        chunk_counter: 0,
+        annotator,
+        chunk_queue: VecDeque::new(),
+        stream_log: VecDeque::with_capacity(STREAM_LOG_CAPACITY),
+    };
 
     loop {
         tokio::select! {
@@ -119,71 +143,71 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         if let Some(delta) = msg["text"].as_str() {
                             handle_delta(
                                 delta,
-                                &mut stream_state,
-                                &emotion_state,
-                                &config,
+                                &mut ctx.stream_state,
+                                &ctx.emotion_state,
+                                &ctx.config,
                                 &cache,
                                 &play_queue,
-                                &mut mat_diversifier,
-                                &mut interject_diversifier,
-                                &mut last_injection_ms,
+                                &mut ctx.mat_diversifier,
+                                &mut ctx.interject_diversifier,
+                                &mut ctx.last_injection_ms,
                                 &mut tx,
-                                &mut buffer,
-                                &mut chunk_counter,
-                                annotator.as_ref(),
-                                &mut chunk_queue,
+                                &mut ctx.buffer,
+                                &mut ctx.chunk_counter,
+                                ctx.annotator.as_ref(),
+                                &mut ctx.chunk_queue,
                             )
                             .await;
                         }
                     }
                     "message_end" => {
-                        if !config.enabled {
-                            stream_state = fresh_state();
-                            chunk_counter = 0;
-                            buffer = PlaybackBuffer::new();
+                        if !ctx.config.enabled {
+                            ctx.stream_state = fresh_state();
+                            ctx.chunk_counter = 0;
+                            ctx.buffer = PlaybackBuffer::new();
                             continue;
                         }
-                        let leftover = stream_state.buffer.trim().to_string();
-                        stream_state = fresh_state();
+                        let leftover = ctx.stream_state.buffer.trim().to_string();
+                        ctx.stream_state = fresh_state();
                         if leftover.len() > 2 {
-                            let idx = chunk_counter;
-                            chunk_counter += 1;
+                            let idx = ctx.chunk_counter;
+                            ctx.chunk_counter += 1;
                             prepare_and_enqueue(
                                 &leftover,
                                 idx,
-                                &emotion_state,
-                                &config,
+                                &ctx.emotion_state,
+                                &ctx.config,
                                 &cache,
                                 &play_queue,
-                                &mut mat_diversifier,
-                                &mut interject_diversifier,
-                                &mut last_injection_ms,
+                                &mut ctx.mat_diversifier,
+                                &mut ctx.interject_diversifier,
+                                &mut ctx.last_injection_ms,
                                 &mut tx,
-                                &mut buffer,
-                                annotator.as_ref(),
-                                &mut chunk_queue,
+                                &mut ctx.buffer,
+                                ctx.annotator.as_ref(),
+                                &mut ctx.chunk_queue,
                             )
                             .await;
                         }
-                        buffer.close(chunk_counter);
-                        emit_buffer_state(&buffer, &mut tx).await;
+                        ctx.buffer.close(ctx.chunk_counter);
+                        emit_buffer_state(&ctx.buffer, &mut tx).await;
                         // Buffer is NOT reset here — it stays alive until the
                         // played_rx signal drains every submitted chunk. Only
                         // chunk_counter resets so the next message assigns
                         // fresh indices into this same buffer.
-                        chunk_counter = 0;
+                        ctx.chunk_counter = 0;
                     }
                     "user_message" => {
                         if let Some(text) = msg["text"].as_str() {
                             let now = now_ms();
                             let reading = detect_emotion(text);
-                            emotion_state =
-                                update_emotion_state(&emotion_state, &reading, now);
-                            let intensity = current_intensity(&emotion_state, now);
+                            ctx.emotion_state =
+                                update_emotion_state(&ctx.emotion_state, &reading, now);
+                            let intensity = current_intensity(&ctx.emotion_state, now);
                             let reply = serde_json::json!({
                                 "type": "emotion",
-                                "emotion": emotion_state.emotion,
-                                "emoji": emotion_emoji(emotion_state.emotion),
+                                "emotion": ctx.emotion_state.emotion,
+                                "emoji": emotion_emoji(ctx.emotion_state.emotion),
                                 "intensity": intensity,
                                 "signals": reading.signals,
                             });
@@ -192,51 +216,51 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                     }
                     "set_config" => {
                         if let Some(dr) = msg["dry_run"].as_bool() {
-                            config.dry_run = dr;
+                            ctx.config.dry_run = dr;
                         }
                         if let Some(lang) = msg["lang"].as_str() {
                             use crate::engine::engine_config::Lang;
                             if let Some((inp, out)) = lang.split_once(',') {
                                 if let Some(l) = Lang::from_code(inp) {
-                                    config.input_lang = l;
+                                    ctx.config.input_lang = l;
                                 }
                                 if let Some(l) = Lang::from_code(out) {
-                                    config.output_lang = l;
+                                    ctx.config.output_lang = l;
                                 }
                             }
                         }
                         if let Some(enabled) = msg["enabled"].as_bool() {
-                            let was_disabled = !config.enabled;
-                            config.enabled = enabled;
+                            let was_disabled = !ctx.config.enabled;
+                            ctx.config.enabled = enabled;
                             if !enabled && !was_disabled {
                                 play_queue.clear();
-                                chunk_queue.clear();
+                                ctx.chunk_queue.clear();
                                 synth_active = false;
-                                stream_state = fresh_state();
-                                buffer = PlaybackBuffer::new();
-                                chunk_counter = 0;
-                                emit_buffer_state(&buffer, &mut tx).await;
+                                ctx.stream_state = fresh_state();
+                                ctx.buffer = PlaybackBuffer::new();
+                                ctx.chunk_counter = 0;
+                                emit_buffer_state(&ctx.buffer, &mut tx).await;
                             }
                             if enabled && was_disabled {
-                                let result = drain_chunks(&stream_state.buffer);
-                                stream_state.buffer = result.remainder;
+                                let result = drain_chunks(&ctx.stream_state.buffer);
+                                ctx.stream_state.buffer = result.remainder;
                                 for chunk in result.chunks {
-                                    let idx = chunk_counter;
-                                    chunk_counter += 1;
+                                    let idx = ctx.chunk_counter;
+                                    ctx.chunk_counter += 1;
                                     prepare_and_enqueue(
                                         &chunk,
                                         idx,
-                                        &emotion_state,
-                                        &config,
+                                        &ctx.emotion_state,
+                                        &ctx.config,
                                         &cache,
                                         &play_queue,
-                                        &mut mat_diversifier,
-                                        &mut interject_diversifier,
-                                        &mut last_injection_ms,
+                                        &mut ctx.mat_diversifier,
+                                        &mut ctx.interject_diversifier,
+                                        &mut ctx.last_injection_ms,
                                         &mut tx,
-                                        &mut buffer,
-                                        annotator.as_ref(),
-                                        &mut chunk_queue,
+                                        &mut ctx.buffer,
+                                        ctx.annotator.as_ref(),
+                                        &mut ctx.chunk_queue,
                                     )
                                     .await;
                                 }
@@ -256,12 +280,12 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         let synth_result = app_state
                             .0
                             .synth
-                            .synthesize(phrase, &config.rvc_model)
+                            .synthesize(phrase, &ctx.config.rvc_model)
                             .await;
                         match synth_result {
                             Ok(wav) => {
                                 cache
-                                    .put(cache_key(phrase, &config.rvc_model), wav)
+                                    .put(cache_key(phrase, &ctx.config.rvc_model), wav)
                                     .await;
                                 tracing::info!("prewarm: complete");
                             }
@@ -277,7 +301,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         // Client reconnected and wants to replay from a given chunk.
                         // Replay all logged chunks with chunk_id > last_seen.
                         let last_seen = msg["last_chunk_id"].as_u64().unwrap_or(0) as usize;
-                        let replay: Vec<_> = stream_log
+                        let replay: Vec<_> = ctx.stream_log
                             .iter()
                             .filter(|(idx, _)| *idx > last_seen)
                             .cloned()
@@ -299,16 +323,16 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                     }
                     "reset" => {
                         play_queue.clear();
-                        chunk_queue.clear();
+                        ctx.chunk_queue.clear();
                         synth_active = false;
-                        stream_state = fresh_state();
-                        emotion_state = neutral_state();
-                        mat_diversifier.reset();
-                        interject_diversifier.reset();
-                        buffer = PlaybackBuffer::new();
-                        chunk_counter = 0;
-                        stream_log.clear();
-                        emit_buffer_state(&buffer, &mut tx).await;
+                        ctx.stream_state = fresh_state();
+                        ctx.emotion_state = neutral_state();
+                        ctx.mat_diversifier.reset();
+                        ctx.interject_diversifier.reset();
+                        ctx.buffer = PlaybackBuffer::new();
+                        ctx.chunk_counter = 0;
+                        ctx.stream_log.clear();
+                        emit_buffer_state(&ctx.buffer, &mut tx).await;
                     }
                     "parse_train_logs" => {
                         if let Some(text) = msg["text"].as_str() {
@@ -330,7 +354,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                 // Start synthesis for the next queued chunk if none is in flight.
                 if !synth_active {
                     synth_active =
-                        try_start_synthesis(&mut chunk_queue, &synth_tx, &play_queue, &app_state, &config);
+                        try_start_synthesis(&mut ctx.chunk_queue, &synth_tx, &play_queue, &app_state, &ctx.config);
                 }
             }
 
@@ -351,17 +375,17 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         use super::playback_buffer::AudioChunk;
                         // submit only — drain_next is deferred to played_rx so
                         // the slot stays visible (█) until audio actually plays.
-                        buffer.submit(AudioChunk {
+                        ctx.buffer.submit(AudioChunk {
                             index: r.chunk_idx,
                             samples: vec![],
                             sample_rate: 24_000,
                         });
-                        emit_buffer_state(&buffer, &mut tx).await;
+                        emit_buffer_state(&ctx.buffer, &mut tx).await;
                         // Append to StreamLog ring buffer for replay on reconnect.
-                        if stream_log.len() == STREAM_LOG_CAPACITY {
-                            stream_log.pop_front();
+                        if ctx.stream_log.len() == STREAM_LOG_CAPACITY {
+                            ctx.stream_log.pop_front();
                         }
-                        stream_log.push_back((r.chunk_idx, r.text.clone()));
+                        ctx.stream_log.push_back((r.chunk_idx, r.text.clone()));
 
                         let reply = serde_json::json!({
                             "type": "playing",
@@ -380,11 +404,11 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                 // Advance to the next queued chunk.
                 if !synth_active {
                     synth_active = try_start_synthesis(
-                        &mut chunk_queue,
+                        &mut ctx.chunk_queue,
                         &synth_tx,
                         &play_queue,
                         &app_state,
-                        &config,
+                        &ctx.config,
                     );
                 }
             }
@@ -393,14 +417,14 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                 // Ignore signals from a generation that has been superseded by
                 // a reset — those chunks were skipped, not played.
                 if played_gen == play_queue.generation_snapshot() {
-                    buffer.drain_next();
-                    emit_buffer_state(&buffer, &mut tx).await;
+                    ctx.buffer.drain_next();
+                    emit_buffer_state(&ctx.buffer, &mut tx).await;
                     // Once every submitted chunk has been played the buffer is
                     // complete. Reset it so the next message starts clean.
-                    if buffer.is_complete() {
-                        buffer = PlaybackBuffer::new();
-                        chunk_counter = 0;
-                        emit_buffer_state(&buffer, &mut tx).await;
+                    if ctx.buffer.is_complete() {
+                        ctx.buffer = PlaybackBuffer::new();
+                        ctx.chunk_counter = 0;
+                        emit_buffer_state(&ctx.buffer, &mut tx).await;
                     }
                 }
                 let _ = chunk_idx; // index carried for future per-chunk events

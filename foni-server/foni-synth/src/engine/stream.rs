@@ -1,4 +1,14 @@
+use once_cell::sync::Lazy;
 use regex::Regex;
+
+/// Compile once, reuse forever. All patterns are correct by construction —
+/// if a pattern is malformed the binary will not start (caught at first call).
+macro_rules! re {
+    ($pat:expr) => {{
+        static RE: Lazy<Regex> = Lazy::new(|| Regex::new($pat).expect("regex compile"));
+        &*RE
+    }};
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct StreamState {
@@ -31,8 +41,8 @@ pub struct DrainResult {
 }
 
 pub fn drain_chunks(text: &str) -> DrainResult {
-    let para_re = Regex::new(r"\n\n+").expect("infallible");
-    let sent_re = Regex::new(r"[.!?!?]\s+").expect("infallible");
+    let para_re = re!(r"\n\n+");
+    let sent_re = re!(r"[.!?!?]\s+");
 
     let mut chunks = Vec::new();
     let mut remaining = text.to_string();
@@ -77,103 +87,61 @@ pub fn strip_markdown(text: &str) -> String {
     let mut s = text.to_string();
 
     // Fenced code blocks (closed)
-    s = Regex::new(r"(?s)\n?```.*?```\n?")
-        .expect("infallible")
+    s = re!(r"(?s)\n?```.*?```\n?")
         .replace_all(&s, "\n")
         .to_string();
 
     // Unclosed fenced code block
-    s = Regex::new(r"(?s)```.*")
-        .expect("infallible")
-        .replace_all(&s, "")
-        .to_string();
+    s = re!(r"(?s)```.*").replace_all(&s, "").to_string();
 
     // Inline code
-    s = Regex::new(r"`[^`]+`")
-        .expect("infallible")
-        .replace_all(&s, "")
-        .to_string();
+    s = re!(r"`[^`]+`").replace_all(&s, "").to_string();
 
     // Images
-    s = Regex::new(r"!\[[^\]]*\]\([^)]*\)")
-        .expect("infallible")
-        .replace_all(&s, "")
-        .to_string();
+    s = re!(r"!\[[^\]]*\]\([^)]*\)").replace_all(&s, "").to_string();
 
     // Links — keep text, drop URL
-    s = Regex::new(r"\[([^\]]+)\]\([^)]*\)")
-        .expect("infallible")
+    s = re!(r"\[([^\]]+)\]\([^)]*\)")
         .replace_all(&s, "$1")
         .to_string();
 
     // Headers
-    s = Regex::new(r"(?m)^#{1,6}\s+")
-        .expect("infallible")
-        .replace_all(&s, "")
-        .to_string();
+    s = re!(r"(?m)^#{1,6}\s+").replace_all(&s, "").to_string();
 
     // Bold/italic — no backreferences in Rust regex, handle each variant
-    s = Regex::new(r"\*{3}(.+?)\*{3}")
-        .expect("infallible")
-        .replace_all(&s, "$1")
-        .to_string();
-    s = Regex::new(r"\*{2}(.+?)\*{2}")
-        .expect("infallible")
-        .replace_all(&s, "$1")
-        .to_string();
-    s = Regex::new(r"\*(.+?)\*")
-        .expect("infallible")
-        .replace_all(&s, "$1")
-        .to_string();
-    s = Regex::new(r"_{3}(.+?)_{3}")
-        .expect("infallible")
-        .replace_all(&s, "$1")
-        .to_string();
-    s = Regex::new(r"_{2}(.+?)_{2}")
-        .expect("infallible")
-        .replace_all(&s, "$1")
-        .to_string();
-    s = Regex::new(r"_(.+?)_")
-        .expect("infallible")
-        .replace_all(&s, "$1")
-        .to_string();
+    s = re!(r"\*{3}(.+?)\*{3}").replace_all(&s, "$1").to_string();
+    s = re!(r"\*{2}(.+?)\*{2}").replace_all(&s, "$1").to_string();
+    s = re!(r"\*(.+?)\*").replace_all(&s, "$1").to_string();
+    s = re!(r"_{3}(.+?)_{3}").replace_all(&s, "$1").to_string();
+    s = re!(r"_{2}(.+?)_{2}").replace_all(&s, "$1").to_string();
+    s = re!(r"_(.+?)_").replace_all(&s, "$1").to_string();
 
     // Blockquote
-    s = Regex::new(r"(?m)^>\s*")
-        .expect("infallible")
-        .replace_all(&s, "")
-        .to_string();
+    s = re!(r"(?m)^>\s*").replace_all(&s, "").to_string();
 
     // ASCII horizontal rules (--- / *** / ___)
-    s = Regex::new(r"(?m)^[-*_]{3,}\s*$")
-        .expect("infallible")
-        .replace_all(&s, "")
-        .to_string();
+    s = re!(r"(?m)^[-*_]{3,}\s*$").replace_all(&s, "").to_string();
 
     // Unicode visual-formatting noise — lines made purely of Box Drawing (U+2500–U+257F)
     // or Block Elements (U+2580–U+259F): ─ │ ┌ ┐ █ ▄ ▀ ▌ ░ etc.
     // One contiguous range covers both complete Unicode blocks.
-    s = Regex::new(r"(?m)^[\u{2500}-\u{259F}\s]{2,}$")
-        .expect("infallible")
+    s = re!(r"(?m)^[\u{2500}-\u{259F}\s]{2,}$")
         .replace_all(&s, "")
         .to_string();
 
     // Same chars inline flanking text ('─── Section ────') — strip chars, keep text.
-    s = Regex::new(r"[\u{2500}-\u{259F}]+")
-        .expect("infallible")
+    s = re!(r"[\u{2500}-\u{259F}]+")
         .replace_all(&s, " ")
         .to_string();
 
     // Markdown table separator rows (|---|---|, :---:|, etc.) — drop entirely.
-    s = Regex::new(r"(?m)^\|[-:\s|]+\|\s*$")
-        .expect("infallible")
+    s = re!(r"(?m)^\|[-:\s|]+\|\s*$")
         .replace_all(&s, "")
         .to_string();
 
     // Markdown table data rows — strip the pipes, keep cell text.
     // '| foo | bar |' → 'foo  bar'
-    s = Regex::new(r"(?m)^\|(.+)\|\s*$")
-        .expect("infallible")
+    s = re!(r"(?m)^\|(.+)\|\s*$")
         .replace_all(&s, |caps: &regex::Captures| {
             caps[1].replace('|', " ").trim().to_string()
         })
@@ -181,46 +149,29 @@ pub fn strip_markdown(text: &str) -> String {
 
     // Lines that are pure non-alphabetic noise after all passes — drop.
     // Matches lines with no Unicode letter or digit at all.
-    s = Regex::new(r"(?m)^[^\p{L}\p{N}\n]*$")
-        .expect("infallible")
+    s = re!(r"(?m)^[^\p{L}\p{N}\n]*$")
         .replace_all(&s, "")
         .to_string();
 
     // Unordered list bullets
-    s = Regex::new(r"(?m)^[\s]*[-*+]\s+")
-        .expect("infallible")
-        .replace_all(&s, "")
-        .to_string();
+    s = re!(r"(?m)^[\s]*[-*+]\s+").replace_all(&s, "").to_string();
 
     // Ordered list numbers
-    s = Regex::new(r"(?m)^[\s]*\d+\.\s+")
-        .expect("infallible")
-        .replace_all(&s, "")
-        .to_string();
+    s = re!(r"(?m)^[\s]*\d+\.\s+").replace_all(&s, "").to_string();
 
     // Shell/regex escape sequences
-    s = Regex::new(r"\\[|ntrfv\\]")
-        .expect("infallible")
-        .replace_all(&s, " ")
-        .to_string();
+    s = re!(r"\\[|ntrfv\\]").replace_all(&s, " ").to_string();
 
     // Trailing backslash
-    s = Regex::new(r"(?m)\\\s*$")
-        .expect("infallible")
-        .replace_all(&s, "")
-        .to_string();
+    s = re!(r"(?m)\\\s*$").replace_all(&s, "").to_string();
 
     // Path-like tokens (simplified — no lookbehind in Rust regex)
-    s = Regex::new(r"(?i)(?:^|\s)/[a-z][a-z0-9_-]*")
-        .expect("infallible")
+    s = re!(r"(?i)(?:^|\s)/[a-z][a-z0-9_-]*")
         .replace_all(&s, "")
         .to_string();
 
     // Collapse multiple blank lines
-    s = Regex::new(r"\n{3,}")
-        .expect("infallible")
-        .replace_all(&s, "\n\n")
-        .to_string();
+    s = re!(r"\n{3,}").replace_all(&s, "\n\n").to_string();
 
     s = normalise_numbers(&s);
     s.trim().to_string()
@@ -376,7 +327,7 @@ fn num_below_thousand(n: u64, feminine: bool) -> String {
 ///   - unit suffixes: letter immediately after (`3D`, `50px`, `mp4`)
 ///   - percentage: digit followed by `%` → appends «процентов»
 pub fn normalise_numbers(s: &str) -> String {
-    let re = Regex::new(r"-?\d+").expect("infallible");
+    let re = re!(r"-?\d+");
     let mut out = String::with_capacity(s.len());
     let mut cursor = 0usize;
 

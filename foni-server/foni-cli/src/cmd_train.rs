@@ -74,7 +74,7 @@ pub fn cmd_train(
         match modal_cloud::tail_logs(&mut client, &call_id, 50).await {
             Ok(lines) => {
                 for line in &lines {
-                    eprint!("{line}");
+                    tracing::info!("{line}");
                 }
                 // Check final status
                 match modal_cloud::job_status(&mut client, &call_id).await {
@@ -128,7 +128,7 @@ pub fn cmd_train_logs(call_id: &str) {
                     info!("(no logs yet)");
                 } else {
                     for line in &lines {
-                        eprint!("{line}");
+                        tracing::info!("{line}");
                     }
                 }
             }
@@ -168,7 +168,11 @@ pub fn cmd_snapshot(server: &str, model: &str, ref_path: &std::path::Path) -> Re
 
     let mut scores = Vec::new();
     for (i, phrase) in SNAPSHOT_PHRASES.iter().enumerate() {
-        eprint!("  [{}/{}] ", i + 1, SNAPSHOT_PHRASES.len());
+        tracing::info!(
+            step = i + 1,
+            total = SNAPSHOT_PHRASES.len(),
+            "snapshotting phrase"
+        );
         let wav = match synth_request(
             server,
             phrase,
@@ -248,7 +252,11 @@ pub fn cmd_compare_models(
 
     let mut scores = Vec::new();
     for (i, phrase) in SNAPSHOT_PHRASES.iter().enumerate() {
-        eprint!("  [{}/{}] ", i + 1, SNAPSHOT_PHRASES.len());
+        tracing::info!(
+            step = i + 1,
+            total = SNAPSHOT_PHRASES.len(),
+            "snapshotting phrase"
+        );
         let wav = match synth_request(
             server,
             phrase,
