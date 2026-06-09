@@ -180,6 +180,9 @@ enum Cmd {
         /// Stress annotation backend: dict | ruaccent | none
         #[arg(long)]
         stress: Option<String>,
+        /// Reference WAV for zero-shot voice cloning (base64-encoded and forwarded to Chatterbox)
+        #[arg(long)]
+        audio_prompt: Option<PathBuf>,
     },
 
     /// Maquette studio — produce N named variants, render all, listen, pick
@@ -716,6 +719,7 @@ fn main() {
             assertiveness,
             warmth,
             stress,
+            audio_prompt,
         } => {
             let text = cmd_voice::resolve_text(text);
             let text = match &text {
@@ -746,6 +750,7 @@ fn main() {
                 assertiveness,
                 warmth,
                 stress.as_deref(),
+                audio_prompt.as_ref(),
             );
         }
         Cmd::Studio { text, model, from } => {

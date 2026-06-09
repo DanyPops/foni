@@ -47,6 +47,10 @@ pub struct SynthRequest {
     /// Stress annotation backend: "dict", "ruaccent", or "none" (default "none").
     #[serde(default)]
     pub stress_mode: Option<String>,
+    /// Base64-encoded reference WAV for zero-shot voice cloning.
+    /// Forwarded verbatim to the Chatterbox endpoint as `audio_prompt`.
+    #[serde(default)]
+    pub audio_prompt: Option<String>,
 }
 
 fn default_voice() -> String {
@@ -100,6 +104,11 @@ fn cache_key(req: &SynthRequest) -> [u8; 32] {
     if let Some(ref sm) = req.stress_mode {
         h.update(sm.as_bytes());
     }
+    if let Some(ref ap) = req.audio_prompt {
+        // Hash just the first 256 bytes of the base64 string — enough to
+        // distinguish different reference clips without hashing the full payload.
+        h.update(&ap.as_bytes()[..ap.len().min(256)]);
+    }
     h.finalize().into()
 }
 
@@ -126,6 +135,9 @@ async fn cloud_tts(text: &str, req: &SynthRequest) -> Result<Vec<u8>, String> {
     }
     if let Some(v) = req.temperature {
         body["temperature"] = serde_json::json!(v);
+    }
+    if let Some(ref ap) = req.audio_prompt {
+        body["audio_prompt"] = serde_json::json!(ap);
     }
 
     if let Some(token) = tts_token() {

@@ -2,6 +2,7 @@ use super::cmd_common::{
     default_maquettes, get_json, load_maquettes, play_wav, process_request, render_maquette,
     save_and_maybe_play, synth_request, synth_request_ext, Maquette,
 };
+use base64::Engine as _;
 use dialoguer::{theme::ColorfulTheme, Input, Select};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
@@ -29,6 +30,7 @@ pub fn cmd_synth(
     assertiveness: Option<f32>,
     warmth: Option<f32>,
     stress: Option<&str>,
+    audio_prompt: Option<&PathBuf>,
 ) {
     let mut opts = serde_json::json!({});
     if let Some(v) = rms {
@@ -91,6 +93,17 @@ pub fn cmd_synth(
     }
     if let Some(v) = warmth {
         body_extra.insert("temperature".into(), v.into());
+    }
+    if let Some(path) = audio_prompt {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                body_extra.insert("audio_prompt".into(), b64.into());
+            }
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "audio_prompt: cannot read file");
+            }
+        }
     }
 
     match synth_request_ext(server, text, model, voice, speed, dsp, opts, &body_extra) {
