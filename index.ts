@@ -68,26 +68,29 @@ export default async function (pi: ExtensionAPI) {
   let lastCtx: { ui: any } | null = null;
 
   function updateBufferWidget(ctx: { ui: any }, snap: BufferSnapshot): void {
-    // Clear when complete or nothing to show.
-    if (snap.complete || snap.slots.length === 0) {
+    if (snap.complete) {
+      ctx.ui.setWidget("foni-buffer", undefined);
+      return;
+    }
+    // Nothing queued or playing — hide.
+    if (snap.slots.length === 0 && snap.pending === 0) {
       ctx.ui.setWidget("foni-buffer", undefined);
       return;
     }
 
     ctx.ui.setWidget("foni-buffer", (_tui: any, theme: any) => {
-      // Torrent-style: █ ready, ░ pending. Left side drains as chunks play.
+      // ░ waiting (synthesis pending)  █ loaded (in play queue)  drains left→right as played
       let bar = theme.fg("dim", "\u2590");
       for (const ready of snap.slots) {
         bar += ready
-          ? theme.fg("accent", "\u2588")      // ready — solid block
-          : theme.fg("dim", "\u2591");        // pending — light shade (etched)
+          ? theme.fg("accent", "\u2588")   // loaded — solid block
+          : theme.fg("dim", "\u2591");     // waiting — light shade
       }
       bar += theme.fg("dim", "\u258c");
 
-      const total = snap.buffered + snap.pending;
       const label = snap.pending > 0
-        ? theme.fg("dim", ` ${snap.buffered}/${total}`)
-        : theme.fg("success", ` ${snap.buffered}/${total} ready`);
+        ? theme.fg("dim", ` ${snap.buffered} loaded, ${snap.pending} waiting`)
+        : theme.fg("success", ` ${snap.buffered} loaded`);
 
       return {
         render: () => [bar + label],
@@ -201,6 +204,14 @@ export default async function (pi: ExtensionAPI) {
   }
 
   // ── Lifecycle events ──────────────────────────────────────────────────────
+
+  pi.on("session_shutdown", () => {
+    // Close the WS so session_start on reload gets a fresh connection.
+    ws?.close();
+    ws = null;
+    if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
+    lastCtx = null;
+  });
 
   pi.on("session_start", (_event, ctx) => {
     lastCtx = ctx;

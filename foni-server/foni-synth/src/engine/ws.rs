@@ -77,7 +77,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
     let annotator: Box<dyn StressAnnotator> =
         make_annotator(&config.stress_mode, &config.ruaccent_url);
     let cache = new_shared_cache();
-    let (play_queue, _play_handle) = PlayQueue::new();
+    let (play_queue, _play_handle, mut played_rx) = PlayQueue::new();
     let mut buffer = PlaybackBuffer::new();
     let mut chunk_counter: usize = 0;
     let mut mat_diversifier = WordDiversifier::new();
@@ -156,8 +156,11 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         }
                         buffer.close(chunk_counter);
                         emit_buffer_state(&buffer, &mut tx).await;
+                        // Buffer is NOT reset here — it stays alive until the
+                        // played_rx signal drains every submitted chunk. Only
+                        // chunk_counter resets so the next message assigns
+                        // fresh indices into this same buffer.
                         chunk_counter = 0;
-                        buffer = PlaybackBuffer::new();
                     }
                     "user_message" => {
                         if let Some(text) = msg["text"].as_str() {
@@ -300,16 +303,22 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                 match result {
                     Some(Ok(r)) if r.snap_gen == play_queue.generation_snapshot() => {
                         cache.put(r.cache_key, r.wav.clone()).await;
-                        play_queue.enqueue_tagged(r.wav, r.snap_gen).await;
+                        // Enqueue with chunk_idx so the player task can signal
+                        // playback completion back via played_rx.
+                        play_queue
+                            .enqueue_tagged(r.wav, r.snap_gen, r.chunk_idx)
+                            .await;
                         use super::playback_buffer::AudioChunk;
+                        // submit only — drain_next is deferred to played_rx so
+                        // the slot stays visible (█) until audio actually plays.
                         buffer.submit(AudioChunk {
                             index: r.chunk_idx,
                             samples: vec![],
                             sample_rate: 24_000,
                         });
-                        buffer.drain_next();
                         emit_buffer_state(&buffer, &mut tx).await;
-                        let reply = serde_json::json!({"type": "playing", "text": r.text});
+                        let reply =
+                            serde_json::json!({"type": "playing", "text": r.text});
                         let _ = tx.send(Message::Text(reply.to_string())).await;
                     }
                     Some(Ok(_)) => {}
@@ -329,6 +338,23 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         &config,
                     );
                 }
+            }
+
+            Some((played_gen, chunk_idx)) = played_rx.recv() => {
+                // Ignore signals from a generation that has been superseded by
+                // a reset — those chunks were skipped, not played.
+                if played_gen == play_queue.generation_snapshot() {
+                    buffer.drain_next();
+                    emit_buffer_state(&buffer, &mut tx).await;
+                    // Once every submitted chunk has been played the buffer is
+                    // complete. Reset it so the next message starts clean.
+                    if buffer.is_complete() {
+                        buffer = PlaybackBuffer::new();
+                        chunk_counter = 0;
+                        emit_buffer_state(&buffer, &mut tx).await;
+                    }
+                }
+                let _ = chunk_idx; // index carried for future per-chunk events
             }
         }
     }
@@ -593,6 +619,7 @@ async fn prepare_and_enqueue(
             samples: vec![],
             sample_rate: 24_000,
         });
+        // dry_run has no audio subprocess, so drain immediately.
         buffer.drain_next();
         emit_buffer_state(buffer, tx).await;
         let reply = serde_json::json!({"type": "speak", "text": translated});
@@ -604,14 +631,14 @@ async fn prepare_and_enqueue(
 
     if let Some(cached) = cache.get(&key).await {
         let snap = play_queue.generation_snapshot();
-        play_queue.enqueue_tagged(cached, snap).await;
+        play_queue.enqueue_tagged(cached, snap, chunk_idx).await;
         use super::playback_buffer::AudioChunk;
+        // submit only — drain_next is deferred to played_rx.
         buffer.submit(AudioChunk {
             index: chunk_idx,
             samples: vec![],
             sample_rate: 24_000,
         });
-        buffer.drain_next();
         emit_buffer_state(buffer, tx).await;
         let reply = serde_json::json!({"type": "playing", "text": translated});
         let _ = tx.send(Message::Text(reply.to_string())).await;

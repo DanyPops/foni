@@ -20,21 +20,17 @@ interface BufferSnapshot {
 }
 
 function renderBar(snap: BufferSnapshot, theme: any): string {
-  if (snap.slots.length === 0) {
-    return snap.complete
-      ? theme.fg("success", "▐▌ done")
-      : theme.fg("dim", "▐▌");
-  }
+  if (snap.complete || (snap.slots.length === 0 && snap.pending === 0)) return "";
 
   let bar = theme.fg("dim", "▐");
   for (const ready of snap.slots) {
-    bar += ready ? theme.fg("accent", "█") : theme.fg("dim", "·");
+    bar += ready ? theme.fg("accent", "█") : theme.fg("dim", "░");
   }
   bar += theme.fg("dim", "▌");
 
   const label = snap.pending > 0
-    ? theme.fg("muted", ` ${snap.buffered} ready, ${snap.pending} pending`)
-    : theme.fg("success", ` ${snap.buffered} ready`);
+    ? theme.fg("muted", ` ${snap.buffered} loaded, ${snap.pending} waiting`)
+    : theme.fg("success", ` ${snap.buffered} loaded`);
 
   return bar + label;
 }
@@ -87,7 +83,11 @@ export default function (pi: ExtensionAPI) {
 
   function updateWidget(): void {
     if (!snapshot || !visible) return;
-
+    const bar = renderBar(snapshot, {} as any);
+    if (!bar) {
+      pi.ui.setWidget("foni-buffer", undefined);
+      return;
+    }
     pi.ui.setWidget("foni-buffer", (_tui: any, theme: any) => ({
       render: () => [renderBar(snapshot!, theme)],
       invalidate: () => {},

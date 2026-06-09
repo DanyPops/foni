@@ -12,17 +12,16 @@ interface BufferSnapshot {
 // ── Pure render function extracted for testing ──
 
 function renderBarPlain(snap: BufferSnapshot): string {
-  if (snap.slots.length === 0) {
-    return snap.complete ? "▐▌ done" : "▐▌";
-  }
+  // Mirrors the production renderBar logic — same clear conditions.
+  if (snap.complete || (snap.slots.length === 0 && snap.pending === 0)) return "";
   let bar = "▐";
   for (const ready of snap.slots) {
-    bar += ready ? "█" : "·";
+    bar += ready ? "█" : "░";
   }
   bar += "▌";
   const label = snap.pending > 0
-    ? ` ${snap.buffered} ready, ${snap.pending} pending`
-    : ` ${snap.buffered} ready`;
+    ? ` ${snap.buffered} loaded, ${snap.pending} waiting`
+    : ` ${snap.buffered} loaded`;
   return bar + label;
 }
 
@@ -71,34 +70,32 @@ class MockWSClient {
 // ── Tests ──
 
 describe("renderBarPlain", () => {
-  it("empty complete", () => {
-    expect(renderBarPlain({ slots: [], buffered: 0, pending: 0, complete: true }))
-      .toBe("▐▌ done");
+  it("complete clears", () => {
+    expect(renderBarPlain({ slots: [], buffered: 0, pending: 0, complete: true })).toBe("");
   });
 
-  it("empty not complete", () => {
-    expect(renderBarPlain({ slots: [], buffered: 0, pending: 0, complete: false }))
-      .toBe("▐▌");
+  it("empty not complete and not pending clears", () => {
+    expect(renderBarPlain({ slots: [], buffered: 0, pending: 0, complete: false })).toBe("");
   });
 
-  it("all ready", () => {
+  it("all loaded", () => {
     const bar = renderBarPlain({ slots: [true, true, true], buffered: 3, pending: 0, complete: false });
-    expect(bar).toBe("▐███▌ 3 ready");
+    expect(bar).toBe("▐███▌ 3 loaded");
   });
 
-  it("mixed ready and pending", () => {
+  it("mixed loaded and waiting", () => {
     const bar = renderBarPlain({ slots: [true, true, false, true, false], buffered: 2, pending: 3, complete: false });
-    expect(bar).toBe("▐██·█·▌ 2 ready, 3 pending");
+    expect(bar).toBe("▐██░█░▌ 2 loaded, 3 waiting");
   });
 
-  it("all pending", () => {
+  it("all waiting", () => {
     const bar = renderBarPlain({ slots: [false, false, false], buffered: 0, pending: 3, complete: false });
-    expect(bar).toBe("▐···▌ 0 ready, 3 pending");
+    expect(bar).toBe("▐░░░▌ 0 loaded, 3 waiting");
   });
 
-  it("single ready", () => {
+  it("single loaded", () => {
     const bar = renderBarPlain({ slots: [true], buffered: 1, pending: 0, complete: false });
-    expect(bar).toBe("▐█▌ 1 ready");
+    expect(bar).toBe("▐█▌ 1 loaded");
   });
 
   it("drains as played", () => {
@@ -122,7 +119,7 @@ describe("BufferSnapshot JSON protocol", () => {
   it("renders from parsed JSON", () => {
     const json = '{"slots":[true,true,false],"buffered":2,"pending":1,"complete":false}';
     const snap: BufferSnapshot = JSON.parse(json);
-    expect(renderBarPlain(snap)).toBe("▐██·▌ 2 ready, 1 pending");
+    expect(renderBarPlain(snap)).toBe("▐██░▌ 2 loaded, 1 waiting");
   });
 });
 
@@ -152,7 +149,7 @@ describe("WS message handling", () => {
 
     expect(lastSnapshot).not.toBeNull();
     expect(lastSnapshot!.slots).toEqual([true, false, true]);
-    expect(renderBarPlain(lastSnapshot!)).toBe("▐█·█▌ 1 ready, 2 pending");
+    expect(renderBarPlain(lastSnapshot!)).toBe("▐█░█▌ 1 loaded, 2 waiting");
   });
 
   it("ignores non-buffer messages", async () => {
@@ -224,10 +221,10 @@ describe("WS message handling", () => {
     server.broadcast({ type: "buffer_state", data: { slots: [], buffered: 0, pending: 0, complete: true } });
 
     expect(bars).toEqual([
-      "▐█····▌ 1 ready, 4 pending",
-      "▐██··▌ 2 ready, 2 pending",
-      "▐██▌ 2 ready",
-      "▐▌ done",
+      "▐█░░░░▌ 1 loaded, 4 waiting",
+      "▐██░░▌ 2 loaded, 2 waiting",
+      "▐██▌ 2 loaded",
+      "",  // complete → clears
     ]);
   });
 });
