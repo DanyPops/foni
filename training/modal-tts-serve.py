@@ -61,12 +61,16 @@ class ChatterboxTTS:
         print("[tts] voice cached — ready for requests")
 
     @modal.fastapi_endpoint(method="POST")
-    async def tts(self, request: dict):
+    async def tts(self, request: dict, authorization: str = ""):
+        from fastapi import Header
         from fastapi.responses import JSONResponse, Response
         import torchaudio as ta
 
         expected = os.environ.get("FONI_TTS_TOKEN", "")
-        token = request.get("token", "")
+        # Accept Authorization: Bearer <token> header (preferred)
+        # or fall back to body token for backward compatibility.
+        bearer = authorization.removeprefix("Bearer ").strip()
+        token = bearer or request.get("token", "")
         if expected and token != expected:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
 

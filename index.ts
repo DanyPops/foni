@@ -102,6 +102,8 @@ export default async function (pi: ExtensionAPI) {
   // ── WebSocket ─────────────────────────────────────────────────────────────
 
   let wsRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  // Last chunk_id received from the server — used to resume mid-turn on reconnect.
+  let lastChunkId = 0;
 
   function connectWs(): void {
     if (ws?.readyState === WebSocket.OPEN) return;
@@ -111,11 +113,17 @@ export default async function (pi: ExtensionAPI) {
       sock.on("open", () => {
         ws = sock;
         if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
+        // Resume mid-turn after reconnect so missed chunks are replayed.
+        if (lastChunkId > 0) {
+          wsSend({ type: "resume", last_chunk_id: lastChunkId });
+        }
       });
       sock.on("message", (data: Buffer) => {
         try {
           const msg = JSON.parse(data.toString());
-          if (msg.type === "emotion") {
+          if (msg.type === "playing" && typeof msg.chunk_id === "number") {
+            if (msg.chunk_id > lastChunkId) lastChunkId = msg.chunk_id;
+          } else if (msg.type === "emotion") {
             emotionEmoji = msg.intensity >= 0.3 ? (msg.emoji ?? "") : "";
           } else if (msg.type === "buffer_state" && lastCtx) {
             updateBufferWidget(lastCtx, msg.data);
@@ -246,6 +254,7 @@ export default async function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", () => {
+    lastChunkId = 0; // new agent turn — resume from the beginning
     wsSend({ type: "reset" });
   });
 

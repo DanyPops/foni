@@ -54,18 +54,13 @@ impl ModalSynthBackend {
 #[async_trait::async_trait]
 impl SynthBackend for ModalSynthBackend {
     async fn synthesize(&self, text: &str, _model: &str) -> Result<Vec<u8>, String> {
-        let mut body = serde_json::json!({"text": text, "language": "ru"});
-        if let Some(token) = &self.token {
-            body["token"] = serde_json::Value::String(token.clone());
-        }
+        let body = serde_json::json!({"text": text, "language": "ru"});
 
-        let resp = self
-            .client
-            .post(&self.url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("TTS request: {e}"))?;
+        let mut req = self.client.post(&self.url).json(&body);
+        if let Some(token) = &self.token {
+            req = req.header("Authorization", format!("Bearer {token}"));
+        }
+        let resp = req.send().await.map_err(|e| format!("TTS request: {e}"))?;
 
         if !resp.status().is_success() {
             return Err(format!("TTS HTTP {}", resp.status()));
