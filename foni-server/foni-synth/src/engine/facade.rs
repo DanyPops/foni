@@ -67,7 +67,6 @@ pub struct PlayQueue {
     tx: tokio::sync::mpsc::Sender<(u64, usize, Vec<u8>)>,
     generation: Arc<std::sync::atomic::AtomicU64>,
     kill_tx: watch::Sender<u64>,
-    played_tx: tokio::sync::mpsc::Sender<(u64, usize)>,
 }
 
 impl PlayQueue {
@@ -102,7 +101,6 @@ impl PlayQueue {
                 tx,
                 generation,
                 kill_tx,
-                played_tx,
             },
             handle,
             played_rx,

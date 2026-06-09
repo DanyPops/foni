@@ -109,7 +109,7 @@ pub fn stretch_expression(expr: &str, repeats: usize) -> String {
     let mut positions: Vec<usize> = chars
         .iter()
         .enumerate()
-        .filter(|(_, c)| lexicon::DRAMATIC_VOWELS.contains(**c))
+        .filter(|(_, c)| lexicon::dramatic_vowels().contains(**c))
         .map(|(i, _)| i)
         .collect();
 
@@ -118,7 +118,7 @@ pub fn stretch_expression(expr: &str, repeats: usize) -> String {
     }
 
     positions.sort_by_key(|&i| {
-        lexicon::DRAMATIC_VOWELS
+        lexicon::dramatic_vowels()
             .find(chars[i])
             .unwrap_or(usize::MAX)
     });
@@ -167,7 +167,9 @@ pub fn inject_mat(
             let scores = score_placement(&s);
 
             if rng.gen::<f64>() < prob * scores.prefix {
-                let pool = bw.map(|b| b.prefix).unwrap_or(lexicon::MAT_PREFIX);
+                let pool = bw
+                    .map(|b| b.prefix)
+                    .unwrap_or_else(|| lexicon::mat_prefix());
                 s = format!("{} {s}", pick_mat(pool, stretch_prob, diversifier));
             }
 
@@ -180,7 +182,9 @@ pub fn inject_mat(
                         return clause.to_string();
                     }
                     if rng.gen::<f64>() < prob * scores.mid {
-                        let pool = bw.map(|b| b.standalone).unwrap_or(lexicon::MAT_INTERJECT);
+                        let pool = bw
+                            .map(|b| b.standalone)
+                            .unwrap_or_else(|| lexicon::mat_interject());
                         format!(" {},{}", pick_mat(pool, stretch_prob, diversifier), clause)
                     } else {
                         clause.to_string()
@@ -190,7 +194,9 @@ pub fn inject_mat(
             s = mutated.join(",");
 
             if rng.gen::<f64>() < prob * scores.suffix {
-                let pool = bw.map(|b| b.suffix).unwrap_or(lexicon::MAT_SUFFIX);
+                let pool = bw
+                    .map(|b| b.suffix)
+                    .unwrap_or_else(|| lexicon::mat_suffix());
                 let (stripped, punct) = strip_trailing_punct(&s);
                 s = format!(
                     "{stripped}{}{punct}",
@@ -228,7 +234,9 @@ pub fn inject_interject(
             let scores = score_placement(&s);
 
             if rng.gen::<f64>() < prob * scores.prefix {
-                let pool = bw.map(|b| b.prefix).unwrap_or(lexicon::INTERJECT_PREFIX);
+                let pool = bw
+                    .map(|b| b.prefix)
+                    .unwrap_or_else(|| lexicon::interject_prefix());
                 s = format!("{} {s}", diversifier.pick(pool));
             }
 
@@ -241,7 +249,9 @@ pub fn inject_interject(
                         return clause.to_string();
                     }
                     if rng.gen::<f64>() < prob * scores.mid {
-                        let pool = bw.map(|b| b.standalone).unwrap_or(lexicon::INTERJECT_MID);
+                        let pool = bw
+                            .map(|b| b.standalone)
+                            .unwrap_or_else(|| lexicon::interject_mid());
                         format!(" {},{}", diversifier.pick(pool), clause)
                     } else {
                         clause.to_string()
@@ -251,7 +261,9 @@ pub fn inject_interject(
             s = mutated.join(",");
 
             if rng.gen::<f64>() < prob * scores.suffix {
-                let pool = bw.map(|b| b.suffix).unwrap_or(lexicon::INTERJECT_SUFFIX);
+                let pool = bw
+                    .map(|b| b.suffix)
+                    .unwrap_or_else(|| lexicon::interject_suffix());
                 let (stripped, punct) = strip_trailing_punct(&s);
                 s = format!("{stripped}{}{punct}", diversifier.pick(pool));
             }
@@ -305,7 +317,7 @@ fn split_sentences(text: &str) -> Vec<&str> {
 
 pub fn apply_glossary(text: &str) -> String {
     let mut s = text.to_string();
-    for &(pattern, replacement) in lexicon::IT_GLOSSARY {
+    for &(pattern, replacement) in lexicon::it_glossary() {
         if let Ok(re) = Regex::new(&format!("(?i){pattern}")) {
             s = re.replace_all(&s, replacement).to_string();
         }

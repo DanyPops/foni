@@ -18,3 +18,255 @@ character_seed:
     - твою мать
     - конкретно
     - по-любому
+
+mat:
+  interject:
+    - блядь
+    - сука
+    - ёб твою мать
+    - хуй
+    - пиздец
+    - ёпта
+    - нихуя себе
+    - блин
+    - охуеть
+    - хуйня
+    - мудак
+    - долбоёб
+    - ёбаный
+    - твою мать
+    - заебись
+    - пиздато
+
+  prefix:
+    - "ёбаный в рот,"
+    - "какого хуя,"
+    - "мать твою,"
+    - "ни хуя себе,"
+    - "чёрт возьми,"
+    - "мать его,"
+    - "ёб твою мать,"
+    - "охуеть,"
+
+  suffix:
+    - ", блядь"
+    - ", сука"
+    - ", пиздец"
+    - ", ёб твою мать"
+    - ", ёпта"
+    - ", мать его"
+    - ", твою мать"
+    - ", хуй"
+    - ", заебись"
+    - ", нихуя себе"
+
+interject:
+  prefix:
+    - "Ого!"
+    - "Ах!"
+    - "Ух!"
+    - "Ой!"
+    - "Эй!"
+    - "Ба!"
+    - "Ишь ты!"
+    - "Ну и ну!"
+    - "Вот те на!"
+    - "О-го-го!"
+    - "Тьфу!"
+    - "Ух ты!"
+    - "Ого-го!"
+    - "Вот это да!"
+
+  suffix:
+    - ", эх!"
+    - ", уф!"
+    - ", ого!"
+    - ", ай-яй-яй!"
+    - ", вот как!"
+    - ", ишь!"
+    - ", тьфу!"
+    - ", ух ты!"
+
+  mid:
+    - "ой"
+    - "ух"
+    - "эх"
+    - "ну"
+    - "ай"
+    - "ага"
+    - "тсс"
+
+dramatic_vowels: "АаОоУуЕеЁёИиЭэЮюЯяЫы"
+
+bias:
+  aggressive:
+    prefix:
+      - "Ёбаный в рот,"
+      - "Какого хуя,"
+      - "Мать твою,"
+    suffix:
+      - ", блядь"
+      - ", сука"
+      - ", пиздец"
+      - ", ёб твою мать"
+    standalone:
+      - "блядь"
+      - "сука"
+      - "пиздец"
+      - "охуеть"
+      - "мудак"
+
+  commiseration:
+    prefix:
+      - "Ну и дела,"
+      - "Беспредел полный,"
+      - "Чёрт возьми,"
+      - "Вот те раз,"
+    suffix:
+      - ", пиздец"
+      - ", капец"
+      - ", беспредел"
+      - ", бля"
+      - ", твою мать"
+    standalone:
+      - "капец"
+      - "кирдык"
+      - "пиздец"
+      - "ёпта"
+      - "хуйня"
+
+  mockery:
+    prefix:
+      - "Ой, ну надо же,"
+      - "Смотри-ка,"
+      - "Вот те раз,"
+    suffix:
+      - ", ха!"
+      - ", нежная душа!"
+      - ", цаца!"
+      - ", слюнтяй!"
+    standalone:
+      - "Ха!"
+      - "Нежная душа!"
+      - "Цаца какая!"
+      - "Слюнтяй!"
+      - "Размазня!"
+      - "Ой, бедняжка!"
+
+  excitement:
+    prefix:
+      - "Ого,"
+      - "Ну ничего себе,"
+      - "Вот это поворот,"
+      - "Ух ты,"
+    suffix:
+      - ", нихуя себе!"
+      - ", вот это да!"
+      - ", нехило!"
+      - ", ого!"
+      - ", заебись!"
+      - ", пиздато!"
+    standalone:
+      - "Нихуя себе!"
+      - "Ого!"
+      - "Вот это да!"
+      - "Охуеть!"
+      - "Нехило!"
+      - "Заебись!"
+      - "Пиздато!"
+
+  neutral:
+    prefix:
+      - "Ёбаный в рот,"
+      - "Мать твою,"
+      - "Какого хуя,"
+    suffix:
+      - ", блядь"
+      - ", сука"
+      - ", ёпта"
+      - ", бля"
+    standalone:
+      - "блядь"
+      - "сука"
+      - "ёпта"
+      - "пиздец"
+
+it_glossary:
+  - pattern: "\\bpull\\s+request(s)?\\b"
+    replacement: "пуллреквест"
+  - pattern: "\\bcommit(s|ted|ting)?\\b"
+    replacement: "коммит"
+  - pattern: "\\bmerge(d|ing)?\\b"
+    replacement: "мерж"
+  - pattern: "\\brebase(d|ing)?\\b"
+    replacement: "ребейс"
+  - pattern: "\\bcheckout\\b"
+    replacement: "чекаут"
+  - pattern: "\\bstash\\b"
+    replacement: "стеш"
+  - pattern: "\\bpush(ed|ing)?\\b"
+    replacement: "пуш"
+  - pattern: "\\bpull(ed|ing)?\\b"
+    replacement: "пулл"
+  - pattern: "\\bfork(ed|ing)?\\b"
+    replacement: "форк"
+  - pattern: "\\bbranch(es)?\\b"
+    replacement: "ветка"
+  - pattern: "\\b[Gg]it\\b"
+    replacement: "гит"
+  - pattern: "\\bdeploy(ment|ed|ing|s)?\\b"
+    replacement: "деплой"
+  - pattern: "\\brollback\\b"
+    replacement: "роллбек"
+  - pattern: "\\bpipeline(s)?\\b"
+    replacement: "пайплайн"
+  - pattern: "\\bstaging\\b"
+    replacement: "стейджинг"
+  - pattern: "\\bprod(uction)?\\b"
+    replacement: "прод"
+  - pattern: "\\bcontainer(s)?\\b"
+    replacement: "контейнер"
+  - pattern: "\\b[Dd]ocker\\b"
+    replacement: "докер"
+  - pattern: "\\b[Kk]ubernetes\\b"
+    replacement: "кубернетес"
+  - pattern: "\\bk8s\\b"
+    replacement: "кубернетес"
+  - pattern: "\\bdebug(ging|ged)?\\b"
+    replacement: "дебаг"
+  - pattern: "\\brefactor(ing|ed)?\\b"
+    replacement: "рефактор"
+  - pattern: "\\bbuild(ing|s)?\\b"
+    replacement: "билд"
+  - pattern: "\\btest(s|ing|ed)?\\b"
+    replacement: "тест"
+  - pattern: "\\bfeature(s)?\\b"
+    replacement: "фича"
+  - pattern: "\\bbug(s|fix)?\\b"
+    replacement: "баг"
+  - pattern: "\\bfix(ed|ing|es)?\\b"
+    replacement: "фикс"
+  - pattern: "\\bcache\\b"
+    replacement: "кэш"
+  - pattern: "\\blog(s|ging)?\\b"
+    replacement: "лог"
+  - pattern: "\\bbackend\\b"
+    replacement: "бэкенд"
+  - pattern: "\\bfrontend\\b"
+    replacement: "фронтенд"
+  - pattern: "\\bserver(s)?\\b"
+    replacement: "сервер"
+  - pattern: "\\bdatabase\\b"
+    replacement: "база данных"
+  - pattern: "\\brelease(s|d)?\\b"
+    replacement: "релиз"
+  - pattern: "\\bcode\\s+review\\b"
+    replacement: "ревью"
+  - pattern: "\\breview(ed|ing|s)?\\b"
+    replacement: "ревью"
+  - pattern: "\\bsprint(s)?\\b"
+    replacement: "спринт"
+  - pattern: "\\bstandup\\b"
+    replacement: "стендап"
+  - pattern: "\\bticket(s)?\\b"
+    replacement: "тикет"

@@ -18,6 +18,8 @@
 //! let mut f = StreamFixture::connect_synth(&url).await; // real-synth queue tests
 //! ```
 
+#![allow(dead_code)] // items used by ws_cutoff and other test files
+
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};

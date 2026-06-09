@@ -1,178 +1,221 @@
+/// Lexicon — all word pools loaded from `lexicon.yaml` at startup.
+///
+/// The YAML file is compiled in as the default via `include_str!` and can be
+/// overridden at runtime via the `FONI_LEXICON_PATH` environment variable. No
+/// recompile needed to edit word lists or IT glossary entries.
+///
+/// Public interface is identical to the old `const` approach so `translator.rs`
+/// needs no changes. Strings are leaked to `'static` once at first access.
 use std::sync::OnceLock;
 
-#[derive(Debug, Clone, serde::Deserialize)]
+// ── YAML schema ───────────────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct LexiconFile {
+    character_seed: CharacterSeedRaw,
+    mat: MatPools,
+    interject: InterjectPools,
+    dramatic_vowels: String,
+    bias: BiasSets,
+    it_glossary: Vec<GlossaryEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct CharacterSeedRaw {
+    persona: String,
+    expressions: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct MatPools {
+    interject: Vec<String>,
+    prefix: Vec<String>,
+    suffix: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct InterjectPools {
+    prefix: Vec<String>,
+    suffix: Vec<String>,
+    mid: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct BiasSets {
+    aggressive: BiasRaw,
+    commiseration: BiasRaw,
+    mockery: BiasRaw,
+    excitement: BiasRaw,
+    neutral: BiasRaw,
+}
+
+#[derive(serde::Deserialize)]
+struct BiasRaw {
+    prefix: Vec<String>,
+    suffix: Vec<String>,
+    standalone: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct GlossaryEntry {
+    pub(crate) pattern: String,
+    pub(crate) replacement: String,
+}
+
+// ── Public types ──────────────────────────────────────────────────────────────
+
+/// The character seed used to prompt `ollama_commentary`.
+#[derive(Debug, Clone)]
 pub struct CharacterSeed {
     pub persona: String,
     pub expressions: Vec<String>,
 }
 
-#[derive(serde::Deserialize)]
-struct LexiconFile {
-    character_seed: CharacterSeed,
-}
-
-static LEXICON_YAML: &str = include_str!("../../lexicon.yaml");
-static CHARACTER_SEED: OnceLock<CharacterSeed> = OnceLock::new();
-
-/// Returns the compiled-in character seed, overridable via `FONI_LEXICON_PATH`.
-pub fn character_seed() -> &'static CharacterSeed {
-    CHARACTER_SEED.get_or_init(|| {
-        let yaml = std::env::var("FONI_LEXICON_PATH")
-            .ok()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .unwrap_or_else(|| LEXICON_YAML.to_string());
-        let file: LexiconFile = serde_yaml::from_str(&yaml)
-            .expect("invalid lexicon.yaml — check character_seed section");
-        file.character_seed
-    })
-}
-
-pub const MAT_INTERJECT: &[&str] = &[
-    "блядь",
-    "сука",
-    "ёб твою мать",
-    "хуй",
-    "пиздец",
-    "ёпта",
-    "нихуя себе",
-    "блин",
-];
-
-pub const MAT_PREFIX: &[&str] = &[
-    "ёбаный в рот,",
-    "какого хуя,",
-    "мать твою,",
-    "ни хуя себе,",
-    "чёрт возьми,",
-];
-
-pub const MAT_SUFFIX: &[&str] = &[
-    ", блядь",
-    ", сука",
-    ", пиздец",
-    ", ёб твою мать",
-    ", ёпта",
-    ", мать его",
-];
-
-pub const INTERJECT_PREFIX: &[&str] = &[
-    "Ого!",
-    "Ах!",
-    "Ух!",
-    "Ой!",
-    "Эй!",
-    "Ба!",
-    "Ишь ты!",
-    "Ну и ну!",
-    "Вот те на!",
-    "О-го-го!",
-];
-
-pub const INTERJECT_SUFFIX: &[&str] = &[
-    ", эх!",
-    ", уф!",
-    ", ого!",
-    ", ай-яй-яй!",
-    ", вот как!",
-    ", ишь!",
-];
-
-pub const INTERJECT_MID: &[&str] = &["ой", "ух", "эх", "ну", "ай"];
-
-pub const DRAMATIC_VOWELS: &str = "АаОоУуЕеЁёИиЭэЮюЯяЫы";
-
+/// Emotion-keyed word set — all fields are `'static` slices for zero-copy access.
 pub struct BiasWordSet {
     pub prefix: &'static [&'static str],
     pub suffix: &'static [&'static str],
     pub standalone: &'static [&'static str],
 }
 
-pub const BIAS_AGGRESSIVE: BiasWordSet = BiasWordSet {
-    suffix: &[", блядь", ", сука", ", пиздец", ", ёб твою мать"],
-    standalone: &["блядь", "сука", "пиздец", "охуеть"],
-    prefix: &["Ёбаный в рот,", "Какого хуя,", "Мать твою,"],
-};
+// ── Runtime lexicon ───────────────────────────────────────────────────────────
 
-pub const BIAS_COMMISERATION: BiasWordSet = BiasWordSet {
-    suffix: &[", пиздец", ", капец", ", беспредел", ", бля"],
-    standalone: &["капец", "кирдык", "пиздец", "ёпта"],
-    prefix: &["Ну и дела,", "Беспредел полный,", "Чёрт возьми,"],
-};
+struct Lexicon {
+    character_seed: CharacterSeed,
 
-pub const BIAS_MOCKERY: BiasWordSet = BiasWordSet {
-    suffix: &[", ха!", ", нежная душа!", ", цаца!", ", слюнтяй!"],
-    standalone: &[
-        "Ха!",
-        "Нежная душа!",
-        "Цаца какая!",
-        "Слюнтяй!",
-        "Размазня!",
-        "Ой, бедняжка!",
-    ],
-    prefix: &["Ой, ну надо же,", "Смотри-ка,", "Вот те раз,"],
-};
+    mat_interject: &'static [&'static str],
+    mat_prefix: &'static [&'static str],
+    mat_suffix: &'static [&'static str],
 
-pub const BIAS_EXCITEMENT: BiasWordSet = BiasWordSet {
-    suffix: &[", нихуя себе!", ", вот это да!", ", нехило!", ", ого!"],
-    standalone: &["Нихуя себе!", "Ого!", "Вот это да!", "Охуеть!", "Нехило!"],
-    prefix: &["Ого,", "Ну ничего себе,", "Вот это поворот,"],
-};
+    interject_prefix: &'static [&'static str],
+    interject_suffix: &'static [&'static str],
+    interject_mid: &'static [&'static str],
 
-pub const BIAS_NEUTRAL: BiasWordSet = BiasWordSet {
-    suffix: &[", блядь", ", сука", ", ёпта", ", бля"],
-    standalone: &["блядь", "сука", "ёпта", "пиздец"],
-    prefix: &["Ёбаный в рот,", "Мать твою,", "Какого хуя,"],
-};
+    dramatic_vowels: &'static str,
 
-pub fn bias_words(bias: super::emotion::WordBias) -> &'static BiasWordSet {
-    use super::emotion::WordBias;
-    match bias {
-        WordBias::Aggressive => &BIAS_AGGRESSIVE,
-        WordBias::Commiseration => &BIAS_COMMISERATION,
-        WordBias::Mockery => &BIAS_MOCKERY,
-        WordBias::Excitement => &BIAS_EXCITEMENT,
-        WordBias::Neutral => &BIAS_NEUTRAL,
+    bias_aggressive: BiasWordSet,
+    bias_commiseration: BiasWordSet,
+    bias_mockery: BiasWordSet,
+    bias_excitement: BiasWordSet,
+    bias_neutral: BiasWordSet,
+
+    it_glossary: &'static [(&'static str, &'static str)],
+}
+
+static LEXICON_YAML: &str = include_str!("../../lexicon.yaml");
+static LEXICON: OnceLock<Lexicon> = OnceLock::new();
+
+fn load() -> Lexicon {
+    let raw_yaml = std::env::var("FONI_LEXICON_PATH")
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_else(|| LEXICON_YAML.to_string());
+
+    let file: LexiconFile = serde_yaml::from_str(&raw_yaml).expect("invalid lexicon.yaml");
+
+    Lexicon {
+        character_seed: CharacterSeed {
+            persona: file.character_seed.persona,
+            expressions: file.character_seed.expressions,
+        },
+
+        mat_interject: leak_strs(file.mat.interject),
+        mat_prefix: leak_strs(file.mat.prefix),
+        mat_suffix: leak_strs(file.mat.suffix),
+
+        interject_prefix: leak_strs(file.interject.prefix),
+        interject_suffix: leak_strs(file.interject.suffix),
+        interject_mid: leak_strs(file.interject.mid),
+
+        dramatic_vowels: leak_str(file.dramatic_vowels),
+
+        bias_aggressive: leak_bias(file.bias.aggressive),
+        bias_commiseration: leak_bias(file.bias.commiseration),
+        bias_mockery: leak_bias(file.bias.mockery),
+        bias_excitement: leak_bias(file.bias.excitement),
+        bias_neutral: leak_bias(file.bias.neutral),
+
+        it_glossary: leak_glossary(file.it_glossary),
     }
 }
 
-pub const IT_GLOSSARY: &[(&str, &str)] = &[
-    (r"\bpull\s+request(s)?\b", "пуллреквест"),
-    (r"\bcommit(s|ted|ting)?\b", "коммит"),
-    (r"\bmerge(d|ing)?\b", "мерж"),
-    (r"\brebase(d|ing)?\b", "ребейс"),
-    (r"\bcheckout\b", "чекаут"),
-    (r"\bstash\b", "стеш"),
-    (r"\bpush(ed|ing)?\b", "пуш"),
-    (r"\bpull(ed|ing)?\b", "пулл"),
-    (r"\bfork(ed|ing)?\b", "форк"),
-    (r"\bbranch(es)?\b", "ветка"),
-    (r"\b[Gg]it\b", "гит"),
-    (r"\bdeploy(ment|ed|ing|s)?\b", "деплой"),
-    (r"\brollback\b", "роллбек"),
-    (r"\bpipeline(s)?\b", "пайплайн"),
-    (r"\bstaging\b", "стейджинг"),
-    (r"\bprod(uction)?\b", "прод"),
-    (r"\bcontainer(s)?\b", "контейнер"),
-    (r"\b[Dd]ocker\b", "докер"),
-    (r"\b[Kk]ubernetes\b", "кубернетес"),
-    (r"\bk8s\b", "кубернетес"),
-    (r"\bdebug(ging|ged)?\b", "дебаг"),
-    (r"\brefactor(ing|ed)?\b", "рефактор"),
-    (r"\bbuild(ing|s)?\b", "билд"),
-    (r"\btest(s|ing|ed)?\b", "тест"),
-    (r"\bfeature(s)?\b", "фича"),
-    (r"\bbug(s|fix)?\b", "баг"),
-    (r"\bfix(ed|ing|es)?\b", "фикс"),
-    (r"\bcache\b", "кэш"),
-    (r"\blog(s|ging)?\b", "лог"),
-    (r"\bbackend\b", "бэкенд"),
-    (r"\bfrontend\b", "фронтенд"),
-    (r"\bserver(s)?\b", "сервер"),
-    (r"\bdatabase\b", "база данных"),
-    (r"\brelease(s|d)?\b", "релиз"),
-    (r"\bcode\s+review\b", "ревью"),
-    (r"\breview(ed|ing|s)?\b", "ревью"),
-    (r"\bsprint(s)?\b", "спринт"),
-    (r"\bstandup\b", "стендап"),
-    (r"\bticket(s)?\b", "тикет"),
-];
+fn lexicon() -> &'static Lexicon {
+    LEXICON.get_or_init(load)
+}
+
+// ── Leak helpers ──────────────────────────────────────────────────────────────
+
+fn leak_str(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+fn leak_strs(v: Vec<String>) -> &'static [&'static str] {
+    let leaked: Vec<&'static str> = v.into_iter().map(leak_str).collect();
+    Box::leak(leaked.into_boxed_slice())
+}
+
+fn leak_bias(raw: BiasRaw) -> BiasWordSet {
+    BiasWordSet {
+        prefix: leak_strs(raw.prefix),
+        suffix: leak_strs(raw.suffix),
+        standalone: leak_strs(raw.standalone),
+    }
+}
+
+fn leak_glossary(entries: Vec<GlossaryEntry>) -> &'static [(&'static str, &'static str)] {
+    let pairs: Vec<(&'static str, &'static str)> = entries
+        .into_iter()
+        .map(|e| (leak_str(e.pattern), leak_str(e.replacement)))
+        .collect();
+    Box::leak(pairs.into_boxed_slice())
+}
+
+// ── Public accessors — same names as the old `const` items ───────────────────
+
+pub fn character_seed() -> &'static CharacterSeed {
+    &lexicon().character_seed
+}
+
+pub fn mat_interject() -> &'static [&'static str] {
+    lexicon().mat_interject
+}
+
+pub fn mat_prefix() -> &'static [&'static str] {
+    lexicon().mat_prefix
+}
+
+pub fn mat_suffix() -> &'static [&'static str] {
+    lexicon().mat_suffix
+}
+
+pub fn interject_prefix() -> &'static [&'static str] {
+    lexicon().interject_prefix
+}
+
+pub fn interject_suffix() -> &'static [&'static str] {
+    lexicon().interject_suffix
+}
+
+pub fn interject_mid() -> &'static [&'static str] {
+    lexicon().interject_mid
+}
+
+pub fn dramatic_vowels() -> &'static str {
+    lexicon().dramatic_vowels
+}
+
+pub fn bias_words(bias: super::emotion::WordBias) -> &'static BiasWordSet {
+    use super::emotion::WordBias;
+    let l = lexicon();
+    match bias {
+        WordBias::Aggressive => &l.bias_aggressive,
+        WordBias::Commiseration => &l.bias_commiseration,
+        WordBias::Mockery => &l.bias_mockery,
+        WordBias::Excitement => &l.bias_excitement,
+        WordBias::Neutral => &l.bias_neutral,
+    }
+}
+
+pub fn it_glossary() -> &'static [(&'static str, &'static str)] {
+    lexicon().it_glossary
+}

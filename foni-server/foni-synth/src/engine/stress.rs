@@ -233,10 +233,24 @@ impl RuaccentAnnotator {
 
 impl StressAnnotator for RuaccentAnnotator {
     fn annotate(&self, text: &str) -> String {
-        // block_in_place yields the tokio thread to the scheduler while we
-        // wait on the async HTTP call, preventing executor starvation.
+        use tokio::runtime::{Handle, RuntimeFlavor};
+
+        // block_in_place is only valid on a multi-thread Tokio runtime.
+        // On current_thread (e.g. #[tokio::test]) or outside any runtime,
+        // fall through to the dictionary annotator immediately.
+        let in_multi_thread = Handle::try_current()
+            .map(|h| h.runtime_flavor() == RuntimeFlavor::MultiThread)
+            .unwrap_or(false);
+
+        if !in_multi_thread {
+            tracing::debug!("ruaccent: not in multi-thread runtime, using dictionary");
+            return self.fallback.annotate(text);
+        }
+
+        // block_in_place yields the worker thread to the scheduler while we
+        // wait for the async HTTP call, preventing executor starvation.
         let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(ruaccent_call_async(&self.url, text))
+            Handle::current().block_on(ruaccent_call_async(&self.url, text))
         });
         match result {
             Ok(annotated) => annotated,
