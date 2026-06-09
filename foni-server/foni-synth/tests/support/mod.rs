@@ -32,10 +32,24 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, Web
 /// No env-var side effects — `FONI_DRY_RUN` is explicitly cleared so
 /// per-connection `set_config {dry_run}` controls the mode.
 pub async fn start_mock_server() -> String {
+    start_slow_mock_server(0).await
+}
+
+/// Spawn a foni-synth server whose [`MockSynthBackend`] artificially delays
+/// every synthesis call by `delay_ms` milliseconds.
+///
+/// Used to widen the window between synthesis-start and synthesis-complete
+/// so control messages (reset/mute) can be sent while synthesis is in flight.
+pub async fn start_slow_mock_server(delay_ms: u64) -> String {
+    use std::sync::Arc;
     std::env::remove_var("FONI_DRY_RUN");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let synth = foni_synth::engine::synth_backend::mock_backend();
+    let synth: foni_synth::engine::synth_backend::SharedSynth = if delay_ms == 0 {
+        foni_synth::engine::synth_backend::mock_backend()
+    } else {
+        Arc::new(foni_synth::engine::synth_backend::MockSynthBackend::with_delay(delay_ms))
+    };
     let app = foni_synth::build_router_with_synth(synth).await;
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     format!("ws://127.0.0.1:{}/ws", addr.port())

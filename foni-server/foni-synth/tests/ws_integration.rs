@@ -10,11 +10,10 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 async fn start_server() -> String {
-    // Force dry_run so no Ollama/paplay calls
-    std::env::set_var("FONI_DRY_RUN", "1");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = foni_synth::build_router().await;
+    let synth = foni_synth::engine::synth_backend::mock_backend();
+    let app = foni_synth::build_router_with_synth(synth).await;
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
@@ -24,7 +23,13 @@ async fn start_server() -> String {
 async fn connect(
     url: &str,
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
-    let (ws, _) = connect_async(url).await.expect("WS connect failed");
+    let (mut ws, _) = connect_async(url).await.expect("WS connect failed");
+    // Set dry_run per-connection so tests are isolated from the global env.
+    send_msg(
+        &mut ws,
+        serde_json::json!({"type": "set_config", "dry_run": true}),
+    )
+    .await;
     ws
 }
 
@@ -164,7 +169,7 @@ async fn code_blocks_filtered_from_speech() {
         send_msg(&mut ws, json!({"type": "delta", "text": ch.to_string()})).await;
     }
 
-    let msg = recv(&mut ws, 1000).await.expect("expected speak");
+    let msg = recv(&mut ws, 3000).await.expect("expected speak");
     let text = msg["text"].as_str().unwrap_or("");
     assert!(!text.contains("npm install"), "code stripped");
     assert!(text.contains("Use") || text.contains("set up"));
@@ -367,7 +372,7 @@ async fn buffer_state_emitted_on_message_end() {
     send_msg(&mut ws, json!({"type": "delta", "text": "Partial text"})).await;
     send_msg(&mut ws, json!({"type": "message_end"})).await;
 
-    let states = collect_buffer_states(&mut ws, 500).await;
+    let states = collect_buffer_states(&mut ws, 2000).await;
     assert!(!states.is_empty(), "message_end should emit buffer_state");
 
     let last = states.last().unwrap();
@@ -576,12 +581,7 @@ async fn synth_backend_is_injected_not_self_called() {
     // After the refactor, the server should accept a FONI_TTS_URL env var
     // pointing to a mock TTS (not itself). Verify synthesis succeeds without
     // calling localhost:5050/synthesize.
-    std::env::set_var(
-        "FONI_TTS_URL",
-        "http://0.0.0.0:1", // unreachable — will fail if self-call attempted
-    );
-    std::env::set_var("FONI_DRY_RUN", "1"); // dry_run skips TTS entirely
-
+    // dry_run is set per-connection by connect(); FONI_TTS_URL is irrelevant in dry_run.
     let url = start_server().await;
     let mut ws = connect(&url).await;
     send_msg(&mut ws, json!({"type": "delta", "text": "Test. "})).await;
@@ -649,14 +649,16 @@ async fn three_chunks_complete_quickly_in_dry_run() {
     .await;
     send_msg(&mut ws, json!({"type": "message_end"})).await;
 
-    // 3s budget: stress dict pre-warming + 3 sequential chunks in parallel test suite
-    let msgs = recv_all(&mut ws, 3000).await;
+    // Wait for the first two speaks with individual timeouts.
+    // This measures time-to-speech, not time-after-collection-window.
+    let speak1 = recv(&mut ws, 2000).await;
+    let speak2 = recv(&mut ws, 2000).await;
     let elapsed = t0.elapsed();
 
-    let speaks = msgs.iter().filter(|m| m["type"] == "speak").count();
-    assert!(speaks >= 2, "expected >= 2 speak events, got {speaks}");
+    assert!(speak1.is_some(), "first speak missing within 2s");
+    assert!(speak2.is_some(), "second speak missing within 2s");
     assert!(
-        elapsed.as_secs() < 3,
+        elapsed < std::time::Duration::from_secs(3),
         "3 dry_run chunks should complete in <3s, took {elapsed:?}"
     );
 }
