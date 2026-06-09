@@ -66,13 +66,16 @@ fmt:
 
 # ── Server management ──────────────────────────────────────────────────────────
 
+# Build release binary and redeploy the running service.
+[group('server')]
+deploy: build-release restart
+
 # Start foni-synth via systemd (release binary, auto-restart)
 [group('server')]
 start:
     systemctl --user start foni-synth
-    @echo "Waiting for server..."
-    @sleep 5
-    @curl -sf {{server_url}}/params > /dev/null && echo "✓ up" || echo "✗ not responding"
+    @curl --retry 30 --retry-delay 1 --retry-connrefused -sf {{server_url}}/params > /dev/null \
+        && echo "✓ up" || echo "✗ not responding"
 
 # Stop foni-synth
 [group('server')]
