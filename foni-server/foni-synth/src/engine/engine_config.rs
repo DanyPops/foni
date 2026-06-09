@@ -136,7 +136,7 @@ impl Default for FoniConfig {
 }
 
 fn default_llm_commentary_timeout_ms() -> u64 {
-    800
+    8_000
 }
 
 fn default_injection_dice() -> u32 {

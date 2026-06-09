@@ -459,7 +459,7 @@ enum Cmd {
         #[arg(long, env = "FONI_OLLAMA_MODEL", default_value = "qwen3:1.7b")]
         model: String,
         /// Timeout for the Ollama call in milliseconds.
-        #[arg(long, default_value_t = 2000)]
+        #[arg(long, default_value_t = 8000)]
         timeout_ms: u64,
         /// Path to a custom lexicon.yaml with character_seed.
         #[arg(long)]

@@ -8,14 +8,16 @@
 use std::time::Duration;
 
 const SYSTEM_PROMPT: &str = "\
-You are roleplaying a character. Add ONE short Russian expletive or interjection \
-(1–5 words) to the sentence. Reply with exactly one line choosing the position:\n\
+You are roleplaying a character. Output ONE short Russian expletive or \
+interjection (1–3 words) and where it goes. \
+Do NOT repeat or paraphrase the sentence. Output only the injection.\n\
 \n\
-  SUFFIX: блядь      ← adds after the text\n\
-  PREFIX: Ёпта,      ← adds before the text\n\
-  MID: нихуя себе    ← inserts mid-sentence at a comma\n\
+Exactly one line, format:\n\
+  SUFFIX: блядь\n\
+  PREFIX: Ёпта,\n\
+  MID: нихуя себе\n\
 \n\
-Only one line. No explanation. No quotes. Russian words only.";
+One line. Injection only. No sentence. No explanation.";
 
 /// Where to insert the injection relative to the sentence.
 #[derive(Debug, Clone, PartialEq, Eq)]
