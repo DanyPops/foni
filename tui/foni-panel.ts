@@ -32,6 +32,7 @@ export interface FoniPanelState {
   matProb: number;
   interjectEnabled: boolean;
   interjectProb: number;
+  warm: boolean;
 }
 
 export interface FoniPanelActions {
@@ -113,9 +114,14 @@ class FoniPanel {
 
       let valueStr = "";
       switch (item.id) {
-        case "enabled":
-          valueStr = s.enabled ? fg("32", "ON ") : fg("31", "OFF");
+        case "enabled": {
+          let dot: string;
+          if (!s.enabled)   dot = dim("○");
+          else if (!s.warm) dot = fg("33", "◑");
+          else              dot = fg("32", "●");
+          valueStr = (s.enabled ? fg("32", "ON ") : fg("31", "OFF")) + dot;
           break;
+        }
         case "muted":
           valueStr = s.muted ? fg("33", "🔇 ") : dim("---");
           break;

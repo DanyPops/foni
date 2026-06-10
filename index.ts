@@ -65,6 +65,7 @@ export default async function (pi: ExtensionAPI) {
   let ws: WebSocket | null = null;
   let muted = false;
   let emotionEmoji = "";
+  let warm = false;
   let lastCtx: { ui: any } | null = null;
 
   function updateBufferWidget(ctx: { ui: any }, snap: BufferSnapshot): void {
@@ -131,6 +132,9 @@ export default async function (pi: ExtensionAPI) {
             lastCtx.ui.setStatus("tts-warm", lastCtx.ui.theme.fg("warning", "⏳ warming TTS…"));
           } else if (msg.type === "prewarm_done" && lastCtx) {
             lastCtx.ui.setStatus("tts-warm", undefined);
+          } else if (msg.type === "warm") {
+            warm = msg.warm as boolean;
+            if (lastCtx) updateStatus(lastCtx);
           }
         } catch { /* malformed */ }
       });
@@ -157,7 +161,11 @@ export default async function (pi: ExtensionAPI) {
 
   function updateStatus(ctx: { ui: { setStatus: Function; theme: any } }): void {
     const { theme } = ctx.ui;
-    if (!config.enabled) { ctx.ui.setStatus("tts", undefined); return; }
+    if (!config.enabled) {
+      ctx.ui.setStatus("tts", theme.fg("dim", "TTS○"));
+      return;
+    }
+    const dot = warm ? theme.fg("success", "●") : theme.fg("warning", "◑");
     const lang = config.inputLang === config.outputLang
       ? config.outputLang.toUpperCase()
       : `${config.inputLang.toUpperCase()}→${config.outputLang.toUpperCase()}`;
@@ -166,7 +174,7 @@ export default async function (pi: ExtensionAPI) {
     const emotion = emotionEmoji ? ` ${emotionEmoji}` : "";
     ctx.ui.setStatus(
       "tts",
-      theme.fg("accent", "TTS") + theme.fg("dim", ` ${muted ? "🔇 " : ""}synth${config.rvcModel ? `+${config.rvcModel}` : ""}${mat}${ij} ${lang}${emotion}`),
+      theme.fg("accent", "TTS") + dot + theme.fg("dim", ` ${muted ? "🔇 " : ""}synth${config.rvcModel ? `+${config.rvcModel}` : ""}${mat}${ij} ${lang}${emotion}`),
     );
   }
 
@@ -219,6 +227,7 @@ export default async function (pi: ExtensionAPI) {
     ws = null;
     if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
     lastCtx = null;
+    warm = false;
   });
 
   pi.on("session_start", (_event, ctx) => {
@@ -272,6 +281,7 @@ export default async function (pi: ExtensionAPI) {
       matProb: config.matProb,
       interjectEnabled: config.interjectEnabled,
       interjectProb: config.interjectProb,
+      warm,
     };
   }
 
@@ -280,6 +290,7 @@ export default async function (pi: ExtensionAPI) {
       toggleEnabled() {
         config.enabled = !config.enabled;
         wsSend({ type: "set_config", enabled: config.enabled });
+        if (config.enabled && !warm) wsSend({ type: "prewarm" });
         updateStatus(ctx);
       },
       toggleMuted() { muted = !muted; updateStatus(ctx); },
@@ -392,7 +403,7 @@ export default async function (pi: ExtensionAPI) {
         return;
       }
 
-      if (sub === "enable")  { config.enabled = true;  wsSend({ type: "set_config", enabled: true });  updateStatus(ctx); ctx.ui.notify("TTS enabled", "info"); return; }
+      if (sub === "enable")  { config.enabled = true;  wsSend({ type: "set_config", enabled: true }); if (!warm) wsSend({ type: "prewarm" }); updateStatus(ctx); ctx.ui.notify("TTS enabled", "info"); return; }
       if (sub === "disable") { config.enabled = false; wsSend({ type: "set_config", enabled: false }); updateStatus(ctx); ctx.ui.notify("TTS disabled", "info"); return; }
       if (sub === "stop")    { wsSend({ type: "reset" }); ctx.ui.notify("TTS stopped", "info"); return; }
       if (sub === "mute")    { muted = true;  updateStatus(ctx); ctx.ui.notify("TTS muted", "info"); return; }

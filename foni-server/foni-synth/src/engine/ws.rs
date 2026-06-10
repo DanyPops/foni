@@ -76,6 +76,7 @@ struct SessionCtx {
     annotator: Box<dyn StressAnnotator>,
     chunk_queue: VecDeque<ChunkJob>,
     stream_log: VecDeque<(usize, String)>,
+    is_warm: bool,
 }
 
 // ── Socket handler ────────────────────────────────────────────────────────────
@@ -123,6 +124,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
         annotator,
         chunk_queue: VecDeque::new(),
         stream_log: VecDeque::with_capacity(STREAM_LOG_CAPACITY),
+        is_warm: false,
     };
 
     loop {
@@ -290,6 +292,7 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                                 cache
                                     .put(cache_key(phrase, &ctx.config.rvc_model), wav)
                                     .await;
+                                ctx.is_warm = true;
                                 tracing::info!("prewarm: complete");
                             }
                             Err(e) => tracing::warn!(error = %e, "prewarm: failed"),
@@ -297,6 +300,11 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         let _ = tx
                             .send(Message::Text(
                                 serde_json::json!({"type": "prewarm_done"}).to_string(),
+                            ))
+                            .await;
+                        let _ = tx
+                            .send(Message::Text(
+                                serde_json::json!({"type": "warm", "warm": ctx.is_warm}).to_string(),
                             ))
                             .await;
                     }
@@ -335,7 +343,13 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         ctx.buffer = PlaybackBuffer::new();
                         ctx.chunk_counter = 0;
                         ctx.stream_log.clear();
+                        ctx.is_warm = false;
                         emit_buffer_state(&ctx.buffer, &mut tx).await;
+                        let _ = tx
+                            .send(Message::Text(
+                                serde_json::json!({"type": "warm", "warm": false}).to_string(),
+                            ))
+                            .await;
                     }
                     "parse_train_logs" => {
                         if let Some(text) = msg["text"].as_str() {

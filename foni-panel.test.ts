@@ -25,6 +25,7 @@ function makeState(o: Partial<FoniPanelState> = {}): FoniPanelState {
     voice: "sidorovich", inputLang: "en", outputLang: "ru",
     matEnabled: true, matProb: 0.35,
     interjectEnabled: true, interjectProb: 0.25,
+    warm: false,
     ...o,
   };
 }
@@ -155,6 +156,32 @@ describe("FoniPanel keyboard", () => {
     comp.invalidate();
     // Should re-render without throwing
     expect(() => comp.render(54)).not.toThrow();
+  });
+});
+
+describe("FoniPanel readiness indicator — ○ OFF · ◑ BOOTING · ● ON", () => {
+  it("OFF (disabled) shows ○", () => {
+    const { comp } = capturePanel(makeState({ enabled: false }), makeActions());
+    const lines = comp.render(54).map(stripAnsi);
+    const ttsLine = lines.find(l => l.includes("OFF"));
+    expect(ttsLine).toBeDefined();
+    expect(ttsLine).toContain("○");
+  });
+
+  it("BOOTING (enabled+cold) shows ◑", () => {
+    const { comp } = capturePanel(makeState({ enabled: true, warm: false }), makeActions());
+    const lines = comp.render(54).map(stripAnsi);
+    const ttsLine = lines.find(l => l.includes("ON"));
+    expect(ttsLine).toBeDefined();
+    expect(ttsLine).toContain("◑");
+  });
+
+  it("ON (enabled+warm) shows ●", () => {
+    const { comp } = capturePanel(makeState({ enabled: true, warm: true }), makeActions());
+    const lines = comp.render(54).map(stripAnsi);
+    const ttsLine = lines.find(l => l.includes("ON"));
+    expect(ttsLine).toBeDefined();
+    expect(ttsLine).toContain("●");
   });
 });
 
