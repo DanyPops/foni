@@ -51,7 +51,8 @@ async fn recv(
         match tokio::time::timeout_at(deadline, ws.next()).await {
             Ok(Some(Ok(Message::Text(t)))) => {
                 if let Ok(msg) = serde_json::from_str::<Value>(&t) {
-                    if msg["type"] == "buffer_state" {
+                    // Skip infrastructure events — tests assert on content only.
+                    if msg["type"] == "buffer_state" || msg["type"] == "warm" {
                         continue;
                     }
                     return Some(msg);
@@ -690,5 +691,77 @@ async fn prewarm_sends_start_then_done() {
     assert!(
         start_pos < done_pos,
         "prewarm_start must precede prewarm_done"
+    );
+}
+
+// ── Warm indicator ─────────────────────────────────────────────────────────────
+
+/// After a successful prewarm the server must emit {"type":"warm","warm":true}.
+/// Uses MockSynthBackend — zero Modal calls.
+#[tokio::test]
+async fn prewarm_emits_warm_true() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    send_msg(&mut ws, json!({"type": "prewarm"})).await;
+
+    let msgs = recv_all(&mut ws, 2000).await;
+    let warm_msg = msgs.iter().find(|m| m["type"] == "warm");
+    assert!(
+        warm_msg.is_some(),
+        "should emit warm event after prewarm, got: {msgs:?}"
+    );
+    assert_eq!(
+        warm_msg.unwrap()["warm"],
+        true,
+        "warm must be true after successful prewarm"
+    );
+}
+
+/// prewarm with enabled=false must be silently skipped — no prewarm_start, no warm event.
+#[tokio::test]
+async fn prewarm_skipped_when_disabled() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    send_msg(&mut ws, json!({"type": "set_config", "enabled": false})).await;
+    send_msg(&mut ws, json!({"type": "prewarm"})).await;
+
+    let msgs = recv_all(&mut ws, 500).await;
+    let has_start = msgs.iter().any(|m| m["type"] == "prewarm_start");
+    let has_warm = msgs.iter().any(|m| m["type"] == "warm");
+    assert!(
+        !has_start,
+        "prewarm_start must not fire when disabled, got: {msgs:?}"
+    );
+    assert!(
+        !has_warm,
+        "warm event must not fire when disabled, got: {msgs:?}"
+    );
+}
+
+/// reset must emit {"type":"warm","warm":false} so the frontend shows ○ again.
+#[tokio::test]
+async fn reset_emits_warm_false() {
+    let url = start_server().await;
+    let mut ws = connect(&url).await;
+
+    // Warm up first.
+    send_msg(&mut ws, json!({"type": "prewarm"})).await;
+    recv_all(&mut ws, 2000).await;
+
+    // Reset — must go cold.
+    send_msg(&mut ws, json!({"type": "reset"})).await;
+
+    let msgs = recv_all(&mut ws, 500).await;
+    let warm_msg = msgs.iter().find(|m| m["type"] == "warm");
+    assert!(
+        warm_msg.is_some(),
+        "reset should emit warm event, got: {msgs:?}"
+    );
+    assert_eq!(
+        warm_msg.unwrap()["warm"],
+        false,
+        "reset must set warm=false"
     );
 }

@@ -279,6 +279,8 @@ describe("WS protocol — outbound messages", () => {
 
   it("assistant text_delta → {type:delta} sent", async () => {
     await driver.boot();
+    await driver.runCmd("enable");
+    driver.clearSent();
     driver.emit("message_update", {
       message: { role: "assistant" },
       assistantMessageEvent: { type: "text_delta", delta: "Hello" },
@@ -351,8 +353,9 @@ describe("WS protocol — outbound messages", () => {
     expect(driver.wsSent()).toContainEqual({ type: "config", key: "lang", value: "en,ru" });
   });
 
-  it("panel space on TTS row → {type:set_config, enabled:false} sent (default on)", async () => {
+  it("panel space on TTS row → {type:set_config, enabled:false} sent", async () => {
     await driver.boot();
+    await driver.runCmd("enable"); // start from ON so toggle goes ON→OFF
     await driver.openPanel();
     driver.clearSent();
     await driver.press(KEY.space); // cursor=0 = TTS/enabled
@@ -432,6 +435,7 @@ describe("Extension → UI side-effects", () => {
 
   it("/tts mute → setStatus('tts') contains 🔇", async () => {
     await driver.boot();
+    await driver.runCmd("enable");
     vi.clearAllMocks();
     await driver.runCmd("mute");
     const calls = (driver.ctx.ui.setStatus as ReturnType<typeof vi.fn>).mock.calls;
@@ -451,6 +455,7 @@ describe("Extension → UI side-effects", () => {
 
   it("/tts lang en ru → setStatus('tts') contains EN→RU", async () => {
     await driver.boot();
+    await driver.runCmd("enable");
     vi.clearAllMocks();
     await driver.runCmd("lang en ru");
     const calls = (driver.ctx.ui.setStatus as ReturnType<typeof vi.fn>).mock.calls;
@@ -485,6 +490,7 @@ describe("Extension → UI side-effects", () => {
 describe("Panel keyboard → backend", () => {
   beforeEach(async () => {
     await driver.boot();
+    await driver.runCmd("enable"); // start from ON so panel toggle tests are deterministic
     await driver.openPanel();
   });
 
@@ -495,7 +501,7 @@ describe("Panel keyboard → backend", () => {
     expect(output).toContain("╯");
   });
 
-  it("TTS shows ON initially (default config has enabled=true)", () => {
+  it("TTS shows ON initially (enabled via beforeEach)", () => {
     expect(driver.render()).toContain("ON");
   });
 

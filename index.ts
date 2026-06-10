@@ -32,7 +32,7 @@ interface FoniConfig {
 }
 
 const DEFAULT_CONFIG: FoniConfig = {
-  enabled: true,
+  enabled: false,
   voice: "ru",
   speed: 1.0,
   inputLang: "en",
@@ -226,7 +226,7 @@ export default async function (pi: ExtensionAPI) {
     connectWs();
     loadMixerSession().then(() => updateStatus(ctx));
     updateStatus(ctx);
-    wsSend({ type: "prewarm" });
+    if (config.enabled) wsSend({ type: "prewarm" });
   });
 
   pi.on("message_update", (_event, _ctx) => {

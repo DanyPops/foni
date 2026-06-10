@@ -268,6 +268,9 @@ async fn handle_socket(socket: WebSocket, app_state: AppState) {
                         }
                     }
                     "prewarm" => {
+                        if !ctx.config.enabled {
+                            continue;
+                        }
                         let _ = tx
                             .send(Message::Text(
                                 serde_json::json!({"type": "prewarm_start"}).to_string(),
