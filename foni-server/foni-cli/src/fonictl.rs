@@ -531,6 +531,9 @@ enum Cmd {
         /// Play after rendering
         #[arg(short, long)]
         play: bool,
+        /// Max concurrent synthesis requests (default matches Modal max_containers)
+        #[arg(long, default_value_t = 5)]
+        concurrency: usize,
     },
 
     /// Real API round-trip benchmark — sequential vs parallel, jitter analysis
@@ -979,8 +982,9 @@ fn main() {
             manifest,
             out,
             play,
+            concurrency,
         } => {
-            if let Err(e) = cmd_render::cmd_render(server, &manifest, &out, play) {
+            if let Err(e) = cmd_render::cmd_render(server, &manifest, &out, play, concurrency) {
                 tracing::error!("{e}");
             }
         }

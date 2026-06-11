@@ -1,10 +1,16 @@
 //! Render a manifest — synthesize each beat with its shade, concatenate to one file.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
+use std::time::Instant;
 
 use foni_synth::engine::expression_palette::{ChatterboxColorset, Colorset};
+use futures::future::join_all;
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
+use tokio::sync::Semaphore;
 use tracing::info;
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
@@ -12,6 +18,8 @@ pub struct Manifest {
     pub title: String,
     #[serde(default = "default_voice")]
     pub voice: String,
+    /// Voice model name — maps to training/models/<model>/reference.wav + lang.
+    pub model: Option<String>,
     pub beats: Vec<ManifestBeat>,
 }
 
@@ -58,17 +66,20 @@ pub fn resolve_manifest(manifest: &Manifest) -> Vec<ResolvedBeat> {
 }
 
 fn resolve_shade(colorset: &dyn Colorset, name: &str) -> (f32, f32, f32) {
-    match colorset.resolve(name) {
-        Some(s) => (
+    // 1. Named alias.
+    if let Some(s) = colorset.resolve(name) {
+        return (
             s.params.get("exaggeration").copied().unwrap_or(0.5),
             s.params.get("cfg_weight").copied().unwrap_or(0.5),
             s.params.get("temperature").copied().unwrap_or(0.8),
-        ),
-        None => {
-            tracing::warn!(shade = name, "unknown shade, using defaults");
-            (0.5, 0.5, 0.8)
-        }
+        );
     }
+    // 2. Label arithmetic: "Intense+Loose+Hot" — any order, case-insensitive.
+    if let Some(result) = foni_synth::engine::expression_palette::resolve_labels(name) {
+        return result;
+    }
+    tracing::warn!(shade = name, "unknown shade, using defaults");
+    (0.5, 0.5, 0.8)
 }
 
 pub fn load_manifest(path: &Path) -> Result<Manifest, String> {
@@ -76,11 +87,48 @@ pub fn load_manifest(path: &Path) -> Result<Manifest, String> {
     serde_json::from_str(&raw).map_err(|e| format!("parse manifest: {e}"))
 }
 
+/// Synthesize `count` items concurrently, bounded by `concurrency`.
+/// `task(i)` produces bytes for beat `i`. Results are returned in index order.
+pub async fn collect_parallel<F, Fut>(
+    count: usize,
+    concurrency: usize,
+    task: F,
+) -> Result<Vec<Vec<u8>>, String>
+where
+    F: Fn(usize) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<Vec<u8>, String>> + Send + 'static,
+{
+    let sem = Arc::new(Semaphore::new(concurrency.max(1)));
+    let task = Arc::new(task);
+
+    let handles: Vec<_> = (0..count)
+        .map(|i| {
+            let sem = sem.clone();
+            let task = task.clone();
+            tokio::spawn(async move {
+                let _permit = sem.acquire_owned().await.expect("semaphore closed");
+                let bytes = task(i).await?;
+                Ok::<(usize, Vec<u8>), String>((i, bytes))
+            })
+        })
+        .collect();
+
+    let mut indexed: Vec<(usize, Vec<u8>)> = join_all(handles)
+        .await
+        .into_iter()
+        .map(|r| r.map_err(|e| format!("task panicked: {e}")).and_then(|r| r))
+        .collect::<Result<_, _>>()?;
+
+    indexed.sort_by_key(|(i, _)| *i);
+    Ok(indexed.into_iter().map(|(_, b)| b).collect())
+}
+
 pub fn cmd_render(
     server: &str,
     manifest_path: &Path,
     out: &Path,
     play: bool,
+    concurrency: usize,
 ) -> Result<(), String> {
     let manifest = load_manifest(manifest_path)?;
     let beats = resolve_manifest(&manifest);
@@ -89,36 +137,71 @@ pub fn cmd_render(
         title = manifest.title,
         beats = beats.len(),
         voice = manifest.voice,
+        concurrency,
         "rendering manifest"
     );
 
-    let client = foni_client::FoniClient::new(server);
+    let pb = ProgressBar::new(beats.len() as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{bar:40}] {pos}/{len} beats  {msg}")
+            .unwrap(),
+    );
+
+    let client = Arc::new(foni_client::FoniClient::new(server));
+    let voice = manifest.voice.clone();
+    let model = manifest.model.clone();
+    let beats_arc = Arc::new(beats);
+    let pb_clone = pb.clone();
+
     let rt = tokio::runtime::Runtime::new().map_err(|e| format!("tokio: {e}"))?;
-    let mut beat_paths = Vec::new();
+    let wavs = rt.block_on(collect_parallel(beats_arc.len(), concurrency, move |i| {
+        let client = client.clone();
+        let beat = beats_arc[i].clone();
+        let voice = voice.clone();
+        let model = model.clone();
+        let pb = pb_clone.clone();
+        async move {
+            let t0 = Instant::now();
+            let mut req = foni_client::SynthRequest::new(&beat.text);
+            req.voice = voice;
+            req.model = model;
+            req.dsp = false;
+            req.exaggeration = Some(beat.exaggeration);
+            req.cfg_weight = Some(beat.cfg_weight);
+            req.temperature = Some(beat.temperature);
 
-    for beat in &beats {
-        info!(
-            beat = beat.index + 1,
-            shade = beat.shade_name,
-            text = truncate(&beat.text, 40),
-            "synth"
-        );
+            let wav = client
+                .synthesize(&req)
+                .await
+                .map_err(|e| format!("synth beat {}: {e}", beat.index + 1))?;
 
-        let mut req = foni_client::SynthRequest::new(&beat.text);
-        req.voice = manifest.voice.clone();
-        req.dsp = false;
-        req.exaggeration = Some(beat.exaggeration);
-        req.cfg_weight = Some(beat.cfg_weight);
-        req.temperature = Some(beat.temperature);
+            pb.set_message(format!(
+                "{} ({:.1}s)",
+                beat.shade_name,
+                t0.elapsed().as_secs_f32()
+            ));
+            pb.inc(1);
+            info!(
+                beat = beat.index + 1,
+                shade = beat.shade_name,
+                ms = t0.elapsed().as_millis() as u64,
+                "done"
+            );
+            Ok(wav.0)
+        }
+    }))?;
+    pb.finish_and_clear();
 
-        let wav_data = rt
-            .block_on(client.synthesize(&req))
-            .map_err(|e| format!("synth beat {}: {e}", beat.index + 1))?;
-
-        let beat_path = std::env::temp_dir().join(format!("foni_render_{:02}.wav", beat.index));
-        std::fs::write(&beat_path, &wav_data.0).map_err(|e| format!("write: {e}"))?;
-        beat_paths.push(beat_path);
-    }
+    let beat_paths: Vec<PathBuf> = wavs
+        .iter()
+        .enumerate()
+        .map(|(i, wav)| {
+            let p = std::env::temp_dir().join(format!("foni_render_{i:02}.wav"));
+            std::fs::write(&p, wav).map_err(|e| format!("write beat {i}: {e}"))?;
+            Ok(p)
+        })
+        .collect::<Result<_, String>>()?;
 
     concat_and_save(&beat_paths, out)?;
 
@@ -192,6 +275,100 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    // ── collect_parallel tests ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn parallel_collects_all_beats() {
+        let out = collect_parallel(
+            5,
+            3,
+            |i| async move { Ok::<Vec<u8>, String>(vec![i as u8]) },
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn parallel_preserves_index_order() {
+        // Beats complete in reverse order (beat N-1 finishes first).
+        // Output must still be sorted by original index.
+        let out = collect_parallel(5, 5, |i| async move {
+            let delay = (5 - i) as u64 * 10;
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            Ok::<Vec<u8>, String>(vec![i as u8])
+        })
+        .await
+        .unwrap();
+        for (idx, bytes) in out.iter().enumerate() {
+            assert_eq!(bytes[0], idx as u8, "beat {idx} is out of order");
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_respects_concurrency_limit() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let limit = 3;
+
+        collect_parallel(10, limit, {
+            let active = active.clone();
+            let peak = peak.clone();
+            move |_| {
+                let active = active.clone();
+                let peak = peak.clone();
+                async move {
+                    let n = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(n, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    Ok::<Vec<u8>, String>(vec![0])
+                }
+            }
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            peak.load(Ordering::SeqCst) <= limit,
+            "peak concurrency {} exceeded limit {limit}",
+            peak.load(Ordering::SeqCst)
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_propagates_failure() {
+        let result = collect_parallel(5, 3, |i| async move {
+            if i == 2 {
+                Err("beat 2 exploded".to_string())
+            } else {
+                Ok::<Vec<u8>, String>(vec![0])
+            }
+        })
+        .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("beat 2 exploded"));
+    }
+
+    #[tokio::test]
+    async fn parallel_single_beat() {
+        let out = collect_parallel(1, 5, |_| async move { Ok::<Vec<u8>, String>(vec![42]) })
+            .await
+            .unwrap();
+        assert_eq!(out, vec![vec![42]]);
+    }
+
+    #[tokio::test]
+    async fn parallel_zero_beats_returns_empty() {
+        let out = collect_parallel(0, 5, |_| async move { Ok::<Vec<u8>, String>(vec![]) })
+            .await
+            .unwrap();
+        assert!(out.is_empty());
+    }
 
     fn test_manifest() -> Manifest {
         serde_json::from_str(

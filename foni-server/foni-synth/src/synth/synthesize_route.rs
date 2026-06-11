@@ -229,7 +229,11 @@ pub async fn synthesize(
         if req.audio_prompt.is_none() {
             if let Ok(bytes) = std::fs::read(model_dir.join("reference.wav")) {
                 use base64::Engine as _;
-                req.audio_prompt = Some(base64::engine::general_purpose::STANDARD.encode(&bytes));
+                let capped = match state.0.synth.max_reference_secs() {
+                    Some(max) => crate::wav::cap_wav(&bytes, max),
+                    None => bytes,
+                };
+                req.audio_prompt = Some(base64::engine::general_purpose::STANDARD.encode(&capped));
                 tracing::info!(model = %model_name, "synthesize: using reference audio");
             }
         }

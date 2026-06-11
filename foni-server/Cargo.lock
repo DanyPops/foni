@@ -842,6 +842,7 @@ dependencies = [
  "foni-analyse",
  "foni-client",
  "foni-synth",
+ "futures",
  "hound",
  "indicatif",
  "modal-rs",

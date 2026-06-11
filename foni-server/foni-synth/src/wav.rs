@@ -164,6 +164,19 @@ pub fn trim_tail(samples: &mut Vec<f32>, sample_rate: u32) {
 
 /// Noise gate: zero out frames below threshold.
 /// Kills whisper artifacts between speech segments.
+/// Trim a WAV to at most `max_secs` seconds.
+/// Returns the original bytes unchanged if already within the limit or if decoding fails.
+pub fn cap_wav(bytes: &[u8], max_secs: f32) -> Vec<u8> {
+    let Ok(wav) = foni_analyse::decode_wav(bytes) else {
+        return bytes.to_vec();
+    };
+    let max_samples = (wav.sample_rate as f32 * max_secs) as usize;
+    if wav.samples.len() <= max_samples {
+        return bytes.to_vec();
+    }
+    encode_wav(&wav.samples[..max_samples], wav.sample_rate).unwrap_or_else(|_| bytes.to_vec())
+}
+
 pub fn noise_gate(samples: &mut [f32], sample_rate: u32) {
     let gate_db: f32 = -35.0;
     let threshold = 10.0_f32.powf(gate_db / 20.0);
@@ -335,5 +348,46 @@ mod tail_tests {
         let mut samples = vec![0.0f32; sr as usize];
         noise_gate(&mut samples, sr);
         assert!(samples.iter().all(|&s| s == 0.0));
+    }
+
+    // ── cap_wav tests ──────────────────────────────────────────────
+
+    fn make_wav(secs: f32, sr: u32) -> Vec<u8> {
+        let n = (sr as f32 * secs) as usize;
+        let samples: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sr as f32).sin() * 0.3)
+            .collect();
+        encode_wav(&samples, sr).unwrap()
+    }
+
+    #[test]
+    fn cap_wav_truncates_long_audio() {
+        let input = make_wav(20.0, 24_000);
+        let capped = cap_wav(&input, 10.0);
+        let dec = foni_analyse::decode_wav(&capped).unwrap();
+        let dur = dec.samples.len() as f32 / dec.sample_rate as f32;
+        assert!((dur - 10.0).abs() < 0.05, "expected ~10s, got {dur:.2}s");
+    }
+
+    #[test]
+    fn cap_wav_preserves_short_audio() {
+        let input = make_wav(5.0, 24_000);
+        let result = cap_wav(&input, 10.0);
+        // Bytes must be identical — no re-encode overhead.
+        assert_eq!(input, result);
+    }
+
+    #[test]
+    fn cap_wav_exact_boundary_unchanged() {
+        let input = make_wav(10.0, 24_000);
+        let result = cap_wav(&input, 10.0);
+        assert_eq!(input, result);
+    }
+
+    #[test]
+    fn cap_wav_bad_input_returns_original() {
+        let garbage = vec![0u8; 16];
+        let result = cap_wav(&garbage, 10.0);
+        assert_eq!(garbage, result);
     }
 }

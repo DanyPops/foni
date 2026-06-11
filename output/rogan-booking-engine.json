@@ -1,0 +1,70 @@
+{
+  "title": "Joe Rogan Reads a Take-Home Assignment",
+  "voice": "en",
+  "_model": "rogan",
+  "_note": "Run: fonictl render output/rogan-booking-engine.json --out output/rogan-booking-engine.wav",
+  "_humanness": "Emotional arc varies per beat. Short beats = natural pauses at concatenation boundaries. Low cfg_weight on reactive beats = freer, more human pacing.",
+  "beats": [
+
+    { "shade": "warm",        "text": "Alright. Let's see what we got here." },
+
+    { "shade": "measured",    "text": "Take-home assignment. Dynamic Booking and Reservation Engine. Return window: four days from receipt." },
+    { "shade": "warm",        "text": "Four days. Okay. That's actually... that's decent. They're not being animals about it." },
+
+    { "shade": "measured",    "text": "This is a deliberately open-ended problem. We care far more about how you reason about correctness, concurrency, and trade-offs than about feature completeness or polish. A smaller scope done correctly beats a large scope with race conditions." },
+    { "shade": "curious",     "text": "A smaller scope done correctly beats a large scope with race conditions. That is a genuinely interesting thing to say in a job spec. Most companies just want you to ship as much as possible. These people are telling you upfront — we want you to think. That's rare, man." },
+
+    { "shade": "measured",    "text": "Your task is to build a monolithic backend API from scratch that handles event creation, seat reservations, temporary holds, and dynamic pricing." },
+    { "shade": "firm",        "text": "Monolithic. From scratch. They're not asking you to wire up microservices and a Kubernetes cluster and seventeen different AWS services. They want a thing that works. That's how you actually learn if someone can build software." },
+
+    { "shade": "measured",    "text": "These three mechanisms are the heart of the assignment. They are intentionally the difficult part." },
+    { "shade": "curious",     "text": "Intentionally the difficult part. They're telling you to your face. No games. No hidden gotchas. I love that." },
+
+    { "shade": "measured",    "text": "Number one. Five-minute cart lock. When a customer selects a ticket, that ticket must be locked for exactly five minutes so they can complete a checkout form. If the purchase is not completed within five minutes, the system must automatically release the ticket back into the public pool." },
+    { "shade": "firm",        "text": "Okay so anyone who's bought concert tickets knows this experience. But building it? You need something watching the clock. Something that knows the lock is there. Something that cleans itself up without anyone asking it to. There's a lot of ways to get that wrong." },
+
+    { "shade": "measured",    "text": "Number two. Dynamic surge pricing. For every ten percent of total tickets sold, the price of the remaining tickets increases by five percent. Price increases must apply instantly to incoming requests." },
+    { "shade": "curious",     "text": "Uber surge pricing but for concerts. The math is clean. The implementation is not." },
+
+    { "shade": "measured",    "text": "Price increases must not affect users who already hold a locked ticket. A user is quoted and charged the price that was active when their lock was created." },
+    { "shade": "solemn",      "text": "So you have two realities running at the same time. The live price, which is moving. And the locked price, which is frozen at the moment the user grabbed the ticket. Those two things have to coexist. And you can never confuse them. That boundary has to be airtight." },
+
+    { "shade": "measured",    "text": "Number three. High-concurrency checkout. Scenario: only five tickets remain. One hundred users hit the checkout endpoint at the same millisecond. The system must guarantee exactly five succeed and ninety-five receive a clean Sold Out response. No double-bookings. No negative inventory. No crashes." },
+    { "shade": "rage",        "text": "Oh man. You gotta be shitting me, man. I've been vibe coding for the past six months — who remembers how to write code?!" },
+    { "shade": "firm",        "text": "No seriously. A hundred users. Same millisecond. Five tickets. Your first instinct is: check if there are tickets, if yes, sell one. But that check-then-act is a race condition. Between the check and the act, ninety-nine other people did the same check and got the same answer. Now you've sold the same five tickets a hundred times. You have negative inventory. The fix is atomic operations. You make the check AND the sell a single indivisible thing. That is genuinely hard to reason about correctly." },
+
+    { "shade": "measured",    "text": "Frontend: UI and UX. Alongside the backend, build a small client that consumes your API. We are not judging visual flourish — we are judging whether the interface honestly reflects the system's state." },
+    { "shade": "sarcastic",   "text": "Wait. You also gotta build a UI? Man. It's a full-stack assignment. Okay. But look — they said it right there: we're not judging visual flourish. They want to see if the UI tells the truth." },
+
+    { "shade": "measured",    "text": "Event view. Show current availability and the live price. Reserve and cart flow. Show a visible countdown timer for the five-minute lock and the price they locked in." },
+    { "shade": "firm",        "text": "The screen is showing you the locked price. The event in the background might be at a completely different price now. The interface has to stay honest about both without confusing the user. That's subtle work." },
+
+    { "shade": "measured",    "text": "Lock expiry. When the countdown hits zero, the UI must clearly communicate that the hold was released and return the user to the event view. No silent failures. No checking out against an expired lock." },
+    { "shade": "commanding",  "text": "No silent failures. That should be the motto of every software team in existence. The worst bugs aren't crashes — crashes you can see. The worst bugs are silent. The ones where the system just quietly does the wrong thing and nobody notices until it's catastrophically too late." },
+
+    { "shade": "measured",    "text": "What we evaluate. In rough order of importance. Correctness under concurrency. The inventory invariant must never break. This is the single most important thing." },
+    { "shade": "commanding",  "text": "The inventory invariant must never break. This is the single most important thing. That's not an accident. That's them telling you: if you get everything else right and you get this wrong, you failed. No partial credit on negative inventory." },
+
+    { "shade": "measured",    "text": "Quality of the locking and expiry design. How you reason about time, atomicity, and cleanup without external tools." },
+    { "shade": "solemn",      "text": "Without external tools. No Redis for the lock. No Celery for the expiry job. No Kafka. Just your brain, the language, and whatever's in the standard library. That's the test. Can you reason about this problem from first principles?" },
+
+    { "shade": "measured",    "text": "Testing. Particularly a test that demonstrates the one-hundred-users, five-tickets scenario behaving correctly." },
+    { "shade": "firm",        "text": "They want to see it. Not 'trust me it works.' Show me. Write a test that spawns a hundred goroutines — or threads, whatever — all hitting the same endpoint at the same time, and prove that exactly five of them win. That test is the whole assignment in one file, really." },
+
+    { "shade": "measured",    "text": "Communication. A clear README explaining your design decisions and trade-offs." },
+    { "shade": "warm",        "text": "This one is underrated. I've seen brilliant engineers who cannot explain what they built. And I've seen mediocre engineers who can explain their thinking so clearly that you trust them immediately. The README is where you show your reasoning. Walk them through how you thought about the problem." },
+
+    { "shade": "measured",    "text": "Good luck. We are excited to see how you think." },
+    { "shade": "solemn",      "text": "We are excited to see how you think. Not what you build. Not how fast you build it. How you think. That's the whole game, man." },
+
+    { "shade": "commanding",  "text": "Okay Yuri, listen. Before you open your IDE, before you think about frameworks, before you even think about what language you're using — step back. Treat this as a pure logical problem first." },
+    { "shade": "firm",        "text": "You are booking a seat at an event. That's it. Somebody wants a seat. There's a limited number of seats. When one person gets it, nobody else can have it. That's the domain. Understand the domain before you touch a single line of code." },
+    { "shade": "firm",        "text": "Don't rush into HTTP servers. Don't rush into SQL databases. Don't rush into anything. Sit down, grab a piece of paper, and ask yourself: what are the things in this system? What can they do? What rules can never be broken? Draw the states. Draw the transitions between them. Write that down before you write a function." },
+    { "shade": "firm",        "text": "The concurrency problem is not a coding problem first. It's a thinking problem. What does it mean for two operations to conflict? What's the minimal constraint you need to prevent the conflict? Answer that in plain English before you answer it in code." },
+    { "shade": "encouraging", "text": "You've got a full spec. You've got user stories. Every edge case is written down for you. The task is not to ask an AI agent to generate the code. That's the trap. The task is decision making, architecture, and testing. Those are judgment calls. An AI can generate code all day long — it can't make those calls for your specific situation without you understanding the trade-offs first." },
+    { "shade": "warm",        "text": "The people reading your submission are going to look at your README and they're going to know immediately whether you understood the problem or just generated something that compiles. Write the README like you're explaining the system to a smart friend who's never seen it. Tell them what you were scared of. Tell them where you had to make a trade-off and what you traded. That's the signal they're looking for." },
+    { "shade": "warm",        "text": "Four days, man. That's enough time. Start with the domain model. Work outward. Don't skip the test." },
+    { "shade": "triumphant",  "text": "Pull up a chair. Have some DMT. Let's talk about inventory invariants." }
+
+  ]
+}

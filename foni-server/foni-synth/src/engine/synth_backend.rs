@@ -17,6 +17,13 @@ use std::time::Duration;
 #[async_trait::async_trait]
 pub trait SynthBackend: Send + Sync {
     async fn synthesize(&self, text: &str, model: &str) -> Result<Vec<u8>, String>;
+
+    /// Maximum reference audio duration this backend accepts, in seconds.
+    /// The backend caps `audio_prompt` to this length before encoding.
+    /// `None` means no limit (e.g. mock backends, future backends with longer context).
+    fn max_reference_secs(&self) -> Option<f32> {
+        None
+    }
 }
 
 // ── ModalSynthBackend ─────────────────────────────────────────────────────────
@@ -61,7 +68,13 @@ impl ModalSynthBackend {
         Self::new(url, token, models_dir)
     }
 
+    /// Maximum reference audio this backend accepts — Chatterbox hard-truncates at 10s.
+    pub fn max_reference_secs(&self) -> Option<f32> {
+        Some(10.0)
+    }
+
     /// Read optional per-model config from `<models_dir>/<model>/`.
+    /// Reference audio is capped to `max_reference_secs()` before base64-encoding.
     fn model_config(&self, model: &str) -> (String, Option<String>) {
         let dir = self.models_dir.join(model);
 
@@ -71,7 +84,11 @@ impl ModalSynthBackend {
 
         let audio_prompt = std::fs::read(dir.join("reference.wav")).ok().map(|bytes| {
             use base64::Engine as _;
-            base64::engine::general_purpose::STANDARD.encode(&bytes)
+            let capped = match self.max_reference_secs() {
+                Some(max) => crate::wav::cap_wav(&bytes, max),
+                None => bytes,
+            };
+            base64::engine::general_purpose::STANDARD.encode(&capped)
         });
 
         (lang, audio_prompt)
@@ -80,6 +97,10 @@ impl ModalSynthBackend {
 
 #[async_trait::async_trait]
 impl SynthBackend for ModalSynthBackend {
+    fn max_reference_secs(&self) -> Option<f32> {
+        self.max_reference_secs()
+    }
+
     async fn synthesize(&self, text: &str, model: &str) -> Result<Vec<u8>, String> {
         let (lang, audio_prompt) = self.model_config(model);
         let mut body = serde_json::json!({"text": text, "language": lang});
@@ -187,5 +208,49 @@ mod tests {
         std::env::set_var("FONI_TTS_URL", "http://example.com/tts");
         let b = ModalSynthBackend::from_env();
         assert_eq!(b.url, "http://example.com/tts");
+    }
+
+    #[test]
+    fn modal_backend_caps_reference_at_10s() {
+        let b = ModalSynthBackend::from_env();
+        assert_eq!(b.max_reference_secs(), Some(10.0));
+    }
+
+    #[test]
+    fn mock_backend_has_no_reference_cap() {
+        let b = MockSynthBackend::instant();
+        assert_eq!(b.max_reference_secs(), None);
+    }
+
+    #[test]
+    fn cap_is_applied_inside_model_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = "testmodel";
+        let model_dir = dir.path().join(model);
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("lang"), "en").unwrap();
+
+        // Write a 20s WAV — should be capped to 10s.
+        let n = 24_000usize * 20;
+        let samples: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 24_000.0).sin() * 0.3)
+            .collect();
+        let wav_bytes = crate::wav::encode_wav(&samples, 24_000).unwrap();
+        std::fs::write(model_dir.join("reference.wav"), &wav_bytes).unwrap();
+
+        let b = ModalSynthBackend::new("http://x".to_string(), None, dir.path().to_path_buf());
+        let (_lang, ap) = b.model_config(model);
+        let ap_bytes = ap.expect("audio_prompt should be set");
+
+        use base64::Engine as _;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&ap_bytes)
+            .unwrap();
+        let wav = foni_analyse::decode_wav(&decoded).unwrap();
+        let dur = wav.samples.len() as f32 / wav.sample_rate as f32;
+        assert!(
+            (dur - 10.0).abs() < 0.05,
+            "model_config should cap to 10s, got {dur:.2}s"
+        );
     }
 }

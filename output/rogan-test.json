@@ -1,0 +1,13 @@
+{
+  "title": "Joe Test — Aliens, DMT, TOOL",
+  "voice": "en",
+  "model": "rogan",
+  "beats": [
+    { "shade": "pondering",     "text": "Have you ever... really thought about the fact that we might be the least interesting thing in the universe?" },
+    { "shade": "riffing",       "text": "Like statistically... the odds that we are the only intelligent life in an infinite universe... are so astronomically small that it's almost offensive to even consider it." },
+    { "shade": "awe",           "text": "And then you do DMT. And then you realize... oh. Oh. Something has been here this whole time. You just didn't have the right door." },
+    { "shade": "reverent",      "text": "The entities you meet on DMT are not random. They're consistent. People all over the world, different cultures, no contact with each other — they describe the same beings. That's not nothing, man." },
+    { "shade": "conviction",    "text": "And TOOL figured this out. Maynard James Keenan figured this out. That album Lateralus — the Fibonacci sequence in the lyrics, the time signatures — that's a man who went somewhere... and came back with a message." },
+    { "shade": "transcendent",  "text": "Spiral out. Keep going." }
+  ]
+}
