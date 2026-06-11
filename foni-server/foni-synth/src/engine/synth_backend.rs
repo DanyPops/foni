@@ -9,6 +9,7 @@
 //! - `MockSynthBackend`  — returns a sine WAV after an optional delay (tests).
 
 use std::f32::consts::PI;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,17 +23,24 @@ pub trait SynthBackend: Send + Sync {
 
 /// Calls the Chatterbox TTS endpoint on Modal directly.
 /// Shared `reqwest::Client` — no connection pool leak per call.
+///
+/// Per-model voice cloning: if `<models_dir>/<model>/reference.wav` exists,
+/// it is base64-encoded and forwarded as `audio_prompt` for zero-shot cloning.
+/// Language defaults to `ru`; override by placing a `lang` file (e.g. `en`)
+/// alongside `reference.wav`.
 pub struct ModalSynthBackend {
     url: String,
     token: Option<String>,
+    models_dir: PathBuf,
     client: reqwest::Client,
 }
 
 impl ModalSynthBackend {
-    pub fn new(url: impl Into<String>, token: Option<String>) -> Self {
+    pub fn new(url: impl Into<String>, token: Option<String>, models_dir: PathBuf) -> Self {
         Self {
             url: url.into(),
             token,
+            models_dir,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(60))
                 .build()
@@ -47,20 +55,49 @@ impl ModalSynthBackend {
                 "https://dpopsuev--foni-tts-serve-chatterboxtts-tts.modal.run".into()
             });
         let token = std::env::var("FONI_TTS_TOKEN").ok();
-        Self::new(url, token)
+        let models_dir = std::env::var("RVC_MODELS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("training/models"));
+        Self::new(url, token, models_dir)
+    }
+
+    /// Read optional per-model config from `<models_dir>/<model>/`.
+    fn model_config(&self, model: &str) -> (String, Option<String>) {
+        let dir = self.models_dir.join(model);
+
+        let lang = std::fs::read_to_string(dir.join("lang"))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| "ru".into());
+
+        let audio_prompt = std::fs::read(dir.join("reference.wav")).ok().map(|bytes| {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        });
+
+        (lang, audio_prompt)
     }
 }
 
 #[async_trait::async_trait]
 impl SynthBackend for ModalSynthBackend {
-    async fn synthesize(&self, text: &str, _model: &str) -> Result<Vec<u8>, String> {
-        let body = serde_json::json!({"text": text, "language": "ru"});
+    async fn synthesize(&self, text: &str, model: &str) -> Result<Vec<u8>, String> {
+        let (lang, audio_prompt) = self.model_config(model);
+        let mut body = serde_json::json!({"text": text, "language": lang});
 
-        let mut req = self.client.post(&self.url).json(&body);
-        if let Some(token) = &self.token {
-            req = req.header("Authorization", format!("Bearer {token}"));
+        if let Some(ref ap) = audio_prompt {
+            body["audio_prompt"] = serde_json::json!(ap);
+            tracing::debug!(model, "synth: using reference audio for voice cloning");
         }
-        let resp = req.send().await.map_err(|e| format!("TTS request: {e}"))?;
+        if let Some(token) = &self.token {
+            body["token"] = serde_json::json!(token);
+        }
+        let resp = self
+            .client
+            .post(&self.url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("TTS request: {e}"))?;
 
         if !resp.status().is_success() {
             return Err(format!("TTS HTTP {}", resp.status()));

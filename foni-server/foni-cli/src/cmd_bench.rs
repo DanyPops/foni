@@ -267,3 +267,106 @@ pub fn cmd_tts_scale(max: Option<u32>, buffer: Option<u32>) -> Result<(), String
     println!("    buffer_containers={}", buffer.unwrap_or(1));
     Ok(())
 }
+
+// ── probe ─────────────────────────────────────────────────────────────────────
+
+/// Single-shot warmness check against the Modal TTS endpoint.
+pub fn cmd_probe() -> Result<(), String> {
+    let url = std::env::var("FONI_TTS_URL")
+        .or_else(|_| std::env::var("FISH_SPEECH_URL"))
+        .unwrap_or_else(|_| "https://dpopsuev--foni-tts-serve-chatterboxtts-tts.modal.run".into());
+    let token = std::env::var("FONI_TTS_TOKEN").unwrap_or_default();
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let body = serde_json::json!({"text": "Да.", "language": "ru", "token": token});
+
+    let t0 = Instant::now();
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .map_err(|e| format!("request failed: {e}"))?;
+    let rtt_ms = t0.elapsed().as_millis();
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    // Heuristic: warm containers respond in < 8s; cold takes 15-30s.
+    let warm = rtt_ms < 8_000;
+    let dot = if warm { "●" } else { "○" };
+    let state = if warm { "warm" } else { "cold" };
+    println!("{dot}  {state}  {rtt_ms}ms  {url}");
+    Ok(())
+}
+
+// ── dsp ──────────────────────────────────────────────────────────────────────
+
+/// Show or reload the live DSP config from the server.
+pub fn cmd_dsp(server: &str, reload: bool) -> Result<(), String> {
+    if reload {
+        let resp = reqwest::blocking::Client::new()
+            .post(format!("{server}/controller"))
+            .json(&serde_json::json!({"reload": true}))
+            .send()
+            .map_err(|e| format!("request: {e}"))?;
+        let body: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_default()
+        );
+        return Ok(());
+    }
+
+    let body = super::cmd_common::get_json(server, "/controller")?;
+
+    // Print DSP defaults and controller targets in a readable form.
+    if let Some(dsp) = body.get("dsp_defaults").and_then(|v| v.as_object()) {
+        println!("  DSP defaults");
+        println!("  {}", "─".repeat(38));
+        let mut keys: Vec<_> = dsp.keys().collect();
+        keys.sort();
+        for k in keys {
+            let v = &dsp[k];
+            if v.as_f64().is_some_and(|f| f != 0.0) || v.as_f64().is_none() {
+                println!("    {k:<26} {v}");
+            }
+        }
+    }
+
+    if let Some(targets) = body.get("targets").and_then(|v| v.as_object()) {
+        println!("\n  Controller targets");
+        println!("  {}", "─".repeat(38));
+        let mut keys: Vec<_> = targets.keys().collect();
+        keys.sort();
+        for k in keys {
+            println!("    {k:<26} {}", targets[k]);
+        }
+    }
+
+    let enabled = body
+        .get("controller")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    println!("\n  controller: {}", if enabled { "on" } else { "off" });
+    Ok(())
+}
+
+// ── cache ─────────────────────────────────────────────────────────────────────
+
+/// Flush the server-side WAV LRU cache.
+pub fn cmd_cache_clear(server: &str) -> Result<(), String> {
+    let resp = reqwest::blocking::Client::new()
+        .delete(format!("{server}/cache"))
+        .send()
+        .map_err(|e| format!("request: {e}"))?;
+
+    let body: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
+    let cleared = body.get("cleared").and_then(|v| v.as_u64()).unwrap_or(0);
+    println!("  cache cleared  ({cleared} entries removed)");
+    Ok(())
+}

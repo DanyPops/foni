@@ -1,4 +1,5 @@
 /// e2e_simulation — full pipeline simulation with canned services.
+mod support;
 ///
 /// Spins up:
 ///   - Mock Ollama (returns "TRANSLATED: {input}")
@@ -96,7 +97,7 @@ async fn recv(
         match tokio::time::timeout_at(deadline, ws.next()).await {
             Ok(Some(Ok(Message::Text(t)))) => {
                 if let Ok(msg) = serde_json::from_str::<Value>(&t) {
-                    if msg["type"] == "buffer_state" {
+                    if support::is_infrastructure_msg(&msg) {
                         continue;
                     }
                     return Some(msg);
@@ -119,7 +120,7 @@ async fn recv_all(
         match tokio::time::timeout_at(deadline, ws.next()).await {
             Ok(Some(Ok(Message::Text(t)))) => {
                 if let Ok(msg) = serde_json::from_str::<Value>(&t) {
-                    if msg["type"] != "buffer_state" {
+                    if !support::is_infrastructure_msg(&msg) {
                         out.push(msg);
                     }
                 }

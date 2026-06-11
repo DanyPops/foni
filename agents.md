@@ -13,6 +13,9 @@
 - Test runner: `npx vitest run` — must stay green before every commit.
 - Snapshot tests: strip ANSI, use `toMatchSnapshot()`. Behaviour tests: assert action calls.
 - No magic values in tests — use the same named constants as production code.
+- WS test recv helpers must skip infrastructure messages via `support::is_infrastructure_msg`.
+  Adding a new WS protocol message type? Add it to `tests/support/mod.rs::is_infrastructure_msg`
+  if it is bookkeeping, not content.
 
 ## Git
 
@@ -43,73 +46,106 @@ ignored in `ModalSynthBackend::synthesize`. Do not reference RVC anywhere in new
 ### TTS backend: Chatterbox on Modal
 
 All synthesis goes through `ModalSynthBackend` → `FONI_TTS_URL` (Chatterbox Multilingual on
-Modal). Voice cloning is zero-shot: pass an `audio_prompt` (base64 WAV or file path) to clone
-any speaker from ≥5 seconds of clean reference audio. No fine-tuning required.
+Modal). Voice cloning is zero-shot: place a `reference.wav` + `lang` file under
+`training/models/<model>/` to clone any speaker. The backend loads it automatically for both
+the WS streaming path and the HTTP `/synthesize` route.
 
 Key Chatterbox parameters (passed through `SynthRequest` / `cloud_tts`):
-- `language`      — BCP-47 code: `"en"`, `"ru"`, etc.
+- `language`      — BCP-47 code: `"en"`, `"ru"`, etc. Resolved from `training/models/<model>/lang`.
 - `exaggeration`  — emotion intensity 0.3 (flat) → 1.5 (dramatic). Default 0.5.
 - `cfg_weight`    — pace/guidance weight. Lower = freer prosody. Default 0.5. Use 0.0 for
                     cross-language voice transfer to reduce accent bleed.
 - `temperature`   — prosody randomness 0.05 → 5.0. Default 0.8.
-- `audio_prompt`  — **NOT YET WIRED.** Chatterbox accepts `audio_prompt_path` at inference
-                    time. The fonictl `synth` command and the `/synthesize` route do not yet
-                    pass a reference clip. This is the next gap to close.
+- `audio_prompt`  — base64 WAV forwarded to Chatterbox for zero-shot voice cloning.
+                    Loaded automatically from `training/models/<model>/reference.wav`.
+
+### Voice model registration
+
+To register a new voice model:
+
+```
+mkdir -p training/models/<name>/
+ffmpeg -i <source.wav> -ss <start> -t <duration> -ar 24000 -ac 1 training/models/<name>/reference.wav
+echo "en" > training/models/<name>/lang   # or "ru" etc.
+fonictl synth "test" --model <name> --no-dsp --out /tmp/test.wav
+```
+
+Best reference: 10–25 seconds of clean solo speech, 24kHz mono. No background noise,
+no music, no other speakers. Use `fonictl fetch` + manual curation to build the clip.
 
 ### Voice persona capture pipeline
 
-To capture a speaker's style and clone their voice:
+To capture a speaker's style:
 
 ```
 fonictl fetch <youtube-url>          # download + convert to mono 24kHz WAV clips
-fonictl tone  <clip.wav>             # arousal / dominance / valence → expression knobs
-fonictl synth --voice en \
-              --excitement  <X> \    # from tone output
-              --assertiveness <X> \
-              --warmth <X> \
-              "text..."              # synthesize in that style
+fonictl clean dataset/<name>/        # trim silence, normalize
+fonictl synth --model <name> "..."   # synthesize with zero-shot cloning
 ```
-
-`tone` maps the acoustic profile of a reference clip to the three Chatterbox expression knobs.
-Until `--audio-prompt` is wired, synthesis uses the Chatterbox default voice shaped by those
-knobs — same energy and delivery style, different timbre.
 
 ### fonictl command map
 
-| Command        | What it does |
-|----------------|-------------|
-| `fetch`        | Download YouTube/direct URL → mono 24kHz WAV, split by silence |
-| `tone`         | Acoustic emotion profile → excitement/assertiveness/warmth knobs |
-| `synth`        | Text → WAV via `/synthesize`. Supports `--voice en`, expression knobs |
-| `analyse`      | Full acoustic metrics for a WAV (optionally vs a reference) |
-| `process`      | Apply DSP chain to an existing WAV |
-| `play`         | Play a WAV via system player |
-| `clean`        | Trim silence, normalize volume, flag clipping across a dataset dir |
-| `studio`       | Interactive maquette studio — produce N named variants, A/B compare |
-| `mix`          | Interactive DSP mixer REPL |
-| `listen`       | Render DSP stages or variants, play interactively |
-| `render`       | Render a beat manifest (JSON) → single concatenated WAV |
-| `bench`        | API round-trip latency benchmark |
-| `tts-stats`    | Modal scaling status (backlog, runner count) |
-| `tts-scale`    | Adjust Modal max containers / buffer |
-| `compare`      | 1:1 studio vs synthetic test harness |
-| `corpus`       | Acoustic fingerprint across a directory |
-| `train`        | Full cloud training pipeline (clean → augment → train → compare → deploy) |
+| Command          | What it does |
+|------------------|-------------|
+| `fetch`          | Download YouTube/direct URL → mono 24kHz WAV, split by silence |
+| `clean`          | Trim silence, normalize volume, flag clipping across a dataset dir |
+| `augment`        | Speed perturbation to expand training data |
+| `tone`           | Acoustic emotion profile → excitement/assertiveness/warmth knobs |
+| `synth`          | Text → WAV via `/synthesize`. Supports `--model <name>`, expression knobs |
+| `analyse`        | Full acoustic metrics for a WAV (optionally vs a reference) |
+| `process`        | Apply DSP chain to an existing WAV |
+| `play`           | Play a WAV via system player |
+| `studio`         | Interactive maquette studio — produce N named variants, A/B compare |
+| `mix`            | Interactive DSP mixer REPL |
+| `listen`         | Render DSP stages or variants, play interactively |
+| `render`         | Render a beat manifest (JSON) → single concatenated WAV |
+| `probe`          | Single warmness ping to Modal TTS — reports ○ cold or ● warm + RTT |
+| `dsp`            | Show live DSP config. `--reload` hot-reloads from `dsp-defaults.json` |
+| `cache clear`    | Flush the server-side WAV LRU cache without restarting |
+| `bench`          | API round-trip latency benchmark (sequential + parallel) |
+| `tts-bench`      | Multi-round TTS latency benchmark with playback |
+| `tts-stats`      | Modal scaling status (backlog, runner count) |
+| `tts-scale`      | Adjust Modal max containers / buffer |
+| `cost`           | Show Modal inference cost ledger |
+| `compare`        | 1:1 studio vs synthetic test harness |
+| `corpus`         | Acoustic fingerprint across a directory |
+| `train`          | Full cloud training pipeline (clean → augment → train → compare → deploy) |
+| `train-status`   | Check status of a Modal training job |
+| `train-logs`     | Stream logs from a Modal training job |
+| `train-cancel`   | Cancel a running Modal training job |
+| `snapshot`       | Save current model scores as the baseline to beat |
+| `compare-models` | Compare new model against saved baseline — auto pass/fail |
+
+### Do not use bare shell for these operations
+
+| Operation | Use instead |
+|---|---|
+| Check Modal backend warmness | `fonictl probe` |
+| Show/reload DSP config | `fonictl dsp` / `fonictl dsp --reload` |
+| Flush WAV cache | `fonictl cache clear` |
+| Play a WAV | `fonictl play <file>` |
+| Kill audio playback | `pkill paplay` — add `fonictl stop-audio` when needed twice |
+
+### DSP config
+
+Live defaults live in `training/dsp-defaults.json`. figment merge order:
+`Rust defaults < YAML (foni-rvc.yaml) < JSON (dsp-defaults.json) < env vars`
+
+The JSON file wins over Rust struct defaults. After editing, run `fonictl dsp --reload`
+to apply without restarting the server.
 
 ### MP4 production
 
-There is no dedicated `fonictl mp4` command. Use ffmpeg after synthesis:
+No dedicated `fonictl mp4` command. Use ffmpeg after synthesis:
 
 ```bash
 ffmpeg -f lavfi -i color=size=1280x720:rate=30:color=black \
        -i output.wav -c:v libx264 -c:a aac -shortest output.mp4
 ```
 
-### Known gaps (next to fix)
+### Known gaps
 
-1. `--audio-prompt <wav>` on `fonictl synth` — passes reference audio to Chatterbox for
-   zero-shot voice cloning. Requires: adding the CLI flag, base64-encoding the WAV, adding
-   `audio_prompt` to `SynthRequest`, and forwarding it in `cloud_tts()`.
-2. `rvc_*` dead fields — should be removed from `FoniConfig` and `engine_config.rs`.
-3. `ModalSynthBackend::synthesize` hardcodes `"language": "ru"` — should honour the
-   `_model` parameter (repurposed as language/voice selector).
+1. `fonictl models` — list registered voice models with lang and reference status.
+2. `fonictl stop-audio` — kill active playback (currently `pkill paplay`).
+3. `fonictl modal logs/deploy/stop` — Modal app management without leaving fonictl.
+4. `rvc_*` dead fields — should be removed from `FoniConfig` and `engine_config.rs`.

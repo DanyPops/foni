@@ -83,9 +83,23 @@ class ChatterboxTTS:
         cfg_weight = float(request.get("cfg_weight", 0.5))
         temperature = float(request.get("temperature", 0.8))
 
+        # Use caller-supplied reference audio if provided, else fall back to default.
+        audio_b64 = request.get("audio_prompt")
+        if audio_b64:
+            import base64, tempfile
+            raw = base64.b64decode(audio_b64)
+            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            tmp.write(raw)
+            tmp.close()
+            ref_path = tmp.name
+            print(f"[tts] audio_prompt received: {len(raw)} bytes → {ref_path}")
+        else:
+            ref_path = REF_WAV
+            print(f"[tts] no audio_prompt, using default: {REF_WAV}")
+
         wav = self.model.generate(
             text,
-            audio_prompt_path=REF_WAV,
+            audio_prompt_path=ref_path,
             language_id=lang,
             exaggeration=exaggeration,
             cfg_weight=cfg_weight,

@@ -214,9 +214,27 @@ async fn synthesize_text(text: &str, req: &SynthRequest) -> Result<Vec<u8>, Stri
 
 pub async fn synthesize(
     State(state): State<AppState>,
-    Json(req): Json<SynthRequest>,
+    Json(mut req): Json<SynthRequest>,
 ) -> Result<Response, (StatusCode, String)> {
     let t_start = std::time::Instant::now();
+
+    // Apply per-model config (lang + reference audio) before cache key and synthesis.
+    if let Some(ref model_name) = req.model.clone() {
+        let model_dir = state.0.models_dir.join(model_name);
+        if req.voice == default_voice() {
+            if let Ok(lang) = std::fs::read_to_string(model_dir.join("lang")) {
+                req.voice = lang.trim().to_string();
+            }
+        }
+        if req.audio_prompt.is_none() {
+            if let Ok(bytes) = std::fs::read(model_dir.join("reference.wav")) {
+                use base64::Engine as _;
+                req.audio_prompt = Some(base64::engine::general_purpose::STANDARD.encode(&bytes));
+                tracing::info!(model = %model_name, "synthesize: using reference audio");
+            }
+        }
+    }
+
     // Log metadata only — never log text content (OWASP A09 / data minimisation).
     let chars = req.text.chars().count();
     tracing::info!(chars, voice = %req.voice, dsp = req.dsp, "synthesize: start");

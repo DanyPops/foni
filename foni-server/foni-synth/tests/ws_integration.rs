@@ -1,4 +1,5 @@
 /// ws_integration — WebSocket engine E2E against a real server in dry_run mode.
+mod support;
 ///
 /// No external dependencies: Ollama and paplay are skipped.
 /// Tests prove the full pipeline logic: delta → chunk → strip → translate → speak.
@@ -51,8 +52,7 @@ async fn recv(
         match tokio::time::timeout_at(deadline, ws.next()).await {
             Ok(Some(Ok(Message::Text(t)))) => {
                 if let Ok(msg) = serde_json::from_str::<Value>(&t) {
-                    // Skip infrastructure events — tests assert on content only.
-                    if msg["type"] == "buffer_state" || msg["type"] == "warm" {
+                    if support::is_infrastructure_msg(&msg) {
                         continue;
                     }
                     return Some(msg);
@@ -300,7 +300,7 @@ async fn neutral_text_returns_neutral() {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Collect every non-buffer_state message within `ms` milliseconds.
+/// Collect every non-infrastructure message within `ms` milliseconds.
 async fn recv_all(
     ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
     ms: u64,
@@ -312,7 +312,7 @@ async fn recv_all(
         match tokio::time::timeout_at(deadline, ws.next()).await {
             Ok(Some(Ok(Message::Text(t)))) => {
                 if let Ok(msg) = serde_json::from_str::<Value>(&t) {
-                    if msg["type"] != "buffer_state" {
+                    if !support::is_infrastructure_msg(&msg) {
                         out.push(msg);
                     }
                 }

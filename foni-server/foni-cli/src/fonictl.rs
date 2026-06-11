@@ -32,6 +32,12 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum CacheCmd {
+    /// Flush all cached WAV entries
+    Clear,
+}
+
+#[derive(Subcommand)]
 enum Cmd {
     /// Record from microphone until silence, print WAV path to stdout
     Rec {
@@ -543,6 +549,22 @@ enum Cmd {
     /// Show Modal inference cost ledger
     Cost,
 
+    /// Check Modal TTS backend warmness — single ping, reports ○ cold or ● warm
+    Probe,
+
+    /// Show or reload the live DSP config
+    Dsp {
+        /// Reload config from dsp-defaults.json without restarting
+        #[arg(long)]
+        reload: bool,
+    },
+
+    /// Manage the server-side WAV cache
+    Cache {
+        #[command(subcommand)]
+        cmd: CacheCmd,
+    },
+
     /// Update Modal TTS scaling (max containers, buffer)
     TtsScale {
         /// Max concurrent GPU containers
@@ -931,6 +953,23 @@ fn main() {
         Cmd::Cost => {
             cost::print_summary();
         }
+        Cmd::Probe => {
+            if let Err(e) = cmd_bench::cmd_probe() {
+                tracing::error!("{e}");
+            }
+        }
+        Cmd::Dsp { reload } => {
+            if let Err(e) = cmd_bench::cmd_dsp(server, reload) {
+                tracing::error!("{e}");
+            }
+        }
+        Cmd::Cache { cmd } => match cmd {
+            CacheCmd::Clear => {
+                if let Err(e) = cmd_bench::cmd_cache_clear(server) {
+                    tracing::error!("{e}");
+                }
+            }
+        },
         Cmd::TtsScale { max, buffer } => {
             if let Err(e) = cmd_bench::cmd_tts_scale(max, buffer) {
                 tracing::error!("{e}");

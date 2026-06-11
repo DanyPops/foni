@@ -20,6 +20,10 @@
 
 #![allow(dead_code)] // items used by ws_cutoff and other test files
 
+pub fn is_infrastructure_msg(v: &serde_json::Value) -> bool {
+    matches!(v["type"].as_str(), Some("buffer_state" | "warm"))
+}
+
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
@@ -146,9 +150,9 @@ impl StreamFixture {
 
     // ── Event collection ──────────────────────────────────────────────────────
 
-    /// Collect all non-buffer_state messages arriving within `ms` milliseconds.
+    /// Collect all non-infrastructure messages arriving within `ms` milliseconds.
     pub async fn collect(&mut self, ms: u64) -> Vec<Value> {
-        self.collect_filtered(ms, |v| v["type"] != "buffer_state")
+        self.collect_filtered(ms, |v| !is_infrastructure_msg(v))
             .await
     }
 

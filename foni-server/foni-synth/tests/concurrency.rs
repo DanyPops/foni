@@ -1,4 +1,5 @@
 /// concurrency — WS handler under parallel message load.
+mod support;
 ///
 /// Verifies stream state, emotion state, and diversifiers don't corrupt
 /// under concurrent access.
@@ -37,7 +38,7 @@ async fn recv_timeout(
         match tokio::time::timeout_at(deadline, ws.next()).await {
             Ok(Some(Ok(Message::Text(t)))) => {
                 if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&t) {
-                    if msg["type"] == "buffer_state" {
+                    if support::is_infrastructure_msg(&msg) {
                         continue;
                     }
                     return Some(msg);

@@ -56,6 +56,10 @@ fn build_router_from_state(state: state::AppState) -> Router {
             get(quality::controller_route::get_controller)
                 .post(quality::controller_route::set_controller),
         )
+        .route(
+            "/cache",
+            axum::routing::delete(synth::cache_route::clear_cache),
+        )
         .route("/ws", axum::routing::get(engine::ws::ws_handler))
         .with_state(state)
 }
