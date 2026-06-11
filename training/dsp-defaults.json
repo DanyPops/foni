@@ -36,7 +36,7 @@
         "warmthFreq": 200.0,
         "airBoostDb": 0.0,
         "airFreq": 8000.0,
-        "reverbMs": 6.0,
+        "reverbMs": 0.0,
         "reverbDecay": 0.03,
         "reverbInGain": 0.8,
         "reverbOutGain": 0.88,
