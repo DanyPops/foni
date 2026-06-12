@@ -3,7 +3,7 @@
  *
  * Three scopes, one file — all run without a live server:
  *
- *   WS protocol       — what the extension sends to foni-synth under each trigger
+ *   WS protocol       — what the extension sends to depecherd under each trigger
  *   Extension → UI    — inbound WS messages drive setStatus / setWidget
  *   Panel keyboard    — key sequences mutate config and update the WS stream
  *   Re-render wiring  — tui.requestRender() called after every state change
@@ -165,9 +165,9 @@ function makeCtx() {
   };
 }
 
-// ── FoniDriver — simulation harness ───────────────────────────────────────────
+// ── DepecherDriver — simulation harness ───────────────────────────────────────────
 
-class FoniDriver {
+class DepecherDriver {
   private readonly pi:      ReturnType<typeof makePi>;
   private readonly ctxMock: ReturnType<typeof makeCtx>;
   readonly tui: { requestRender: ReturnType<typeof vi.fn> };
@@ -232,7 +232,7 @@ class FoniDriver {
   /** Reset the sent-message buffer (clears in-place to preserve the shared reference). */
   clearSent(): void { mockWs.sent.length = 0; }
 
-  /** Simulate an inbound WS message from foni-synth. */
+  /** Simulate an inbound WS message from depecherd. */
   wsInject(msg: object): void {
     mockWs.instance?._fire("message", Buffer.from(JSON.stringify(msg)));
   }
@@ -243,7 +243,7 @@ class FoniDriver {
 
 // ── Suite setup ───────────────────────────────────────────────────────────────
 
-let driver: FoniDriver;
+let driver: DepecherDriver;
 
 beforeEach(async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -258,7 +258,7 @@ beforeEach(async () => {
       json: vi.fn().mockResolvedValue({ models: [] }),
     }),
   );
-  driver = new FoniDriver();
+  driver = new DepecherDriver();
   await driver.init();
 });
 
@@ -268,7 +268,7 @@ afterEach(() => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Scope 1 — WS protocol: what the extension sends to foni-synth
+// Scope 1 — WS protocol: what the extension sends to depecherd
 // ══════════════════════════════════════════════════════════════════════════════
 
 describe("WS protocol — outbound messages", () => {
@@ -402,35 +402,35 @@ describe("Extension → UI side-effects", () => {
     expect(clearCall).toBeDefined();
   });
 
-  it("buffer_state active → setWidget('foni-buffer', factory, {placement:'belowEditor'})", async () => {
+  it("buffer_state active → setWidget('depecher-buffer', factory, {placement:'belowEditor'})", async () => {
     await driver.boot();
     driver.wsInject({
       type: "buffer_state",
       data: { slots: [true, false, true], buffered: 2, pending: 1, complete: false },
     });
     expect(driver.ctx.ui.setWidget).toHaveBeenCalledWith(
-      "foni-buffer",
+      "depecher-buffer",
       expect.any(Function),
       expect.objectContaining({ placement: "belowEditor" }),
     );
   });
 
-  it("buffer_state complete:true → setWidget('foni-buffer', undefined)", async () => {
+  it("buffer_state complete:true → setWidget('depecher-buffer', undefined)", async () => {
     await driver.boot();
     driver.wsInject({
       type: "buffer_state",
       data: { slots: [], buffered: 0, pending: 0, complete: true },
     });
-    expect(driver.ctx.ui.setWidget).toHaveBeenCalledWith("foni-buffer", undefined);
+    expect(driver.ctx.ui.setWidget).toHaveBeenCalledWith("depecher-buffer", undefined);
   });
 
-  it("buffer_state empty slots complete:false → setWidget('foni-buffer', undefined)", async () => {
+  it("buffer_state empty slots complete:false → setWidget('depecher-buffer', undefined)", async () => {
     await driver.boot();
     driver.wsInject({
       type: "buffer_state",
       data: { slots: [], buffered: 0, pending: 0, complete: false },
     });
-    expect(driver.ctx.ui.setWidget).toHaveBeenCalledWith("foni-buffer", undefined);
+    expect(driver.ctx.ui.setWidget).toHaveBeenCalledWith("depecher-buffer", undefined);
   });
 
   it("/tts mute → setStatus('tts') contains 🔇", async () => {
@@ -496,7 +496,7 @@ describe("Panel keyboard → backend", () => {
 
   it("panel renders border and title", () => {
     const output = driver.render();
-    expect(output).toContain("Foni");
+    expect(output).toContain("Depecher");
     expect(output).toContain("╭");
     expect(output).toContain("╯");
   });

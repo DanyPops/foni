@@ -313,7 +313,7 @@ export const DEFAULT_SMOOTHING: SmoothingOptions = {
 };
 
 /**
- * SmoothingProcessor — full DSP chain via foni-synth Rust server.
+ * SmoothingProcessor — full DSP chain via depecherd Rust server.
  *
  * Signal chain:
  *   Pre:  pad silence (pure WAV) → RVC voice conversion
@@ -431,7 +431,7 @@ export class SmoothingProcessor implements AudioProcessor {
   /**
    * @param inner      Underlying processor (typically RVCProcessor).
    * @param opts       DSP parameter overrides against DEFAULT_SMOOTHING.
-   * @param synthUrl   Base URL of foni-synth server — POST /process endpoint.
+   * @param synthUrl   Base URL of depecherd server — POST /process endpoint.
    *                   Defaults to same host:port as the RVC server (5050).
    */
   constructor(
@@ -443,7 +443,7 @@ export class SmoothingProcessor implements AudioProcessor {
   }
 
   // buildPreFilter / buildPostFilter / ffmpegFilter removed — replaced by
-  // padWavSilence() + POST /process (Rust DSP chain in foni-synth).
+  // padWavSilence() + POST /process (Rust DSP chain in depecherd).
 
   // DEAD CODE MARKER — kept for grepping during migration review:
 
@@ -458,7 +458,7 @@ export class SmoothingProcessor implements AudioProcessor {
     const rvcOut = await this.inner.process(padded);
     log.debug("SmoothingProcessor", "post-RVC", { len: rvcOut.length });
 
-    // 3. DSP chain via foni-synth /process (Rust — no ffmpeg)
+    // 3. DSP chain via depecherd /process (Rust — no ffmpeg)
     try {
       const resp = await fetch(`${this.synthUrl}/process`, {
         method:  "POST",
@@ -467,8 +467,8 @@ export class SmoothingProcessor implements AudioProcessor {
         signal:  AbortSignal.timeout(30_000),
       });
       if (!resp.ok) {
-        const msg = `foni-synth /process failed (HTTP ${resp.status})`;
-        if (process.env.FONI_REQUIRE_DSP === "1") throw new Error(msg);
+        const msg = `depecherd /process failed (HTTP ${resp.status})`;
+        if (process.env.DEPECHER_REQUIRE_DSP === "1") throw new Error(msg);
         log.warn("SmoothingProcessor", `${msg} — returning RVC output`);
         return rvcOut;
       }
@@ -478,7 +478,7 @@ export class SmoothingProcessor implements AudioProcessor {
       return final;
     } catch (e: any) {
       const msg = `/process unreachable: ${e?.message}`;
-      if (process.env.FONI_REQUIRE_DSP === "1") throw new Error(msg);
+      if (process.env.DEPECHER_REQUIRE_DSP === "1") throw new Error(msg);
       log.warn("SmoothingProcessor", `${msg} — returning RVC output`);
       return rvcOut;
     }

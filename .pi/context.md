@@ -5,27 +5,27 @@ Foni is a pi TTS extension that synthesizes Russian speech for an AI assistant (
 
 ## Stack
 - **TypeScript** (adapter layer only): `index.ts`, `tui/`, `pipeline/`
-- **Rust** (engine): `foni-server/` — Cargo workspace with three crates:
-  - `foni-synth` — axum HTTP server, ONNX inference, DSP chain
-  - `foni-analyse` — audio metrics library (MCD, WER, pitch, gap)
-  - `foni-cli` — `fonictl` CLI tool
+- **Rust** (engine): `depecher-server/` — Cargo workspace with three crates:
+  - `depecherd` — axum HTTP server, ONNX inference, DSP chain
+  - `depecher-analyse` — audio metrics library (MCD, WER, pitch, gap)
+  - `depecher-cli` — `depecherctl` CLI tool
 
-## Running foni-synth
+## Running depecherd
 ```bash
 RUST_MIN_STACK=67108864 \
 RVC_MODELS_DIR=/home/dpopsuev/Projects/foni/rvc/models \
-./foni-server/target/release/foni-synth
-# defaults to 0.0.0.0:5050 (configurable via FONI_SYNTH_ADDR or rvc/foni-rvc.yaml)
+./depecher-server/target/release/depecherd
+# defaults to 0.0.0.0:5050 (configurable via DEPECHER_SYNTH_ADDR or rvc/foni-rvc.yaml)
 ```
 
-## fonictl
+## depecherctl
 ```bash
-export FONI_SYNTH_URL=http://localhost:5050
-fonictl status                          # health check
-fonictl synth "текст" --play            # synthesize & play
-fonictl studio "текст"                  # maquette A/B comparison loop
-fonictl samples --out-dir samples/      # batch generate
-fonictl analyse samples/foo.wav --vs baseline/stalker/wav/sidorovich/trader1a.wav
+export DEPECHER_SYNTH_URL=http://localhost:5050
+depecherctl status                          # health check
+depecherctl synth "текст" --play            # synthesize & play
+depecherctl studio "текст"                  # maquette A/B comparison loop
+depecherctl samples --out-dir samples/      # batch generate
+depecherctl analyse samples/foo.wav --vs baseline/stalker/wav/sidorovich/trader1a.wav
 ```
 
 ## Key paths
@@ -40,7 +40,7 @@ fonictl analyse samples/foo.wav --vs baseline/stalker/wav/sidorovich/trader1a.wa
 # TypeScript
 npx tsc --noEmit && npx vitest run --exclude "**/*.e2e*"
 
-# Rust (from foni-server/)
+# Rust (from depecher-server/)
 cargo fmt --all
 cargo clippy --workspace --all-targets   # zero warnings
 cargo test --workspace
@@ -52,8 +52,8 @@ cargo test --workspace
 
 ## Architecture
 - Zero Python at runtime — all inference is Rust via ort (ONNX Runtime)
-- Zero ffmpeg — DSP is pure Rust (foni-synth `/process`)
-- Zero TS analysis code — all metrics are Rust (foni-analyse)
+- Zero ffmpeg — DSP is pure Rust (depecherd `/process`)
+- Zero TS analysis code — all metrics are Rust (depecher-analyse)
 - `/convert` pipeline: ContentVec → RMVPE (mel spectrogram) → Generator (chunked 200-frame windows)
 - Session pool: ONNX sessions loaded once at `POST /models/:name`, reused across requests
 - WAV cache: LRU(500) keyed by SHA-256(text + model + opts) in `AppState`

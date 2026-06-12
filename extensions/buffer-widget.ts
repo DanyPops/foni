@@ -1,7 +1,7 @@
 /**
- * Foni Buffer Widget — live playback buffer bar in the TUI.
+ * Depecher Buffer Widget — live playback buffer bar in the TUI.
  *
- * Connects to foni-synth WS and renders a FIFO drain bar
+ * Connects to depecherd WS and renders a FIFO drain bar
  * that updates in real-time as TTS chunks arrive and play.
  *
  * ▐███·█·▌  3 ready, 2 pending
@@ -9,7 +9,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const WS_URL = process.env.FONI_WS_URL ?? "ws://localhost:5050/ws";
+const WS_URL = process.env.DEPECHER_WS_URL ?? "ws://localhost:5050/ws";
 const RECONNECT_MS = 5_000;
 
 interface BufferSnapshot {
@@ -85,10 +85,10 @@ export default function (pi: ExtensionAPI) {
     if (!snapshot || !visible) return;
     const bar = renderBar(snapshot, {} as any);
     if (!bar) {
-      pi.ui.setWidget("foni-buffer", undefined);
+      pi.ui.setWidget("depecher-buffer", undefined);
       return;
     }
-    pi.ui.setWidget("foni-buffer", (_tui: any, theme: any) => ({
+    pi.ui.setWidget("depecher-buffer", (_tui: any, theme: any) => ({
       render: () => [renderBar(snapshot!, theme)],
       invalidate: () => {},
     }), { placement: "belowEditor" });
@@ -102,17 +102,17 @@ export default function (pi: ExtensionAPI) {
 
   function hide(): void {
     visible = false;
-    pi.ui.setWidget("foni-buffer", undefined);
+    pi.ui.setWidget("depecher-buffer", undefined);
   }
 
-  // Auto-show when foni-synth is active
+  // Auto-show when depecherd is active
   pi.on("before_agent_start", async () => {
     show();
     return undefined;
   });
 
-  pi.registerCommand("foni-buffer", {
-    description: "Toggle foni playback buffer bar",
+  pi.registerCommand("depecher-buffer", {
+    description: "Toggle depecher playback buffer bar",
     handler: async (_args, ctx) => {
       if (visible) {
         hide();

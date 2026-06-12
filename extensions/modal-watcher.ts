@@ -30,7 +30,7 @@ export default function (pi: ExtensionAPI) {
     if (!job || job.status !== "running") return;
     try {
       const logs = execSync(
-        `modal app logs foni-fish-finetune --function-call ${job.callId} --tail 3 2>&1`,
+        `modal app logs depecher-fish-finetune --function-call ${job.callId} --tail 3 2>&1`,
         { timeout: 8_000, encoding: "utf-8" },
       ).trim();
 

@@ -1,0 +1,27 @@
+[package]
+name    = "depecher-analyse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+visqol-rs        = "0.3"
+hound            = { workspace = true }
+ort              = { workspace = true }
+rustfft          = { workspace = true }
+ebur128          = { workspace = true }
+pyin             = { workspace = true }
+pitch-detection  = { workspace = true }
+ndarray          = { workspace = true }
+rayon            = { workspace = true }
+serde            = { workspace = true }
+tempfile         = { workspace = true }
+thiserror        = { workspace = true }
+serde_json       = { workspace = true }
+tabled           = "0.21"
+tracing          = { workspace = true }
+
+[dev-dependencies]
+depecherd   = { path = "../depecherd" }
+serde_json   = { workspace = true }
+tempfile = "3"

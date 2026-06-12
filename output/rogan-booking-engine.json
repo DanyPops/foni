@@ -2,7 +2,7 @@
   "title": "Joe Rogan Reads a Take-Home Assignment",
   "voice": "en",
   "_model": "rogan",
-  "_note": "Run: fonictl render output/rogan-booking-engine.json --out output/rogan-booking-engine.wav",
+  "_note": "Run: depecherctl render output/rogan-booking-engine.json --out output/rogan-booking-engine.wav",
   "_humanness": "Emotional arc varies per beat. Short beats = natural pauses at concatenation boundaries. Low cfg_weight on reactive beats = freer, more human pacing.",
   "beats": [
 

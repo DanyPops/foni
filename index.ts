@@ -1,17 +1,17 @@
 /**
- * Foni — pi TTS extension.
+ * Depecher — pi TTS extension.
  *
- * Thin WebSocket adapter: forwards pi events to foni-synth Rust engine.
+ * Thin WebSocket adapter: forwards pi events to depecherd Rust engine.
  * All synthesis, translation, emotion, and playback happen in Rust.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { WebSocket } from "ws";
 import { pickModel } from "./tui/model-picker.ts";
-import { openFoniPanel } from "./tui/foni-panel.ts";
-import type { FoniPanelState, FoniPanelActions } from "./tui/foni-panel.ts";
+import { openDepecherPanel } from "./tui/depecher-panel.ts";
+import type { DepecherPanelState, DepecherPanelActions } from "./tui/depecher-panel.ts";
 
-interface FoniConfig {
+interface DepecherConfig {
   enabled: boolean;
   voice: string;
   speed: number;
@@ -31,7 +31,7 @@ interface FoniConfig {
   prosodyEnabled: boolean;
 }
 
-const DEFAULT_CONFIG: FoniConfig = {
+const DEFAULT_CONFIG: DepecherConfig = {
   enabled: false,
   voice: "ru",
   speed: 1.0,
@@ -61,7 +61,7 @@ interface BufferSnapshot {
 }
 
 export default async function (pi: ExtensionAPI) {
-  const config: FoniConfig = { ...DEFAULT_CONFIG };
+  const config: DepecherConfig = { ...DEFAULT_CONFIG };
   let ws: WebSocket | null = null;
   let muted = false;
   let emotionEmoji = "";
@@ -70,16 +70,16 @@ export default async function (pi: ExtensionAPI) {
 
   function updateBufferWidget(ctx: { ui: any }, snap: BufferSnapshot): void {
     if (snap.complete) {
-      ctx.ui.setWidget("foni-buffer", undefined);
+      ctx.ui.setWidget("depecher-buffer", undefined);
       return;
     }
     // Nothing queued or playing — hide.
     if (snap.slots.length === 0 && snap.pending === 0) {
-      ctx.ui.setWidget("foni-buffer", undefined);
+      ctx.ui.setWidget("depecher-buffer", undefined);
       return;
     }
 
-    ctx.ui.setWidget("foni-buffer", (_tui: any, theme: any) => {
+    ctx.ui.setWidget("depecher-buffer", (_tui: any, theme: any) => {
       // ░ waiting (synthesis pending)  █ loaded (in play queue)  drains left→right as played
       let bar = theme.fg("dim", "\u2590");
       for (const ready of snap.slots) {
@@ -269,7 +269,7 @@ export default async function (pi: ExtensionAPI) {
 
   // ── TUI panel ─────────────────────────────────────────────────────────────
 
-  function panelState(): FoniPanelState {
+  function panelState(): DepecherPanelState {
     return {
       enabled: config.enabled,
       muted,
@@ -285,7 +285,7 @@ export default async function (pi: ExtensionAPI) {
     };
   }
 
-  function panelActions(ctx: any): FoniPanelActions {
+  function panelActions(ctx: any): DepecherPanelActions {
     return {
       toggleEnabled() {
         config.enabled = !config.enabled;
@@ -300,8 +300,8 @@ export default async function (pi: ExtensionAPI) {
       async test() {
         try {
           const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) });
-          ctx.ui.notify(r.ok ? "foni-synth reachable ✅" : `HTTP ${r.status}`, r.ok ? "info" : "warning");
-        } catch { ctx.ui.notify(`foni-synth unreachable at ${config.rvcUrl}`, "warning"); }
+          ctx.ui.notify(r.ok ? "depecherd reachable ✅" : `HTTP ${r.status}`, r.ok ? "info" : "warning");
+        } catch { ctx.ui.notify(`depecherd unreachable at ${config.rvcUrl}`, "warning"); }
       },
     };
   }
@@ -309,7 +309,7 @@ export default async function (pi: ExtensionAPI) {
   // ── Commands ──────────────────────────────────────────────────────────────
 
   pi.registerCommand("tts", {
-    description: "Foni TTS controls — opens panel or pass subcommand",
+    description: "Depecher TTS controls — opens panel or pass subcommand",
     getArgumentCompletions: (prefix: string) => {
       const subs = ["status", "test", "enable", "disable", "voice", "speed",
                     "lang", "mat", "interject", "stop", "mute", "unmute", "mix"];
@@ -322,13 +322,13 @@ export default async function (pi: ExtensionAPI) {
 
       // No subcommand → open interactive panel (like /mcp)
       if (!sub) {
-        openFoniPanel(ctx, panelState, panelActions(ctx));
+        openDepecherPanel(ctx, panelState, panelActions(ctx));
         return;
       }
 
       if (sub === "status") {
         ctx.ui.notify([
-          "Foni status:", "",
+          "Depecher status:", "",
           `  enabled:   ${config.enabled}`,
           `  backend:   synth`,
           `  voice:     ${config.voice}`,
@@ -343,8 +343,8 @@ export default async function (pi: ExtensionAPI) {
       if (sub === "test") {
         try {
           const r = await fetch(`${config.rvcUrl}/params`, { signal: AbortSignal.timeout(2000) });
-          ctx.ui.notify(r.ok ? "foni-synth reachable ✅" : `foni-synth HTTP ${r.status}`, r.ok ? "info" : "warning");
-        } catch { ctx.ui.notify(`foni-synth unreachable at ${config.rvcUrl}`, "warning"); }
+          ctx.ui.notify(r.ok ? "depecherd reachable ✅" : `depecherd HTTP ${r.status}`, r.ok ? "info" : "warning");
+        } catch { ctx.ui.notify(`depecherd unreachable at ${config.rvcUrl}`, "warning"); }
         return;
       }
 
@@ -360,7 +360,7 @@ export default async function (pi: ExtensionAPI) {
               signal: AbortSignal.timeout(2000),
             });
             ctx.ui.notify(`Volume → ${n} LUFS`, "info");
-          } catch { ctx.ui.notify("foni-synth unreachable", "warning"); }
+          } catch { ctx.ui.notify("depecherd unreachable", "warning"); }
         } else {
           ctx.ui.notify("Usage: /tts volume <-40 to 0>\n  -26 = quiet  -22 = normal  -16 = loud", "info");
         }
@@ -423,7 +423,7 @@ export default async function (pi: ExtensionAPI) {
               updateStatus(ctx);
               ctx.ui.notify(`voice → ${picked}`, "info");
             }
-          } catch { ctx.ui.notify(`foni-synth unreachable at ${config.rvcUrl}`, "warning"); }
+          } catch { ctx.ui.notify(`depecherd unreachable at ${config.rvcUrl}`, "warning"); }
         } else {
           ctx.ui.notify(`voice: ${config.rvcModel || "(none)"}\nUsage: /tts voice <name>|pick`, "info");
         }

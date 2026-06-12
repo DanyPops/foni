@@ -14,7 +14,7 @@ fn correct(measured, target, knobs, damping) {
     let err_bass   = target.bass_balance_db - measured.bass_balance_db;
     let err_dark   = target.vocal_darkness_db_oct - measured.vocal_darkness_db_oct;
 
-    // Sensitivity constants (from fonictl calibrate)
+    // Sensitivity constants (from depecherctl calibrate)
     let bright_per_tilt = 92.0;
     let loud_per_rms    = 0.975;
     let bass_per_tilt   = 0.21;

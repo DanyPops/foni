@@ -53,7 +53,7 @@
             "bass_balance_db": 2.8,
             "vocal_darkness_db_oct": -6.4
         },
-        "_doc_sensitivity": "Measured via fonictl calibrate. Row = knob, Col = metric.",
+        "_doc_sensitivity": "Measured via depecherctl calibrate. Row = knob, Col = metric.",
         "sensitivity": {
             "brightness_per_tilt_high": 92.0,
             "brightness_per_de_harsh": 0.16,

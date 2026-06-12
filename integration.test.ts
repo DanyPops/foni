@@ -5,7 +5,7 @@ import { SmoothingProcessor, IdentityProcessor } from "./pipeline/processors.ts"
 import { parseWav, rms }                           from "./pipeline/analysis/audio-utils.ts";
 import { generateSineWav }                         from "./test/audio-test-utils.ts";
 
-const SYNTH_URL  = process.env.FONI_SYNTH_URL;
+const SYNTH_URL  = process.env.DEPECHER_SYNTH_URL;
 const SKIP       = !SYNTH_URL;
 const SR         = 22050;
 
@@ -20,11 +20,11 @@ async function serverReachable(url: string): Promise<boolean> {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-describe.skipIf(SKIP)("Rust↔TS integration — foni-synth HTTP seam", () => {
+describe.skipIf(SKIP)("Rust↔TS integration — depecherd HTTP seam", () => {
   beforeAll(async () => {
     if (!SYNTH_URL) return;
     const ok = await serverReachable(SYNTH_URL);
-    if (!ok) throw new Error(`foni-synth not reachable at ${SYNTH_URL} — start it first`);
+    if (!ok) throw new Error(`depecherd not reachable at ${SYNTH_URL} — start it first`);
   });
 
   it("POST /process changes audio bytes (DSP chain applied)", async () => {
@@ -76,19 +76,19 @@ describe.skipIf(SKIP)("Rust↔TS integration — foni-synth HTTP seam", () => {
     expect(Math.abs(duration_secs - 0.5)).toBeLessThan(0.05);
   });
 
-  it("FONI_REQUIRE_DSP=1 causes SmoothingProcessor to throw when unreachable", async () => {
-    process.env.FONI_REQUIRE_DSP = "1";
+  it("DEPECHER_REQUIRE_DSP=1 causes SmoothingProcessor to throw when unreachable", async () => {
+    process.env.DEPECHER_REQUIRE_DSP = "1";
     const proc = new SmoothingProcessor(new IdentityProcessor(), {}, "http://localhost:19999");
     const wav  = generateSineWav(440, 0.1, SR, 0.5);
     await expect(proc.process(wav)).rejects.toThrow(/unreachable/);
-    delete process.env.FONI_REQUIRE_DSP;
+    delete process.env.DEPECHER_REQUIRE_DSP;
   });
 });
 
-// ─── Always-on: FONI_REQUIRE_DSP throw behaviour ─────────────────────────────
+// ─── Always-on: DEPECHER_REQUIRE_DSP throw behaviour ─────────────────────────────
 
 describe("SmoothingProcessor fallback behaviour", () => {
-  it("silent fallback when FONI_REQUIRE_DSP unset and server unreachable", async () => {
+  it("silent fallback when DEPECHER_REQUIRE_DSP unset and server unreachable", async () => {
     const proc = new SmoothingProcessor(new IdentityProcessor(), {}, "http://localhost:19999");
     const wav  = generateSineWav(440, 0.1, SR, 0.5);
     // Must NOT throw — returns rvcOut unchanged
@@ -96,11 +96,11 @@ describe("SmoothingProcessor fallback behaviour", () => {
     expect(out.length).toBeGreaterThan(44);
   });
 
-  it("throws when FONI_REQUIRE_DSP=1 and server unreachable", async () => {
-    process.env.FONI_REQUIRE_DSP = "1";
+  it("throws when DEPECHER_REQUIRE_DSP=1 and server unreachable", async () => {
+    process.env.DEPECHER_REQUIRE_DSP = "1";
     const proc = new SmoothingProcessor(new IdentityProcessor(), {}, "http://localhost:19999");
     const wav  = generateSineWav(440, 0.1, SR, 0.5);
     await expect(proc.process(wav)).rejects.toThrow();
-    delete process.env.FONI_REQUIRE_DSP;
+    delete process.env.DEPECHER_REQUIRE_DSP;
   });
 });

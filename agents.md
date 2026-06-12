@@ -45,7 +45,7 @@ ignored in `ModalSynthBackend::synthesize`. Do not reference RVC anywhere in new
 
 ### TTS backend: Chatterbox on Modal
 
-All synthesis goes through `ModalSynthBackend` → `FONI_TTS_URL` (Chatterbox Multilingual on
+All synthesis goes through `ModalSynthBackend` → `DEPECHER_TTS_URL` (Chatterbox Multilingual on
 Modal). Voice cloning is zero-shot: place a `reference.wav` + `lang` file under
 `training/models/<model>/` to clone any speaker. The backend loads it automatically for both
 the WS streaming path and the HTTP `/synthesize` route.
@@ -67,23 +67,23 @@ To register a new voice model:
 mkdir -p training/models/<name>/
 ffmpeg -i <source.wav> -ss <start> -t <duration> -ar 24000 -ac 1 training/models/<name>/reference.wav
 echo "en" > training/models/<name>/lang   # or "ru" etc.
-fonictl synth "test" --model <name> --no-dsp --out /tmp/test.wav
+depecherctl synth "test" --model <name> --no-dsp --out /tmp/test.wav
 ```
 
 Best reference: 10–25 seconds of clean solo speech, 24kHz mono. No background noise,
-no music, no other speakers. Use `fonictl fetch` + manual curation to build the clip.
+no music, no other speakers. Use `depecherctl fetch` + manual curation to build the clip.
 
 ### Voice persona capture pipeline
 
 To capture a speaker's style:
 
 ```
-fonictl fetch <youtube-url>          # download + convert to mono 24kHz WAV clips
-fonictl clean dataset/<name>/        # trim silence, normalize
-fonictl synth --model <name> "..."   # synthesize with zero-shot cloning
+depecherctl fetch <youtube-url>          # download + convert to mono 24kHz WAV clips
+depecherctl clean dataset/<name>/        # trim silence, normalize
+depecherctl synth --model <name> "..."   # synthesize with zero-shot cloning
 ```
 
-### fonictl command map
+### depecherctl command map
 
 | Command          | What it does |
 |------------------|-------------|
@@ -120,23 +120,23 @@ fonictl synth --model <name> "..."   # synthesize with zero-shot cloning
 
 | Operation | Use instead |
 |---|---|
-| Check Modal backend warmness | `fonictl probe` |
-| Show/reload DSP config | `fonictl dsp` / `fonictl dsp --reload` |
-| Flush WAV cache | `fonictl cache clear` |
-| Play a WAV | `fonictl play <file>` |
-| Kill audio playback | `pkill paplay` — add `fonictl stop-audio` when needed twice |
+| Check Modal backend warmness | `depecherctl probe` |
+| Show/reload DSP config | `depecherctl dsp` / `depecherctl dsp --reload` |
+| Flush WAV cache | `depecherctl cache clear` |
+| Play a WAV | `depecherctl play <file>` |
+| Kill audio playback | `pkill paplay` — add `depecherctl stop-audio` when needed twice |
 
 ### DSP config
 
 Live defaults live in `training/dsp-defaults.json`. figment merge order:
 `Rust defaults < YAML (foni-rvc.yaml) < JSON (dsp-defaults.json) < env vars`
 
-The JSON file wins over Rust struct defaults. After editing, run `fonictl dsp --reload`
+The JSON file wins over Rust struct defaults. After editing, run `depecherctl dsp --reload`
 to apply without restarting the server.
 
 ### MP4 production
 
-No dedicated `fonictl mp4` command. Use ffmpeg after synthesis:
+No dedicated `depecherctl mp4` command. Use ffmpeg after synthesis:
 
 ```bash
 ffmpeg -f lavfi -i color=size=1280x720:rate=30:color=black \
@@ -145,7 +145,7 @@ ffmpeg -f lavfi -i color=size=1280x720:rate=30:color=black \
 
 ### Known gaps
 
-1. `fonictl models` — list registered voice models with lang and reference status.
-2. `fonictl stop-audio` — kill active playback (currently `pkill paplay`).
-3. `fonictl modal logs/deploy/stop` — Modal app management without leaving fonictl.
-4. `rvc_*` dead fields — should be removed from `FoniConfig` and `engine_config.rs`.
+1. `depecherctl models` — list registered voice models with lang and reference status.
+2. `depecherctl stop-audio` — kill active playback (currently `pkill paplay`).
+3. `depecherctl modal logs/deploy/stop` — Modal app management without leaving depecherctl.
+4. `rvc_*` dead fields — should be removed from `DepecherConfig` and `engine_config.rs`.
